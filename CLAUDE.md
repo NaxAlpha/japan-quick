@@ -4,7 +4,7 @@ Your goal: produce code that is predictable, debuggable, and easy for future LLM
 
 ALWAYS use #runSubagent. Your context window size is limited - especially the output. So you should always work in discrete steps and run each step using #runSubAgent. You want to avoid putting anything in the main context window when possible.
 
-Each time you complete a task or learn important information about the project, you should update any `LEARNINGS.md` file that might be in the project to reflect any new information that you've learned or changes that require updates to these instructions files. Also, when starting a new task, always read the `LEARNINGS.md` file to ensure you are aware of any important information that you've learned.
+Each time you complete a task or learn important information about the project, you must update the `AI.md` file before handing over control to the user. This file should contain: summary of the project, file tree with 1-line descriptions, high-level architecture, and a "compound engineer" section where the AI documents engineering practices as it interacts with the user. When starting a new task, always read `AI.md` first to ensure you are aware of any important information.
 
 ALWAYS check your work before returning control to the user. Run tests if available, verify builds, etc. Never return incomplete or unverified work to the user.
 
