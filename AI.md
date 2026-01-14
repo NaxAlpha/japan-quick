@@ -52,23 +52,23 @@ Japan Quick is designed as an AI-powered content generation pipeline for creatin
 
 ```bash
 # Install dependencies
-npm install
+bun install
 
 # Build frontend TypeScript to JavaScript
-npm run build:frontend
+bun run build:frontend
 
 # Start local development server (Wrangler)
-npm run dev
+bun run dev
 
 # Deploy to Cloudflare Workers
-npm run deploy
+bun run deploy
 ```
 
 ## Build Process
 
-1. **Frontend Build**: Run `npm run build:frontend` to compile TypeScript from `src/frontend/` to `public/frontend/`
-2. **Development**: Use `npm run dev` to run Wrangler dev server with hot reloading
-3. **Production**: Deploy with `npm run deploy` to push to Cloudflare Workers
+1. **Frontend Build**: Run `bun run build:frontend` to compile TypeScript from `src/frontend/` to `public/frontend/`
+2. **Development**: Use `bun run dev` to run Wrangler dev server with hot reloading
+3. **Production**: Deploy with `bun run deploy` to push to Cloudflare Workers
 
 ## Compound Engineer
 
@@ -90,7 +90,7 @@ npm run deploy
 
 ### Important Notes
 
-- The frontend requires building before deployment: `npm run build:frontend`
+- The frontend requires building before deployment: `bun run build:frontend`
 - Lit uses decorators (experimentalDecorators: true in tsconfig)
 - The `useDefineForClassFields: false` setting is required for Lit to work correctly with TypeScript
 - Static file serving is handled by Hono's serveStatic middleware for Cloudflare Workers
