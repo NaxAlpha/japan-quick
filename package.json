@@ -1,0 +1,19 @@
+{
+  "name": "japan-quick",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler publish",
+    "build": "bun build",
+    "build:frontend": "tsc --project tsconfig.frontend.json"
+  },
+  "dependencies": {
+    "hono": "^4.0.0",
+    "lit": "^3.2.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241218.0",
+    "wrangler": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}
