@@ -1,5 +1,4 @@
 import { Hono } from 'hono'
-import { serveStatic } from 'hono/cloudflare-workers'
 
 type Env = {
   Bindings: {}
@@ -7,22 +6,18 @@ type Env = {
 
 const app = new Hono<Env>()
 
-// Root route
-app.get('/', (c) => {
-  return c.text('Welcome to Japan Quick - AI-powered YouTube Shorts Generator')
-})
-
-// API route
+// API routes
 app.get('/api/status', (c) => {
   return c.json({
     service: 'Japan Quick',
-    description: 'AI-powered YouTube Shorts Generator',
+    description: 'AI-powered Video Generator (Shorts & Long-form)',
     version: '1.0.0',
     status: 'operational'
   })
 })
 
-// Catch-all route for static files
-app.get('/*', serveStatic({ root: './', manifest: {} }))
+app.get('/api/hello', (c) => {
+  return c.json({ message: 'Hello from Japan Quick API' })
+})
 
 export default app

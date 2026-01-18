@@ -1,10 +1,12 @@
 import { LitElement, html, css } from 'lit';
+import { state } from 'lit/decorators.js';
 
 /**
  * Root application component for Japan Quick
  *
  * This component serves as the main entry point for the frontend application.
- * It renders the Japan Quick branding with information about AI-powered YouTube shorts generation.
+ * It renders the Japan Quick branding with information about AI-powered video generation
+ * for both YouTube shorts and long-form content.
  */
 export class AppRoot extends LitElement {
     static styles = css`
@@ -53,6 +55,49 @@ export class AppRoot extends LitElement {
             backdrop-filter: blur(10px);
         }
 
+        .test-section {
+            margin-top: 3rem;
+        }
+
+        button {
+            padding: 0.75rem 1.5rem;
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 0.5rem;
+            color: white;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        button:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .result {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 0.5rem;
+            font-family: monospace;
+            font-size: 0.875rem;
+            text-align: left;
+            min-height: 3rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .loading {
+            opacity: 0.7;
+        }
+
         @keyframes fadeIn {
             from {
                 opacity: 0;
@@ -75,13 +120,47 @@ export class AppRoot extends LitElement {
         }
     `;
 
+    @state()
+    private loading = false;
+
+    @state()
+    private apiResult: string | null = null;
+
+    private async testApi() {
+        this.loading = true;
+        this.apiResult = null;
+
+        try {
+            const response = await fetch('/api/hello');
+            const data = await response.json();
+            this.apiResult = JSON.stringify(data, null, 2);
+        } catch (error) {
+            this.apiResult = `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+        } finally {
+            this.loading = false;
+        }
+    }
+
     render() {
         return html`
             <div class="container">
                 <div class="content">
                     <h1>Japan Quick</h1>
-                    <p>AI-powered YouTube shorts generation</p>
+                    <p>AI-powered video generation for YouTube Shorts & Long-form</p>
                     <span class="badge">Powered by AI</span>
+
+                    <div class="test-section">
+                        <button @click=${this.testApi} ?disabled=${this.loading}>
+                            ${this.loading ? 'Loading...' : 'Test API'}
+                        </button>
+                        <div class="result">
+                            ${this.loading
+                                ? html`<span class="loading">Calling API...</span>`
+                                : this.apiResult
+                                ? html`<pre>${this.apiResult}</pre>`
+                                : html`<span style="opacity: 0.5">Click to test API</span>`}
+                        </div>
+                    </div>
                 </div>
             </div>
         `;
