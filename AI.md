@@ -2,7 +2,7 @@
 
 ## Summary
 
-Japan Quick is an AI-based system to generate YouTube shorts - automated short-form video content creation. The application consists of:
+Japan Quick is an AI-based system to generate videos - both YouTube shorts and long-form video content. The application consists of:
 
 - **Backend**: Hono-based API running on Cloudflare Workers for video processing and AI orchestration
 - **Frontend**: Lit-based web component application with TypeScript for content management and control interface
@@ -10,7 +10,7 @@ Japan Quick is an AI-based system to generate YouTube shorts - automated short-f
 ## File Tree
 
 ```
-amman/
+japan-quick/
 ├── public/
 │   └── index.html              # Main HTML entry point with app-root custom element
 ├── src/
@@ -25,23 +25,23 @@ amman/
 
 ## Architecture
 
-Japan Quick is designed as an AI-powered content generation pipeline for creating short-form videos optimized for YouTube's shorts format.
+Japan Quick is designed as an AI-powered content generation pipeline for creating both short-form videos (YouTube Shorts format) and long-form video content.
 
 ### Backend (Cloudflare Workers + Hono)
 
-- Entry point: `/Users/nax/conductor/workspaces/japan-quick/amman/src/index.ts`
+- Entry point: `src/index.ts`
 - Framework: Hono.js
 - Deployment: Cloudflare Workers via Wrangler
-- Static assets: Served from `public/` directory
+- Static assets: Served via Wrangler's `[assets]` configuration (wrangler.toml)
 - Core Purpose: Orchestrates AI-based video generation workflow
 - Routes:
   - `GET /` - Application entry point
   - `GET /api/hello` - Health check/JSON API endpoint
-  - `GET /*` - Static file serving
+  - `GET /api/status` - Service status endpoint
 
 ### Frontend (Lit + TypeScript)
 
-- Entry point: `/Users/nax/conductor/workspaces/japan-quick/amman/public/index.html`
+- Entry point: `public/index.html`
 - Framework: Lit (Web Components)
 - Component: `<app-root>` custom element defined in `src/frontend/app.ts`
 - Build output: `public/frontend/app.js` (from TypeScript compilation)
@@ -93,6 +93,7 @@ bun run deploy
 - The frontend requires building before deployment: `bun run build:frontend`
 - Lit uses decorators (experimentalDecorators: true in tsconfig)
 - The `useDefineForClassFields: false` setting is required for Lit to work correctly with TypeScript
-- Static file serving is handled by Hono's serveStatic middleware for Cloudflare Workers
-- The project is focused on generating short-form video content (YouTube shorts format)
+- Static file serving is handled by Wrangler's `[assets]` configuration in wrangler.toml, NOT by Hono middleware
+- Do NOT use `serveStatic` from `hono/cloudflare-workers` - it causes `__STATIC_CONTENT is not defined` errors in local dev
+- The project generates both short-form (YouTube Shorts) and long-form video content
 - Backend routes will be extended to support video generation workflows
