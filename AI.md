@@ -15,11 +15,13 @@ japan-quick/
 │   └── index.html              # Main HTML entry point with app-root custom element
 ├── src/
 │   ├── index.ts                # Cloudflare Workers backend with Hono
+│   ├── middleware/
+│   │   └── auth.ts             # Basic HTTP authentication middleware
 │   └── frontend/
 │       └── app.ts              # LitElement root component (AppRoot)
 ├── tsconfig.json               # TypeScript config for backend (Cloudflare Workers)
 ├── tsconfig.frontend.json      # TypeScript config for frontend (browser)
-├── wrangler.toml               # Cloudflare Workers configuration
+├── wrangler.toml               # Cloudflare Workers configuration + auth credentials
 └── package.json                # Dependencies and scripts
 ```
 
@@ -34,10 +36,11 @@ Japan Quick is designed as an AI-powered content generation pipeline for creatin
 - Deployment: Cloudflare Workers via Wrangler
 - Static assets: Served via Wrangler's `[assets]` configuration (wrangler.toml)
 - Core Purpose: Orchestrates AI-based video generation workflow
+- **Authentication**: Basic HTTP Auth protecting all routes
 - Routes:
-  - `GET /` - Application entry point
-  - `GET /api/hello` - Health check/JSON API endpoint
-  - `GET /api/status` - Service status endpoint
+  - `GET /` - Application entry point (protected)
+  - `GET /api/hello` - Health check/JSON API endpoint (protected)
+  - `GET /api/status` - Service status endpoint (protected)
 
 ### Frontend (Lit + TypeScript)
 
@@ -62,6 +65,43 @@ bun run dev
 
 # Deploy to Cloudflare Workers
 bun run deploy
+```
+
+## Authentication
+
+The application uses **Basic HTTP Authentication** to protect all routes.
+
+### Credentials
+
+Credentials are stored in `wrangler.toml` under `[vars]`:
+```toml
+[vars]
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "GvkP525fTX0ocMTw8XtAqM9ECvNIx50v"
+```
+
+To change the password, generate a new one:
+```bash
+openssl rand -base64 32 | tr -d "=+/" | cut -c1-32
+```
+
+Then update `ADMIN_PASSWORD` in `wrangler.toml`.
+
+### How It Works
+
+- **Middleware**: `src/middleware/auth.ts` implements Basic HTTP Auth validation
+- **All routes protected**: `app.use('*', basicAuth())` in `src/index.ts`
+- **Browser-native**: Login prompt shown by browser automatically
+- **Stateless**: No sessions or tokens, credentials validated on each request
+
+### Testing Auth
+
+```bash
+# Without auth (should return 401)
+curl -i https://your-worker.workers.dev/api/hello
+
+# With valid auth
+curl -u admin:password https://your-worker.workers.dev/api/hello
 ```
 
 ## Build Process
@@ -97,3 +137,5 @@ bun run deploy
 - Do NOT use `serveStatic` from `hono/cloudflare-workers` - it causes `__STATIC_CONTENT is not defined` errors in local dev
 - The project generates both short-form (YouTube Shorts) and long-form video content
 - Backend routes will be extended to support video generation workflows
+- **All routes are protected by Basic HTTP Auth** - credentials stored in `wrangler.toml` `[vars]`
+- **Note**: Credentials in `wrangler.toml` are visible to anyone with repo access
