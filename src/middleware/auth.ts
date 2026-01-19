@@ -1,11 +1,5 @@
 import { MiddlewareHandler } from 'hono'
-
-type Env = {
-  Bindings: {
-    ADMIN_USERNAME: string
-    ADMIN_PASSWORD: string
-  }
-}
+import type { Env } from '../types/news.js'
 
 export const basicAuth = (): MiddlewareHandler<{
   Bindings: Env['Bindings']
@@ -33,7 +27,9 @@ export const basicAuth = (): MiddlewareHandler<{
       }
 
       await next()
-    } catch {
+    } catch (error) {
+      // Log error for debugging (credentials may be malformed)
+      console.error('Auth error:', error instanceof Error ? error.message : 'Unknown error')
       return unauthorized(c)
     }
   }

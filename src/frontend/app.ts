@@ -55,8 +55,28 @@ export class AppRoot extends LitElement {
             backdrop-filter: blur(10px);
         }
 
-        .test-section {
+        .navigation-section {
             margin-top: 3rem;
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+        }
+
+        .nav-button {
+            padding: 0.75rem 1.5rem;
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 0.5rem;
+            color: white;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+            text-decoration: none;
+        }
+
+        .nav-button:hover {
+            background: rgba(255, 255, 255, 0.3);
         }
 
         button {
@@ -78,6 +98,10 @@ export class AppRoot extends LitElement {
         button:disabled {
             opacity: 0.6;
             cursor: not-allowed;
+        }
+
+        .test-section {
+            margin-top: 3rem;
         }
 
         .result {
@@ -148,6 +172,10 @@ export class AppRoot extends LitElement {
                     <h1>Japan Quick</h1>
                     <p>AI-powered video generation for YouTube Shorts & Long-form</p>
                     <span class="badge">Powered by AI</span>
+
+                    <div class="navigation-section">
+                        <a href="/news" class="nav-button">View Yahoo News Japan</a>
+                    </div>
 
                     <div class="test-section">
                         <button @click=${this.testApi} ?disabled=${this.loading}>
