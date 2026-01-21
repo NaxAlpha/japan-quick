@@ -14,19 +14,24 @@ japan-quick/
 ├── public/
 │   └── index.html              # Main HTML entry point with app-root custom element
 ├── src/
-│   ├── index.ts                # Cloudflare Workers backend with Hono
+│   ├── index.ts                # Cloudflare Workers backend with Hono + workflow exports
 │   ├── middleware/
 │   │   └── auth.ts             # Basic HTTP authentication middleware
+│   ├── workflows/
+│   │   ├── index.ts            # Export all workflow classes
+│   │   ├── types.ts            # Workflow parameter and result types
+│   │   ├── news-scraper.workflow.ts      # NewsScraperWorkflow (durable news scraping)
+│   │   └── scheduled-refresh.workflow.ts # ScheduledNewsRefreshWorkflow (cron-triggered)
 │   ├── frontend/
 │   │   ├── app.ts              # LitElement root component (AppRoot)
 │   │   └── pages/
-│   │       └── news-page.ts    # News page component (list format, Scrape News button)
+│   │       └── news-page.ts    # News page component (workflow trigger/poll/result pattern)
 │   ├── services/
 │   │   └── news-scraper.ts     # Yahoo News Japan scraper (filters pickup URLs only)
 │   ├── types/
 │   │   └── news.ts             # News type definitions + Env type (single source of truth)
 │   ├── routes/
-│   │   ├── news.ts             # API routes for news scraping (auto-saves fresh scrapes to D1)
+│   │   ├── news.ts             # API routes for workflow management (trigger, status, result)
 │   │   └── frontend.ts         # Frontend route handlers
 │   ├── lib/
 │   │   └── html-template.ts    # HTML template utilities
@@ -57,7 +62,12 @@ Japan Quick is designed as an AI-powered content generation pipeline for creatin
   - `GET /news` - News page (public, renders news-page component)
   - `GET /api/status` - Service status endpoint (protected)
   - `GET /api/hello` - Health check/JSON API endpoint (protected)
-  - `GET /api/news/yahoo-japan` - Fetch Yahoo News Japan top picks (protected, auto-saves fresh scrapes to D1)
+  - **Workflow Management Routes (public):**
+    - `POST /api/news/trigger` - Create new workflow instance
+    - `GET /api/news/status/:id` - Get workflow status
+    - `GET /api/news/result/:id` - Get completed workflow result
+    - `GET /api/news/latest` - Get most recent D1 snapshot
+    - `POST /api/news/cancel/:id` - Terminate workflow
 
 ### Frontend (Lit + TypeScript)
 
@@ -79,8 +89,37 @@ The application uses several Cloudflare bindings defined in `wrangler.toml`:
 | `BROWSER` | Browser Binding | Puppeteer-based scraping in production |
 | `NEWS_CACHE` | KV Namespace | Cache scraped news for 5 minutes |
 | `DB` | D1 Database | Store news snapshots |
+| `NEWS_SCRAPER_WORKFLOW` | Workflow | Durable news scraping workflow |
+| `SCHEDULED_REFRESH_WORKFLOW` | Workflow | Cron-triggered background refresh workflow |
 | `ADMIN_USERNAME` | Var | Basic auth username |
 | `ADMIN_PASSWORD` | Var | Basic auth password |
+
+### Cloudflare Workflows
+
+The application uses **Cloudflare Workflows** for durable, retriable execution of news scraping operations.
+
+#### NewsScraperWorkflow
+
+Handles Yahoo News scraping with automatic retries and durable state:
+
+| Step | Description | Retry Policy |
+|------|-------------|--------------|
+| `check-cache` | Check KV for cached data | 3 retries, 1s delay |
+| `scrape-news` | Browser/HTTP scraping | 5 retries, 5s exponential backoff |
+| `save-to-cache` | Store in KV (5min TTL) | 3 retries, 1s delay |
+| `save-to-database` | Persist snapshot to D1 | 3 retries, 2s delay |
+
+#### ScheduledNewsRefreshWorkflow
+
+Cron-triggered background refresh (every 15 minutes):
+
+| Step | Description |
+|------|-------------|
+| `scrape-fresh-news` | Always scrape fresh (no cache check) |
+| `update-cache` | Update KV cache |
+| `save-snapshot` | Save to D1 |
+
+**Note**: Workflows require remote deployment to test - use `wrangler dev --remote` or `wrangler deploy`.
 
 ### Type System
 
@@ -94,6 +133,8 @@ export type Env = {
     BROWSER: BrowserBinding | null;  // Can be null in local dev
     NEWS_CACHE: KVNamespace;
     DB: D1Database;
+    NEWS_SCRAPER_WORKFLOW: Workflow;
+    SCHEDULED_REFRESH_WORKFLOW: Workflow;
   }
 };
 ```
@@ -112,6 +153,9 @@ bun run build:frontend
 # Start local development server (Wrangler)
 bun run dev
 
+# Start remote development server (for testing workflows)
+wrangler dev --remote
+
 # Run tests
 bun run test
 
@@ -124,6 +168,14 @@ bun run test:coverage
 # Deploy to Cloudflare Workers
 bun run deploy
 ```
+
+## Cloudflare Account Information
+
+- **Account ID**: `ccccd0d9d16426ee80bf27b0c0b8a9cb`
+- **Production URL**: `https://japan-quick.nax.workers.dev`
+- **Worker Subdomain**: `nax.workers.dev`
+
+**Note**: Workflows require remote deployment or `wrangler dev --remote` to test. Local `wrangler dev` does not support workflows.
 
 ## Authentication
 
@@ -242,14 +294,21 @@ The scraper supports two modes:
 The news page (`src/frontend/pages/news-page.ts`) displays news in a list format:
 - Title: "Fetch Latest Top News"
 - Button: "Scrape News" (shows "Fetching..." while loading)
-- States: "Not Fetched" → "Fetching..." → list of news items
+- On page load: Loads `/api/news/latest` for immediate display of cached snapshot
+- On button click: Triggers workflow, polls status every 2 seconds, fetches result when complete
 - Each item: title and date on left, small thumbnail (120x90px) on right
 
-### API Endpoints
+### API Endpoints (Workflow-based)
 
-- `GET /api/news/yahoo-japan` - Returns scraped top picks with caching
-  - Fresh scrapes (when cache is empty) are automatically saved to D1 database
-  - Cached responses are NOT saved to D1 (already saved when first scraped)
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/news/trigger` | POST | Create new workflow instance |
+| `/api/news/status/:id` | GET | Get workflow status |
+| `/api/news/result/:id` | GET | Get completed result |
+| `/api/news/latest` | GET | Get most recent D1 snapshot |
+| `/api/news/cancel/:id` | POST | Terminate workflow |
+
+**Note**: All news endpoints are public (no auth required) since news data is from public sources.
 
 ## Build Process
 
@@ -327,3 +386,101 @@ The following issues were identified and fixed during code review:
 - HTTP fetch has proper timeout like browser mode
 - Shared CSS file reduces duplication
 - Tests run successfully (integration tests need running server)
+
+## Cloudflare Workflows Migration (2026-01-21)
+
+The application was migrated from synchronous Hono API to **Cloudflare Workflows** for durable, retriable, scheduled execution.
+
+### Architecture Changes
+
+**Before (Synchronous):**
+- Single API endpoint: `GET /api/news/yahoo-japan`
+- Direct scraping → caching → D1 save in one request
+- No retry mechanism or durability
+- No scheduled refresh
+
+**After (Workflow-based):**
+- Workflow-based endpoints for trigger/poll/result pattern
+- Durable execution with per-step retry policies
+- Scheduled background refresh every 15 minutes via cron
+- Frontend polls workflow status for progress updates
+
+### Files Modified
+
+1. **Created:**
+   - `src/workflows/types.ts` - Workflow parameter and result types
+   - `src/workflows/news-scraper.workflow.ts` - NewsScraperWorkflow class
+   - `src/workflows/scheduled-refresh.workflow.ts` - ScheduledNewsRefreshWorkflow class
+   - `src/workflows/index.ts` - Workflow exports
+
+2. **Modified:**
+   - `src/index.ts` - Added workflow exports and `scheduled` handler
+   - `src/routes/news.ts` - Complete rewrite for workflow management endpoints
+   - `src/types/news.ts` - Added `NEWS_SCRAPER_WORKFLOW` and `SCHEDULED_REFRESH_WORKFLOW` bindings
+   - `src/frontend/pages/news-page.ts` - Implemented trigger/poll/result pattern
+   - `wrangler.toml` - Added workflow bindings and cron trigger
+
+### New Workflow Steps
+
+**NewsScraperWorkflow** (delegates to ScheduledNewsRefreshWorkflow):
+- Step 1: `check-cache` (3 retries, 1s delay) - Check KV for cached data
+- Step 2: `trigger-refresh-workflow` (3 retries, 2s delay) - Trigger ScheduledNewsRefreshWorkflow if cache miss
+
+**ScheduledNewsRefreshWorkflow** (core scraping workflow):
+- Step 1: `scrape-fresh-news` (5 retries, 5s exponential backoff)
+- Step 2: `update-cache` (3 retries, 1s delay)
+- Step 3: `save-snapshot` (3 retries, 2s delay)
+
+**Refactoring Note**: NewsScraperWorkflow was refactored to eliminate code duplication by delegating the scrape/save logic to ScheduledNewsRefreshWorkflow. This follows DRY principles and ensures consistent behavior between user-triggered and scheduled refreshes.
+
+### Frontend Changes
+
+The news page now:
+1. Loads `/api/news/latest` on page open for immediate display
+2. Triggers workflow via `POST /api/news/trigger`
+3. Polls `/api/news/status/:id` every 2 seconds
+4. Fetches `/api/news/result/:id` when workflow completes
+5. Displays workflow status during execution
+
+### Testing Notes
+
+- **Local development**: Workflows are NOT supported in `wrangler dev` (local mode)
+- **Remote development**: Use `wrangler dev --remote` to test workflows
+- **Production**: Deploy with `wrangler deploy` for full workflow functionality
+- **Cron triggers**: Only work in production, not in dev mode
+
+### Benefits
+
+1. **Durability**: Workflows survive crashes and restarts
+2. **Retries**: Automatic retry with configurable backoff per step
+3. **Observability**: Can query workflow status and output at any time
+4. **Scheduled Execution**: Cron-triggered background refresh every 15 minutes
+5. **Better UX**: Frontend shows real-time progress via polling
+
+### Deployment & Verification (2026-01-21)
+
+**Deployment Status**: ✅ Successfully deployed to production
+
+**Version ID**: `7f359a55-0279-4d5a-bc2c-15dc0fd0f6dc`
+
+**Production URL**: `https://japan-quick.nax.workers.dev`
+
+**Important Fix**: Retry configuration syntax was corrected - delay format must be human-readable strings (e.g., "5 seconds", "1 second") instead of short forms (e.g., "5s", "1s"). The `backoff` parameter is required and must be explicitly set to "constant", "linear", or "exponential".
+
+**Verification Results**:
+- ✅ Frontend loads correctly
+- ✅ `/api/news/latest` returns most recent D1 snapshot
+- ✅ `POST /api/news/trigger` creates workflow instances
+- ✅ `GET /api/news/status/:id` returns workflow status
+- ✅ `GET /api/news/result/:id` returns completed results
+- ✅ `POST /api/news/cancel/:id` terminates workflows
+- ✅ Cache logic working - workflows return cached data when available
+- ✅ Fresh scraping working - workflows create new snapshots when cache miss
+- ✅ Workflow delegation working - NewsScraperWorkflow successfully triggers ScheduledNewsRefreshWorkflow
+- ✅ Scheduled cron trigger configured (every 15 minutes)
+
+**Test Results**:
+- Workflow with `skipCache: true` completed successfully, scraped 25 news items
+- Workflow with `skipCache: false` used cached data and completed instantly
+- Workflow cancellation works correctly (status: "terminated")
+- Latest snapshot endpoint returns newly created data

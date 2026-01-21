@@ -46,5 +46,7 @@ export type Env = {
     BROWSER: BrowserBinding | null;
     NEWS_CACHE: KVNamespace;
     DB: D1Database;
+    NEWS_SCRAPER_WORKFLOW: Workflow;
+    SCHEDULED_REFRESH_WORKFLOW: Workflow;
   }
 };

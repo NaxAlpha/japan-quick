@@ -4,18 +4,21 @@ import { newsRoutes } from './routes/news.js';
 import { frontendRoutes } from './routes/frontend.js';
 import type { Env } from './types/news.js';
 
+// Export workflow classes for Cloudflare Workers
+export { NewsScraperWorkflow, ScheduledNewsRefreshWorkflow } from './workflows/index.js';
+
 const app = new Hono<Env>();
 
 // Frontend page routes (no auth required for UI)
 app.route('/', frontendRoutes);
 
-// News API routes (public - news data is from public sources)
-app.route('/api/news', newsRoutes);
-
-// Apply auth middleware to other API routes
+// Apply auth middleware to ALL API routes (including workflows)
 app.use('/api/*', basicAuth());
 
-// API routes (protected)
+// News/Workflow API routes (protected)
+app.route('/api/news', newsRoutes);
+
+// Other API routes (protected)
 app.get('/api/status', (c) => {
   return c.json({
     service: 'Japan Quick',
@@ -28,5 +31,21 @@ app.get('/api/status', (c) => {
 app.get('/api/hello', (c) => {
   return c.json({ message: 'Hello from Japan Quick API' });
 });
+
+// Scheduled handler for cron triggers (runs every 15 minutes)
+export const scheduled: ExportedHandlerScheduledHandler<Env['Bindings']> = async (event, env, ctx) => {
+  console.log('Scheduled task triggered at:', new Date(event.scheduledTime).toISOString());
+
+  try {
+    // Create an instance of the scheduled refresh workflow
+    const instance = await env.SCHEDULED_REFRESH_WORKFLOW.create({
+      params: {}
+    });
+
+    console.log('Created scheduled refresh workflow:', instance.id);
+  } catch (error) {
+    console.error('Failed to create scheduled refresh workflow:', error);
+  }
+};
 
 export default app;

@@ -1,75 +1,173 @@
 /**
- * News API routes
- * GET /api/news/yahoo-japan - Fetch Yahoo News Japan top picks
- *                          - Fresh scrapes are auto-saved to D1 database
+ * News API routes - Workflow-based endpoints
+ * POST /api/news/trigger - Create new workflow instance
+ * GET /api/news/status/:id - Get workflow status
+ * GET /api/news/result/:id - Get completed result
+ * GET /api/news/latest - Get most recent D1 snapshot
+ * POST /api/news/cancel/:id - Terminate workflow
  */
 
 import { Hono } from 'hono';
-import { YahooNewsScraper } from '../services/news-scraper.js';
-import type { YahooNewsResponse, Env } from '../types/news.js';
-
-// D1Database is available globally in Cloudflare Workers
-// Use the Env type for proper typing
-type D1Type = Env['Bindings']['DB'];
+import type { Env } from '../types/news.js';
+import type { NewsScraperParams, NewsScraperResult } from '../workflows/types.js';
 
 const newsRoutes = new Hono<{ Bindings: Env['Bindings'] }>();
 
-const CACHE_KEY = 'yahoo-japan-top-picks';
-const CACHE_TTL = 300; // 5 minutes
-
-// Helper to save news data to D1
-async function saveNewsSnapshot(db: D1Type, newsData: YahooNewsResponse): Promise<string> {
-  const now = new Date();
-  const snapshotName = `article-snapshot-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}-${String(now.getSeconds()).padStart(2, '0')}`;
-
+// POST /api/news/trigger - Create new workflow instance
+newsRoutes.post('/trigger', async (c) => {
   try {
-    await db.prepare(
-      'INSERT INTO news_snapshots (captured_at, snapshot_name, data) VALUES (?, ?, ?)'
-    )
-      .bind(newsData.scrapedAt, snapshotName, JSON.stringify(newsData))
-      .run();
+    const body = await c.req.json<NewsScraperParams>().catch(() => ({}));
+    const params: NewsScraperParams = {
+      skipCache: body.skipCache ?? false
+    };
+
+    // Create workflow instance
+    const instance = await c.env.NEWS_SCRAPER_WORKFLOW.create({
+      params
+    });
+
+    return c.json({
+      success: true,
+      workflowId: instance.id
+    });
   } catch (error) {
-    // Log the error but don't fail the request - the news is still cached and returned
-    console.error('Failed to save news snapshot to D1:', error instanceof Error ? error.message : 'Unknown error');
+    console.error('Failed to create workflow:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to create workflow'
+    }, 500);
   }
+});
 
-  return snapshotName;
-}
-
-newsRoutes.get('/yahoo-japan', async (c) => {
-  // Check cache first
+// GET /api/news/status/:id - Get workflow status
+newsRoutes.get('/status/:id', async (c) => {
   try {
-    const cached = await c.env.NEWS_CACHE.get(CACHE_KEY, 'json');
-    if (cached && typeof cached === 'object' && 'topPicks' in cached && Array.isArray(cached.topPicks)) {
+    const workflowId = c.req.param('id');
+    const instance = await c.env.NEWS_SCRAPER_WORKFLOW.get(workflowId);
+
+    if (!instance) {
       return c.json({
-        ...cached,
-        cached: true
-      } as YahooNewsResponse);
+        success: false,
+        error: 'Workflow not found'
+      }, 404);
     }
+
+    const status = await instance.status();
+
+    return c.json({
+      success: true,
+      workflowId: instance.id,
+      status: status.status,
+      output: status.output
+    });
   } catch (error) {
-    // Cached data is malformed, log and continue to fetch fresh data
-    console.error('Failed to parse cached data:', error instanceof Error ? error.message : 'Unknown error');
+    console.error('Failed to get workflow status:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get workflow status'
+    }, 500);
   }
+});
 
-  // Scrape fresh data
-  const scraper = new YahooNewsScraper();
-  const topPicks = await scraper.scrape(c.env.BROWSER);
+// GET /api/news/result/:id - Get completed result
+newsRoutes.get('/result/:id', async (c) => {
+  try {
+    const workflowId = c.req.param('id');
+    const instance = await c.env.NEWS_SCRAPER_WORKFLOW.get(workflowId);
 
-  const response: YahooNewsResponse = {
-    topPicks,
-    scrapedAt: new Date().toISOString(),
-    cached: false
-  };
+    if (!instance) {
+      return c.json({
+        success: false,
+        error: 'Workflow not found'
+      }, 404);
+    }
 
-  // Cache for 5 minutes
-  await c.env.NEWS_CACHE.put(CACHE_KEY, JSON.stringify(response), {
-    expirationTtl: CACHE_TTL
-  });
+    const status = await instance.status();
 
-  // Auto-save fresh scrapes to D1
-  await saveNewsSnapshot(c.env.DB, response);
+    if (status.status !== 'complete') {
+      return c.json({
+        success: false,
+        error: 'Workflow not yet complete',
+        status: status.status
+      }, 400);
+    }
 
-  return c.json(response);
+    const result = status.output as NewsScraperResult;
+
+    return c.json({
+      success: true,
+      result
+    });
+  } catch (error) {
+    console.error('Failed to get workflow result:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get workflow result'
+    }, 500);
+  }
+});
+
+// GET /api/news/latest - Get most recent D1 snapshot
+newsRoutes.get('/latest', async (c) => {
+  try {
+    const result = await c.env.DB.prepare(
+      'SELECT * FROM news_snapshots ORDER BY id DESC LIMIT 1'
+    ).first();
+
+    if (!result) {
+      return c.json({
+        success: false,
+        error: 'No snapshots found'
+      }, 404);
+    }
+
+    // Parse the JSON data field
+    const newsData = JSON.parse(result.data as string);
+
+    return c.json({
+      success: true,
+      snapshot: {
+        id: result.id,
+        capturedAt: result.captured_at,
+        snapshotName: result.snapshot_name,
+        data: newsData
+      }
+    });
+  } catch (error) {
+    console.error('Failed to get latest snapshot:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get latest snapshot'
+    }, 500);
+  }
+});
+
+// POST /api/news/cancel/:id - Terminate workflow
+newsRoutes.post('/cancel/:id', async (c) => {
+  try {
+    const workflowId = c.req.param('id');
+    const instance = await c.env.NEWS_SCRAPER_WORKFLOW.get(workflowId);
+
+    if (!instance) {
+      return c.json({
+        success: false,
+        error: 'Workflow not found'
+      }, 404);
+    }
+
+    await instance.terminate();
+
+    return c.json({
+      success: true,
+      message: 'Workflow terminated'
+    });
+  } catch (error) {
+    console.error('Failed to terminate workflow:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to terminate workflow'
+    }, 500);
+  }
 });
 
 export { newsRoutes };
