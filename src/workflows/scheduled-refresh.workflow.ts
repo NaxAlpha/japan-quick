@@ -1,6 +1,7 @@
 /**
  * ScheduledNewsRefreshWorkflow - Cron-triggered background refresh
  * Always scrapes fresh news (no cache check) every 15 minutes
+ * Automatically cleans up snapshots older than 30 days
  */
 
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
@@ -70,6 +71,23 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
           .run();
 
         return snapshotName;
+      });
+
+      // Step 4: Clean up old snapshots (older than 30 days)
+      await step.do('cleanup-old-snapshots', {
+        retries: {
+          limit: 3,
+          delay: "1 second",
+          backoff: "constant"
+        }
+      }, async () => {
+        const result = await this.env.DB.prepare(
+          "DELETE FROM news_snapshots WHERE datetime(captured_at) < datetime('now', '-30 days')"
+        ).run();
+
+        if (result.meta.changes > 0) {
+          console.log(`Cleaned up ${result.meta.changes} old snapshots`);
+        }
       });
 
       console.log(`Scheduled refresh completed: ${snapshotName} with ${topPicks.length} items`);
