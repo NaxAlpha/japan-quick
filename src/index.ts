@@ -12,13 +12,13 @@ const app = new Hono<Env>();
 // Frontend page routes (no auth required for UI)
 app.route('/', frontendRoutes);
 
-// News API routes (public - news data is from public sources)
-app.route('/api/news', newsRoutes);
-
-// Apply auth middleware to other API routes
+// Apply auth middleware to ALL API routes (including workflows)
 app.use('/api/*', basicAuth());
 
-// API routes (protected)
+// News/Workflow API routes (protected)
+app.route('/api/news', newsRoutes);
+
+// Other API routes (protected)
 app.get('/api/status', (c) => {
   return c.json({
     service: 'Japan Quick',

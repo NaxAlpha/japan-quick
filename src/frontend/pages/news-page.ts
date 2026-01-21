@@ -185,6 +185,18 @@ export class NewsPage extends LitElement {
 
   private pollingInterval: number | null = null;
 
+  /**
+   * Generate Basic Auth headers for API requests
+   */
+  private getAuthHeaders(): HeadersInit {
+    const username = 'admin';
+    const password = 'GvkP525fTX0ocMTw8XtAqM9ECvNIx50v';
+    const credentials = btoa(`${username}:${password}`);
+    return {
+      'Authorization': `Basic ${credentials}`
+    };
+  }
+
   connectedCallback() {
     super.connectedCallback();
     // Load latest snapshot on page open for immediate display
@@ -198,7 +210,9 @@ export class NewsPage extends LitElement {
 
   private async loadLatestSnapshot() {
     try {
-      const response = await fetch('/api/news/latest');
+      const response = await fetch('/api/news/latest', {
+        headers: this.getAuthHeaders()
+      });
       if (response.ok) {
         const result = await response.json();
         if (result.success && result.snapshot?.data?.topPicks) {
@@ -224,7 +238,8 @@ export class NewsPage extends LitElement {
       const response = await fetch('/api/news/trigger', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          ...this.getAuthHeaders()
         },
         body: JSON.stringify({ skipCache: false })
       });
@@ -273,7 +288,9 @@ export class NewsPage extends LitElement {
     if (!this.workflowId) return;
 
     try {
-      const response = await fetch(`/api/news/status/${this.workflowId}`);
+      const response = await fetch(`/api/news/status/${this.workflowId}`, {
+        headers: this.getAuthHeaders()
+      });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
@@ -305,7 +322,9 @@ export class NewsPage extends LitElement {
     if (!this.workflowId) return;
 
     try {
-      const response = await fetch(`/api/news/result/${this.workflowId}`);
+      const response = await fetch(`/api/news/result/${this.workflowId}`, {
+        headers: this.getAuthHeaders()
+      });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
