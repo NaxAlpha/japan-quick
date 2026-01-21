@@ -1,7 +1,9 @@
 /**
- * News page component
- * Displays Yahoo News Japan top picks with thumbnails, titles, and timestamps
- * List format with thumbnail on the right
+ * News page component - Workflow-based version
+ * POST /api/news/trigger to start workflow
+ * Poll /api/news/status/:id every 2 seconds
+ * Fetch /api/news/result/:id when complete
+ * Load /api/news/latest on page open for immediate display
  */
 
 import { LitElement, html, css } from 'lit';
@@ -14,7 +16,7 @@ interface YahooNewsTopPick {
   publishedAt?: string;
 }
 
-type FetchState = 'not-fetched' | 'fetching' | 'fetched';
+type FetchState = 'not-fetched' | 'triggering' | 'polling' | 'fetched';
 
 @customElement('news-page')
 export class NewsPage extends LitElement {
@@ -153,6 +155,14 @@ export class NewsPage extends LitElement {
     .home-link:hover {
       background: rgba(255, 255, 255, 0.3);
     }
+
+    .snapshot-info {
+      text-align: center;
+      padding: 0.5rem;
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 0.875rem;
+      margin-top: 0.5rem;
+    }
   `;
 
   @state()
@@ -164,27 +174,164 @@ export class NewsPage extends LitElement {
   @state()
   private error: string | null = null;
 
+  @state()
+  private workflowId: string | null = null;
+
+  @state()
+  private statusMessage: string = '';
+
+  @state()
+  private snapshotInfo: string = '';
+
+  private pollingInterval: number | null = null;
+
   connectedCallback() {
     super.connectedCallback();
-    // Don't auto-fetch - start in not-fetched state
+    // Load latest snapshot on page open for immediate display
+    this.loadLatestSnapshot();
   }
 
-  private async fetchNews() {
-    this.fetchState = 'fetching';
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this.stopPolling();
+  }
+
+  private async loadLatestSnapshot() {
+    try {
+      const response = await fetch('/api/news/latest');
+      if (response.ok) {
+        const result = await response.json();
+        if (result.success && result.snapshot?.data?.topPicks) {
+          this.topPicks = result.snapshot.data.topPicks;
+          this.fetchState = 'fetched';
+          this.snapshotInfo = `Loaded snapshot from ${new Date(result.snapshot.capturedAt).toLocaleString()}`;
+        }
+      }
+    } catch (err) {
+      // No existing snapshot, stay in not-fetched state
+      console.log('No existing snapshot found');
+    }
+  }
+
+  private async triggerWorkflow() {
+    this.fetchState = 'triggering';
     this.error = null;
+    this.statusMessage = 'Creating workflow...';
+    this.snapshotInfo = '';
 
     try {
-      const response = await fetch('/api/news/yahoo-japan');
+      // POST to trigger endpoint
+      const response = await fetch('/api/news/trigger', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ skipCache: false })
+      });
+
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
+
       const data = await response.json();
-      this.topPicks = data.topPicks || [];
-      this.fetchState = 'fetched';
+      if (!data.success || !data.workflowId) {
+        throw new Error('Failed to create workflow');
+      }
+
+      this.workflowId = data.workflowId;
+      this.statusMessage = 'Workflow created, starting...';
+      this.fetchState = 'polling';
+
+      // Start polling
+      this.startPolling();
     } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to fetch news';
-      this.topPicks = [];
+      this.error = err instanceof Error ? err.message : 'Failed to trigger workflow';
       this.fetchState = 'not-fetched';
+      this.statusMessage = '';
+    }
+  }
+
+  private startPolling() {
+    this.stopPolling(); // Clear any existing interval
+
+    this.pollingInterval = window.setInterval(() => {
+      this.checkWorkflowStatus();
+    }, 2000); // Poll every 2 seconds
+
+    // Check immediately
+    this.checkWorkflowStatus();
+  }
+
+  private stopPolling() {
+    if (this.pollingInterval !== null) {
+      clearInterval(this.pollingInterval);
+      this.pollingInterval = null;
+    }
+  }
+
+  private async checkWorkflowStatus() {
+    if (!this.workflowId) return;
+
+    try {
+      const response = await fetch(`/api/news/status/${this.workflowId}`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (!data.success) {
+        throw new Error('Failed to get workflow status');
+      }
+
+      this.statusMessage = `Workflow status: ${data.status}`;
+
+      // Check if complete
+      if (data.status === 'complete') {
+        this.stopPolling();
+        await this.fetchWorkflowResult();
+      } else if (data.status === 'failed' || data.status === 'terminated') {
+        this.stopPolling();
+        this.error = `Workflow ${data.status}`;
+        this.fetchState = 'not-fetched';
+        this.statusMessage = '';
+      }
+    } catch (err) {
+      console.error('Polling error:', err);
+      // Continue polling on error
+    }
+  }
+
+  private async fetchWorkflowResult() {
+    if (!this.workflowId) return;
+
+    try {
+      const response = await fetch(`/api/news/result/${this.workflowId}`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (!data.success || !data.result) {
+        throw new Error('Failed to get workflow result');
+      }
+
+      const result = data.result;
+      if (result.success && result.data?.topPicks) {
+        this.topPicks = result.data.topPicks;
+        this.fetchState = 'fetched';
+        this.statusMessage = '';
+        if (result.snapshotName) {
+          this.snapshotInfo = `New snapshot: ${result.snapshotName}`;
+        }
+      } else {
+        throw new Error(result.error || 'Workflow failed');
+      }
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : 'Failed to fetch result';
+      this.fetchState = 'not-fetched';
+      this.statusMessage = '';
+    } finally {
+      this.workflowId = null;
     }
   }
 
@@ -194,12 +341,15 @@ export class NewsPage extends LitElement {
         <h1>Fetch Latest Top News</h1>
 
         <button
-          @click=${this.fetchNews}
-          ?disabled=${this.fetchState === 'fetching'}
+          @click=${this.triggerWorkflow}
+          ?disabled=${this.fetchState === 'triggering' || this.fetchState === 'polling'}
           class="scrape-button"
         >
-          ${this.fetchState === 'fetching' ? 'Fetching...' : 'Scrape News'}
+          ${this.fetchState === 'triggering' || this.fetchState === 'polling' ? 'Fetching...' : 'Scrape News'}
         </button>
+
+        ${this.statusMessage ? html`<div class="status-message" style="padding: 1rem; font-size: 0.875rem;">${this.statusMessage}</div>` : ''}
+        ${this.snapshotInfo ? html`<div class="snapshot-info">${this.snapshotInfo}</div>` : ''}
 
         ${this.renderContent()}
 
@@ -209,12 +359,12 @@ export class NewsPage extends LitElement {
   }
 
   private renderContent() {
-    if (this.fetchState === 'not-fetched') {
-      return html`<div class="status-message">Not Fetched</div>`;
+    if (this.fetchState === 'not-fetched' && this.topPicks.length === 0) {
+      return html`<div class="status-message">No news loaded. Click "Scrape News" to fetch latest news.</div>`;
     }
 
-    if (this.fetchState === 'fetching') {
-      return html`<div class="status-message">Fetching...</div>`;
+    if (this.fetchState === 'triggering' || this.fetchState === 'polling') {
+      return html`<div class="status-message">Fetching news from workflow...</div>`;
     }
 
     if (this.error && this.topPicks.length === 0) {
