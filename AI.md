@@ -87,8 +87,8 @@ japan-quick/
 - Framework: Lit (Web Components)
 - Components:
   - `<app-root>`: Home page with navigation and API test button
-  - `<news-page>`: News scraping interface with article status badges
-  - `<article-page>`: Article detail view with version selector
+  - `<news-page>`: News scraping interface with article status badges (all article clicks navigate to article page)
+  - `<article-page>`: Article detail view with version selector, workflow trigger for unscraped articles
 - Build output: `public/frontend/` directory (from TypeScript compilation)
 - Styling: Scoped CSS within Lit components
 - Purpose: Provides interface for content generation, preview, and management

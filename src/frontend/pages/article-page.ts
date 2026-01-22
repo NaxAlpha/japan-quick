@@ -281,6 +281,84 @@ export class ArticlePage extends LitElement {
     .original-link:hover {
       text-decoration: underline;
     }
+
+    .metadata-section {
+      background: #f3f4f6;
+      border-radius: 0.5rem;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .metadata-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .metadata-label {
+      font-size: 0.75rem;
+      color: #6b7280;
+      font-weight: 500;
+      min-width: 80px;
+    }
+
+    .metadata-value {
+      font-size: 0.875rem;
+      color: #1f2937;
+      word-break: break-all;
+    }
+
+    .metadata-value a {
+      color: #3b82f6;
+      text-decoration: none;
+    }
+
+    .metadata-value a:hover {
+      text-decoration: underline;
+    }
+
+    .trigger-button {
+      padding: 0.625rem 1.25rem;
+      background: #3b82f6;
+      border: none;
+      border-radius: 0.375rem;
+      color: white;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .trigger-button:hover:not(:disabled) {
+      background: #2563eb;
+    }
+
+    .trigger-button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .polling-status {
+      padding: 0.75rem;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 0.375rem;
+      font-size: 0.875rem;
+      color: #1e40af;
+      margin-bottom: 1rem;
+    }
+
+    .status-badge.retry-1,
+    .status-badge.retry-2 {
+      background: #f97316;
+      color: white;
+    }
+
+    .status-badge.error {
+      background: #ef4444;
+      color: white;
+    }
   `;
 
   @property({ type: String })
@@ -303,6 +381,20 @@ export class ArticlePage extends LitElement {
 
   @state()
   private error: string | null = null;
+
+  @state()
+  private workflowId: string | null = null;
+
+  @state()
+  private isPolling: boolean = false;
+
+  @state()
+  private pollStatus: string = '';
+
+  @state()
+  private triggerError: string | null = null;
+
+  private pollingInterval: number | null = null;
 
   private getAuthHeaders(): HeadersInit {
     const username = 'admin';
@@ -407,6 +499,91 @@ export class ArticlePage extends LitElement {
     return this.versions.find(v => v.version === this.selectedVersion);
   }
 
+  private isUnscraped(): boolean {
+    return !this.article || ['pending', 'not_available', 'retry_1', 'retry_2', 'error'].includes(this.article.status);
+  }
+
+  private async triggerScraping() {
+    if (!this.article || this.isPolling) return;
+
+    this.triggerError = null;
+    this.isPolling = true;
+    this.pollStatus = 'Starting workflow...';
+
+    try {
+      const response = await fetch(`/api/articles/trigger/${this.article.pickId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...this.getAuthHeaders()
+        }
+      });
+
+      const data = await response.json();
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to start workflow');
+      }
+
+      this.workflowId = data.workflowId;
+      this.startPolling();
+    } catch (err) {
+      this.triggerError = err instanceof Error ? err.message : 'Failed to trigger scraping';
+      this.isPolling = false;
+      this.pollStatus = '';
+    }
+  }
+
+  private startPolling() {
+    this.pollingInterval = window.setInterval(async () => {
+      if (!this.workflowId) {
+        this.stopPolling();
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/articles/status/${this.workflowId}`, {
+          headers: this.getAuthHeaders()
+        });
+
+        const data = await response.json();
+        if (!data.success) {
+          this.stopPolling();
+          this.isPolling = false;
+          this.pollStatus = '';
+          return;
+        }
+
+        this.pollStatus = `Status: ${data.status}`;
+
+        if (data.status === 'complete') {
+          this.stopPolling();
+          this.isPolling = false;
+          this.pollStatus = 'Scraping complete! Reloading...';
+          setTimeout(() => this.loadArticle(), 1000);
+        } else if (data.status === 'failed') {
+          this.stopPolling();
+          this.isPolling = false;
+          this.triggerError = 'Workflow failed';
+          this.pollStatus = '';
+        }
+      } catch (err) {
+        console.error('Polling error:', err);
+      }
+    }, 2000);
+  }
+
+  private stopPolling() {
+    if (this.pollingInterval !== null) {
+      clearInterval(this.pollingInterval);
+      this.pollingInterval = null;
+    }
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this.stopPolling();
+  }
+
   render() {
     if (this.loading) {
       return html`
@@ -470,6 +647,41 @@ export class ArticlePage extends LitElement {
             </a>
           ` : ''}
         </div>
+
+        ${this.isUnscraped() ? html`
+          <div class="metadata-section">
+            <div class="metadata-row">
+              <span class="metadata-label">Pickup URL:</span>
+              <span class="metadata-value">
+                ${this.article?.pickId ? html`<a href="https://news.yahoo.co.jp/pickup/${this.article.pickId}" target="_blank" rel="noopener noreferrer">https://news.yahoo.co.jp/pickup/${this.article.pickId}</a>` : '-'}
+              </span>
+            </div>
+            ${this.article?.articleUrl ? html`
+              <div class="metadata-row">
+                <span class="metadata-label">Article URL:</span>
+                <span class="metadata-value">
+                  <a href="${this.article.articleUrl}" target="_blank" rel="noopener noreferrer">${this.article.articleUrl}</a>
+                </span>
+              </div>
+            ` : ''}
+            <div class="metadata-row">
+              <span class="metadata-label">Detected:</span>
+              <span class="metadata-value">${this.article?.detectedAt ? new Date(this.article.detectedAt).toLocaleString() : '-'}</span>
+            </div>
+
+            ${this.pollStatus ? html`<div class="polling-status">${this.pollStatus}</div>` : ''}
+
+            <button
+              class="trigger-button"
+              ?disabled=${this.isPolling}
+              @click=${this.triggerScraping}
+            >
+              ${this.isPolling ? 'Scraping in progress...' : 'Trigger Scraping'}
+            </button>
+
+            ${this.triggerError ? html`<div style="color: #ef4444; font-size: 0.875rem; margin-top: 0.5rem;">${this.triggerError}</div>` : ''}
+          </div>
+        ` : ''}
 
         <div class="article-content">
           <h2>Article Content</h2>
