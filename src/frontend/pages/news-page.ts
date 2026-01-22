@@ -428,17 +428,13 @@ export class NewsPage extends LitElement {
   private handleNewsClick(topPick: YahooNewsTopPick, event: Event) {
     event.preventDefault();
 
-    const status = topPick.articleStatus;
-
-    // If article is available (scraped), go to article page
-    if (status === 'scraped_v1' || status === 'scraped_v2') {
-      if (topPick.pickId) {
-        window.location.href = `/article/pick:${topPick.pickId}`;
-        return;
-      }
+    // All articles go to article page now (for scraped and unscraped)
+    if (topPick.pickId) {
+      window.location.href = `/article/pick:${topPick.pickId}`;
+      return;
     }
 
-    // Otherwise, open Yahoo page in new tab
+    // Fallback: open Yahoo page in new tab if no pickId
     window.open(topPick.url, '_blank', 'noopener,noreferrer');
   }
 
