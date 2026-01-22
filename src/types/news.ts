@@ -54,5 +54,7 @@ export type Env = {
     SCHEDULED_REFRESH_WORKFLOW: Workflow;
     ARTICLE_SCRAPER_WORKFLOW: Workflow;
     ARTICLE_RESCRAPE_WORKFLOW: Workflow;
+    VIDEO_SELECTION_WORKFLOW: Workflow;
+    GOOGLE_API_KEY: string;
   }
 };
