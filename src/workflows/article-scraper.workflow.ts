@@ -320,7 +320,7 @@ export class ArticleScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, Arti
             UPDATE articles SET
               status = ?,
               first_scraped_at = datetime('now'),
-              scheduled_rescrape_at = datetime('now', '+1 hour'),
+              scheduled_rescrape_at = datetime('now', '+15 minutes'),
               updated_at = datetime('now')
             WHERE id = ?
           `).bind(newStatus, articleId).run();
