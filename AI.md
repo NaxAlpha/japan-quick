@@ -98,7 +98,7 @@ japan-quick/
 | Binding | Type | Purpose |
 |---------|------|---------|
 | `BROWSER` | Browser Binding | Puppeteer-based scraping in production |
-| `NEWS_CACHE` | KV Namespace | Cache scraped news for 5 minutes |
+| `NEWS_CACHE` | KV Namespace | Cache scraped news for 35 minutes |
 | `DB` | D1 Database | Store news snapshots and articles |
 | `NEWS_SCRAPER_WORKFLOW` | Workflow | Durable news scraping workflow |
 | `SCHEDULED_REFRESH_WORKFLOW` | Workflow | Cron-triggered background refresh workflow |
@@ -117,12 +117,12 @@ The application uses **Cloudflare Workflows** for durable, retriable execution o
 |------|-------------|--------------|
 | `check-cache` | Check KV for cached data | 3 retries, 1s delay |
 | `scrape-news` | Browser scraping | 5 retries, 5s exponential backoff |
-| `save-to-cache` | Store in KV (5min TTL) | 3 retries, 1s delay |
+| `save-to-cache` | Store in KV (35min TTL) | 3 retries, 1s delay |
 | `save-to-database` | Persist snapshot to D1 | 3 retries, 2s delay |
 
 **ScheduledNewsRefreshWorkflow**:
 
-Cron-triggered background refresh (every hour):
+Cron-triggered background refresh (every 30 minutes):
 - `scrape-fresh-news` - Always scrape fresh (no cache check)
 - `update-cache` - Update KV cache
 - `save-snapshot` - Save to D1
@@ -188,7 +188,7 @@ bun run test:ui
 # Run tests with coverage
 bun run test:coverage
 
-# Deploy to Cloudflare Workers
+# Deploy to Cloudflare Workers (includes frontend build)
 bun run deploy
 ```
 
@@ -259,8 +259,9 @@ curl -u admin:password https://your-worker.workers.dev/api/hello
 ### KV Cache (NEWS_CACHE)
 
 - **Key**: `yahoo-japan-top-picks`
-- **TTL**: 300 seconds (5 minutes)
+- **TTL**: 2100 seconds (35 minutes)
 - **Purpose**: Reduce scraping frequency and improve response times
+- **Note**: TTL is 35 minutes to ensure cache stays alive between 30-minute scheduled runs
 
 ### D1 Database (DB)
 
@@ -395,7 +396,8 @@ Cloudflare Browser Rendering DOES work in Workflows when using @cloudflare/puppe
 
 ### Important Notes
 
-- The frontend requires building before deployment: `bun run build:frontend`
+- The frontend is built automatically during deployment via `bun run deploy`
+- For local development only, manually build with `bun run build:frontend`
 - Lit uses decorators (experimentalDecorators: true in tsconfig)
 - The `useDefineForClassFields: false` setting is required for Lit to work correctly with TypeScript
 - The `Env` type is defined in `src/types/news.ts` as the single source of truth

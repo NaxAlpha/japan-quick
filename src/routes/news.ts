@@ -101,6 +101,37 @@ newsRoutes.get('/result/:id', async (c) => {
 
     const result = status.output as NewsScraperResult;
 
+    // Augment result with article status (same pattern as /api/news/latest)
+    if (result.success && result.data?.topPicks) {
+      const pickIds = result.data.topPicks
+        .map(pick => extractPickId(pick.url))
+        .filter((id): id is string => id !== null);
+
+      const statusMap = new Map<string, ArticleStatus>();
+
+      if (pickIds.length > 0) {
+        const placeholders = pickIds.map(() => '?').join(', ');
+        const articlesResult = await c.env.DB.prepare(
+          `SELECT pick_id, status FROM articles WHERE pick_id IN (${placeholders})`
+        ).bind(...pickIds).all();
+
+        for (const row of articlesResult.results) {
+          const r = row as { pick_id: string; status: string };
+          statusMap.set(r.pick_id, r.status as ArticleStatus);
+        }
+      }
+
+      // Augment topPicks with pickId and articleStatus
+      result.data.topPicks = result.data.topPicks.map(pick => {
+        const pickId = extractPickId(pick.url);
+        return {
+          ...pick,
+          pickId: pickId || undefined,
+          articleStatus: pickId ? statusMap.get(pickId) : undefined
+        };
+      });
+    }
+
     return c.json({
       success: true,
       result

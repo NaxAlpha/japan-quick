@@ -44,6 +44,6 @@ name = "article-rescrape-workflow"
 binding = "ARTICLE_RESCRAPE_WORKFLOW"
 class_name = "ArticleRescrapeWorkflow"
 
-# Cron triggers for scheduled news refresh (every 1 hour)
+# Cron triggers for scheduled news refresh (every 30 minutes)
 [triggers]
-crons = ["0 * * * *"]
+crons = ["*/30 * * * *"]
