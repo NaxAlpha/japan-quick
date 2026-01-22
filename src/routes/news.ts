@@ -3,15 +3,22 @@
  * POST /api/news/trigger - Create new workflow instance
  * GET /api/news/status/:id - Get workflow status
  * GET /api/news/result/:id - Get completed result
- * GET /api/news/latest - Get most recent D1 snapshot
+ * GET /api/news/latest - Get most recent D1 snapshot with article status
  * POST /api/news/cancel/:id - Terminate workflow
  */
 
 import { Hono } from 'hono';
-import type { Env } from '../types/news.js';
+import type { Env, YahooNewsTopPick, YahooNewsResponse } from '../types/news.js';
 import type { NewsScraperParams, NewsScraperResult } from '../workflows/types.js';
+import type { ArticleStatus } from '../types/article.js';
 
 const newsRoutes = new Hono<{ Bindings: Env['Bindings'] }>();
+
+// Helper to extract pickId from a pickup URL
+function extractPickId(url: string): string | null {
+  const match = url.match(/\/pickup\/(\d+)$/);
+  return match ? match[1] : null;
+}
 
 // POST /api/news/trigger - Create new workflow instance
 newsRoutes.post('/trigger', async (c) => {
@@ -107,7 +114,7 @@ newsRoutes.get('/result/:id', async (c) => {
   }
 });
 
-// GET /api/news/latest - Get most recent D1 snapshot
+// GET /api/news/latest - Get most recent D1 snapshot with article status
 newsRoutes.get('/latest', async (c) => {
   try {
     const result = await c.env.DB.prepare(
@@ -122,7 +129,42 @@ newsRoutes.get('/latest', async (c) => {
     }
 
     // Parse the JSON data field
-    const newsData = JSON.parse(result.data as string);
+    const newsData = JSON.parse(result.data as string) as YahooNewsResponse;
+
+    // Extract pickIds from news items and get their article statuses
+    const pickIds = newsData.topPicks
+      .map(pick => extractPickId(pick.url))
+      .filter((id): id is string => id !== null);
+
+    // Build a map of pickId -> status
+    const statusMap = new Map<string, ArticleStatus>();
+
+    if (pickIds.length > 0) {
+      try {
+        const placeholders = pickIds.map(() => '?').join(', ');
+        const articlesResult = await c.env.DB.prepare(
+          `SELECT pick_id, status FROM articles WHERE pick_id IN (${placeholders})`
+        ).bind(...pickIds).all();
+
+        for (const row of articlesResult.results) {
+          const r = row as { pick_id: string; status: string };
+          statusMap.set(r.pick_id, r.status as ArticleStatus);
+        }
+      } catch (error) {
+        console.error('Failed to fetch article statuses:', error);
+        // Continue without statuses
+      }
+    }
+
+    // Augment topPicks with pickId and articleStatus
+    const augmentedTopPicks: YahooNewsTopPick[] = newsData.topPicks.map(pick => {
+      const pickId = extractPickId(pick.url);
+      return {
+        ...pick,
+        pickId: pickId || undefined,
+        articleStatus: pickId ? statusMap.get(pickId) : undefined
+      };
+    });
 
     return c.json({
       success: true,
@@ -130,7 +172,10 @@ newsRoutes.get('/latest', async (c) => {
         id: result.id,
         capturedAt: result.captured_at,
         snapshotName: result.snapshot_name,
-        data: newsData
+        data: {
+          ...newsData,
+          topPicks: augmentedTopPicks
+        }
       }
     });
   } catch (error) {
