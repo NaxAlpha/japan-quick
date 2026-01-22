@@ -4,16 +4,21 @@
  * Poll /api/news/status/:id every 2 seconds
  * Fetch /api/news/result/:id when complete
  * Load /api/news/latest on page open for immediate display
+ * Shows article status badges and links to article pages when available
  */
 
 import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
+
+type ArticleStatus = 'pending' | 'not_available' | 'scraped_v1' | 'scraped_v2';
 
 interface YahooNewsTopPick {
   title: string;
   url: string;
   thumbnailUrl?: string;
   publishedAt?: string;
+  pickId?: string;
+  articleStatus?: ArticleStatus;
 }
 
 type FetchState = 'not-fetched' | 'triggering' | 'polling' | 'fetched';
@@ -78,6 +83,7 @@ export class NewsPage extends LitElement {
       text-decoration: none;
       color: inherit;
       transition: transform 0.2s, box-shadow 0.2s;
+      cursor: pointer;
     }
 
     .news-item:hover {
@@ -91,10 +97,17 @@ export class NewsPage extends LitElement {
       min-width: 0;
     }
 
+    .news-title-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+
     .news-title {
       font-size: 1rem;
       font-weight: 600;
-      margin: 0 0 0.5rem 0;
+      margin: 0;
       line-height: 1.4;
       color: #1a1a1a;
       overflow: hidden;
@@ -102,6 +115,7 @@ export class NewsPage extends LitElement {
       display: -webkit-box;
       -webkit-line-clamp: 2;
       -webkit-box-orient: vertical;
+      flex: 1;
     }
 
     .news-date {
@@ -128,6 +142,41 @@ export class NewsPage extends LitElement {
       color: white;
       font-size: 1.5rem;
       flex-shrink: 0;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 0.125rem 0.5rem;
+      border-radius: 0.25rem;
+      font-size: 0.75rem;
+      font-weight: 500;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .status-badge.external {
+      background: #9ca3af;
+      color: white;
+    }
+
+    .status-badge.pending {
+      background: #fbbf24;
+      color: #78350f;
+    }
+
+    .status-badge.scraped-v1 {
+      background: #3b82f6;
+      color: white;
+    }
+
+    .status-badge.scraped-v2 {
+      background: #10b981;
+      color: white;
+    }
+
+    .status-badge.new {
+      background: #8b5cf6;
+      color: white;
     }
 
     .status-message {
@@ -354,6 +403,45 @@ export class NewsPage extends LitElement {
     }
   }
 
+  private getStatusBadge(topPick: YahooNewsTopPick) {
+    const status = topPick.articleStatus;
+
+    if (!status) {
+      // No article record yet
+      return html`<span class="status-badge new">New</span>`;
+    }
+
+    switch (status) {
+      case 'not_available':
+        return html`<span class="status-badge external">External</span>`;
+      case 'pending':
+        return html`<span class="status-badge pending">Pending</span>`;
+      case 'scraped_v1':
+        return html`<span class="status-badge scraped-v1">Scraped</span>`;
+      case 'scraped_v2':
+        return html`<span class="status-badge scraped-v2">Scraped v2</span>`;
+      default:
+        return html`<span class="status-badge new">New</span>`;
+    }
+  }
+
+  private handleNewsClick(topPick: YahooNewsTopPick, event: Event) {
+    event.preventDefault();
+
+    const status = topPick.articleStatus;
+
+    // If article is available (scraped), go to article page
+    if (status === 'scraped_v1' || status === 'scraped_v2') {
+      if (topPick.pickId) {
+        window.location.href = `/article/pick:${topPick.pickId}`;
+        return;
+      }
+    }
+
+    // Otherwise, open Yahoo page in new tab
+    window.open(topPick.url, '_blank', 'noopener,noreferrer');
+  }
+
   render() {
     return html`
       <div class="container">
@@ -398,15 +486,21 @@ export class NewsPage extends LitElement {
       <div class="news-list">
         ${this.topPicks.map(
           (topPick) => html`
-            <a href="${topPick.url}" target="_blank" rel="noopener noreferrer" class="news-item">
+            <div
+              class="news-item"
+              @click=${(e: Event) => this.handleNewsClick(topPick, e)}
+            >
               <div class="news-item-content">
-                <h3 class="news-title">${topPick.title}</h3>
+                <div class="news-title-row">
+                  <h3 class="news-title">${topPick.title}</h3>
+                  ${this.getStatusBadge(topPick)}
+                </div>
                 ${topPick.publishedAt ? html`<p class="news-date">${topPick.publishedAt}</p>` : ''}
               </div>
               ${topPick.thumbnailUrl
                 ? html`<img class="news-thumbnail" src="${topPick.thumbnailUrl}" alt="" />`
                 : html`<div class="news-placeholder-thumbnail">📰</div>`}
-            </a>
+            </div>
           `
         )}
       </div>

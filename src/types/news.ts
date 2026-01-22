@@ -2,11 +2,15 @@
  * Type definitions for Yahoo News Japan scraper
  */
 
+import type { ArticleStatus } from './article.js';
+
 export interface YahooNewsTopPick {
   title: string;
   url: string;
   thumbnailUrl?: string;
   publishedAt?: string; // e.g., "1/19(月) 12:31"
+  pickId?: string; // Extracted pickup ID from URL
+  articleStatus?: ArticleStatus; // Status from articles table
 }
 
 export interface YahooNewsResponse {
@@ -48,5 +52,7 @@ export type Env = {
     DB: D1Database;
     NEWS_SCRAPER_WORKFLOW: Workflow;
     SCHEDULED_REFRESH_WORKFLOW: Workflow;
+    ARTICLE_SCRAPER_WORKFLOW: Workflow;
+    ARTICLE_RESCRAPE_WORKFLOW: Workflow;
   }
 };

@@ -2,9 +2,11 @@
  * ScheduledNewsRefreshWorkflow - Cron-triggered background refresh
  * Always scrapes fresh news (no cache check) every 15 minutes
  * Automatically cleans up snapshots older than 30 days
+ * Triggers article scraping for new pickup IDs
  */
 
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
+import puppeteer from '@cloudflare/puppeteer';
 import { YahooNewsScraper } from '../services/news-scraper.js';
 import type { YahooNewsResponse } from '../types/news.js';
 import type { ScheduledRefreshParams, ScheduledRefreshResult } from './types.js';
@@ -13,15 +15,25 @@ interface WorkflowEnv {
   BROWSER: any;
   NEWS_CACHE: KVNamespace;
   DB: D1Database;
+  ARTICLE_SCRAPER_WORKFLOW: Workflow;
+  ADMIN_PASSWORD: string;
 }
 
 const CACHE_KEY = 'yahoo-japan-top-picks';
 const CACHE_TTL = 300; // 5 minutes
 
+// Helper to extract pickId from a pickup URL
+function extractPickId(url: string): string | null {
+  const match = url.match(/\/pickup\/(\d+)$/);
+  return match ? match[1] : null;
+}
+
 export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv, ScheduledRefreshParams, ScheduledRefreshResult> {
   async run(event: WorkflowEvent<ScheduledRefreshParams>, step: WorkflowStep): Promise<ScheduledRefreshResult> {
+    console.log('[ScheduledNewsRefreshWorkflow] Started');
     try {
       // Step 1: Scrape fresh news (always, no cache check)
+      console.log('[ScheduledNewsRefreshWorkflow] Starting fresh news scrape');
       const topPicks = await step.do('scrape-fresh-news', {
         retries: {
           limit: 5,
@@ -29,9 +41,12 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
           backoff: "exponential"
         }
       }, async () => {
+        // Use YahooNewsScraper directly with browser binding
         const scraper = new YahooNewsScraper();
-        return await scraper.scrape(this.env.BROWSER);
+        const result = await scraper.scrape(this.env.BROWSER);
+        return result;
       });
+      console.log(`[ScheduledNewsRefreshWorkflow] News scrape completed: ${topPicks.length} items`);
 
       // Build response object
       const newsData: YahooNewsResponse = {
@@ -87,6 +102,59 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
 
         if (result.meta.changes > 0) {
           console.log(`Cleaned up ${result.meta.changes} old snapshots`);
+        }
+      });
+
+      // Step 5: Trigger article scraping for new pickup IDs
+      await step.do('trigger-article-scrapes', {
+        retries: {
+          limit: 3,
+          delay: "2 seconds",
+          backoff: "constant"
+        }
+      }, async () => {
+        // Extract pickIds from scraped news
+        const pickIds = topPicks
+          .map(pick => extractPickId(pick.url))
+          .filter((id): id is string => id !== null);
+
+        if (pickIds.length === 0) {
+          console.log('No pickup IDs found in scraped news');
+          return;
+        }
+
+        // Check which pickIds are new (not in articles table)
+        const placeholders = pickIds.map(() => '?').join(', ');
+        const existingResult = await this.env.DB.prepare(
+          `SELECT pick_id FROM articles WHERE pick_id IN (${placeholders})`
+        ).bind(...pickIds).all();
+
+        const existingPickIds = new Set(
+          existingResult.results.map(row => (row as { pick_id: string }).pick_id)
+        );
+
+        const newPickIds = pickIds.filter(id => !existingPickIds.has(id));
+
+        if (newPickIds.length === 0) {
+          console.log('No new pickup IDs to scrape');
+          return;
+        }
+
+        console.log(`Found ${newPickIds.length} new pickup IDs to scrape`);
+
+        // Trigger article scraper workflow for each new pickId
+        for (const pickId of newPickIds) {
+          try {
+            await this.env.ARTICLE_SCRAPER_WORKFLOW.create({
+              params: {
+                pickId,
+                isRescrape: false
+              }
+            });
+            console.log(`Triggered article scraper for pickId=${pickId}`);
+          } catch (error) {
+            console.error(`Failed to trigger article scraper for pickId=${pickId}:`, error);
+          }
         }
       });
 

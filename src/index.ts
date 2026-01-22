@@ -1,11 +1,17 @@
 import { Hono } from 'hono';
 import { basicAuth } from './middleware/auth.js';
 import { newsRoutes } from './routes/news.js';
+import { articleRoutes } from './routes/articles.js';
 import { frontendRoutes } from './routes/frontend.js';
 import type { Env } from './types/news.js';
 
 // Export workflow classes for Cloudflare Workers
-export { NewsScraperWorkflow, ScheduledNewsRefreshWorkflow } from './workflows/index.js';
+export {
+  NewsScraperWorkflow,
+  ScheduledNewsRefreshWorkflow,
+  ArticleScraperWorkflow,
+  ArticleRescrapeWorkflow
+} from './workflows/index.js';
 
 const app = new Hono<Env>();
 
@@ -17,6 +23,9 @@ app.use('/api/*', basicAuth());
 
 // News/Workflow API routes (protected)
 app.route('/api/news', newsRoutes);
+
+// Article API routes (protected)
+app.route('/api/articles', articleRoutes);
 
 // Other API routes (protected)
 app.get('/api/status', (c) => {
@@ -32,20 +41,26 @@ app.get('/api/hello', (c) => {
   return c.json({ message: 'Hello from Japan Quick API' });
 });
 
-// Scheduled handler for cron triggers (runs every 15 minutes)
-export const scheduled: ExportedHandlerScheduledHandler<Env['Bindings']> = async (event, env, ctx) => {
-  console.log('Scheduled task triggered at:', new Date(event.scheduledTime).toISOString());
+// Export as object with fetch and scheduled handlers for Cloudflare Workers
+export default {
+  fetch: app.fetch,
+  scheduled: async (event: ScheduledEvent, env: Env['Bindings'], ctx: ExecutionContext) => {
+    console.log('Scheduled task triggered at:', new Date(event.scheduledTime).toISOString());
 
-  try {
-    // Create an instance of the scheduled refresh workflow
-    const instance = await env.SCHEDULED_REFRESH_WORKFLOW.create({
-      params: {}
-    });
+    try {
+      // Create an instance of the scheduled refresh workflow
+      const refreshInstance = await env.SCHEDULED_REFRESH_WORKFLOW.create({
+        params: {}
+      });
+      console.log('Created scheduled refresh workflow:', refreshInstance.id);
 
-    console.log('Created scheduled refresh workflow:', instance.id);
-  } catch (error) {
-    console.error('Failed to create scheduled refresh workflow:', error);
+      // Create an instance of the article rescrape workflow
+      const rescrapeInstance = await env.ARTICLE_RESCRAPE_WORKFLOW.create({
+        params: {}
+      });
+      console.log('Created article rescrape workflow:', rescrapeInstance.id);
+    } catch (error) {
+      console.error('Failed to create scheduled workflows:', error);
+    }
   }
 };
-
-export default app;
