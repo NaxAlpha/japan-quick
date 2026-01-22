@@ -14,7 +14,8 @@ japan-quick/
 ├── public/
 │   └── index.html              # Main HTML entry point with app-root custom element
 ├── migrations/
-│   └── 002_articles.sql        # Database migration for articles tables
+│   ├── 002_articles.sql        # Database migration for articles tables
+│   └── 003_videos.sql          # Database migration for videos, models, cost_logs tables
 ├── src/
 │   ├── index.ts                # Cloudflare Workers backend with Hono + workflow exports
 │   ├── middleware/
@@ -25,21 +26,26 @@ japan-quick/
 │   │   ├── news-scraper.workflow.ts      # NewsScraperWorkflow (durable news scraping)
 │   │   ├── scheduled-refresh.workflow.ts # ScheduledNewsRefreshWorkflow (cron-triggered)
 │   │   ├── article-scraper.workflow.ts   # ArticleScraperWorkflow (article content scraping)
-│   │   └── article-rescrape.workflow.ts  # ArticleRescrapeWorkflow (cron-triggered rescrape)
+│   │   ├── article-rescrape.workflow.ts  # ArticleRescrapeWorkflow (cron-triggered rescrape)
+│   │   └── video-selection.workflow.ts   # VideoSelectionWorkflow (AI video selection, cron-triggered)
 │   ├── frontend/
 │   │   ├── app.ts              # LitElement root component (AppRoot)
 │   │   └── pages/
 │   │       ├── news-page.ts    # News page component (workflow trigger/poll/result pattern)
-│   │       └── article-page.ts # Article detail page component
+│   │       ├── article-page.ts # Article detail page component
+│   │       └── videos-page.ts  # Videos page component (video selection management)
 │   ├── services/
 │   │   ├── news-scraper.ts     # Yahoo News Japan scraper (filters pickup URLs only)
-│   │   └── article-scraper.ts  # Yahoo News article scraper (full content + comments)
+│   │   ├── article-scraper.ts  # Yahoo News article scraper (full content + comments)
+│   │   └── gemini.ts           # Gemini AI service (article selection for videos)
 │   ├── types/
 │   │   ├── news.ts             # News type definitions + Env type (single source of truth)
-│   │   └── article.ts          # Article type definitions
+│   │   ├── article.ts          # Article type definitions
+│   │   └── video.ts            # Video type definitions (Video, Model, CostLog interfaces)
 │   ├── routes/
 │   │   ├── news.ts             # API routes for news workflow management
 │   │   ├── articles.ts         # API routes for article management
+│   │   ├── videos.ts           # API routes for video workflow management
 │   │   └── frontend.ts         # Frontend route handlers
 │   ├── lib/
 │   │   └── html-template.ts    # HTML template utilities (with props support)
@@ -67,6 +73,7 @@ japan-quick/
   - `GET /` - Home page (public, renders app-root component)
   - `GET /news` - News page (public, renders news-page component)
   - `GET /article/:id` - Article detail page (public, renders article-page component)
+  - `GET /videos` - Videos page (public, renders videos-page component)
   - `GET /api/status` - Service status endpoint (protected)
   - `GET /api/hello` - Health check/JSON API endpoint (protected)
   - **News Workflow Routes (protected):**
@@ -80,6 +87,11 @@ japan-quick/
     - `GET /api/articles/:id/version/:version` - Get specific version
     - `POST /api/articles/trigger/:pickId` - Manual trigger
     - `GET /api/articles/status/:workflowId` - Workflow status
+  - **Video API Routes (protected):**
+    - `GET /api/videos` - List 10 most recent videos
+    - `GET /api/videos/:id` - Get single video with cost logs
+    - `POST /api/videos/trigger` - Manual workflow trigger
+    - `GET /api/videos/status/:workflowId` - Workflow status
 
 ### Frontend (Lit + TypeScript)
 
@@ -89,6 +101,7 @@ japan-quick/
   - `<app-root>`: Home page with navigation and API test button
   - `<news-page>`: News scraping interface with article status badges (all article clicks navigate to article page)
   - `<article-page>`: Article detail view with version selector, workflow trigger for unscraped articles
+  - `<videos-page>`: Video selection management interface with workflow trigger
 - Build output: `public/frontend/` directory (from TypeScript compilation)
 - Styling: Scoped CSS within Lit components
 - Purpose: Provides interface for content generation, preview, and management
@@ -104,8 +117,10 @@ japan-quick/
 | `SCHEDULED_REFRESH_WORKFLOW` | Workflow | Cron-triggered background refresh workflow |
 | `ARTICLE_SCRAPER_WORKFLOW` | Workflow | Article content scraping workflow |
 | `ARTICLE_RESCRAPE_WORKFLOW` | Workflow | Cron-triggered article rescrape workflow |
+| `VIDEO_SELECTION_WORKFLOW` | Workflow | Video selection workflow |
 | `ADMIN_USERNAME` | Var | Basic auth username |
 | `ADMIN_PASSWORD` | Var | Basic auth password |
+| `GOOGLE_API_KEY` | Var | Gemini API key |
 
 ### Cloudflare Workflows
 
@@ -140,7 +155,17 @@ Cron-triggered background refresh (every 30 minutes):
 
 **Article Status Progression**: `pending` → `retry_1` → `retry_2` → `error` → `scraped_v1` → `scraped_v2`
 
-**Note**: Workflows require remote deployment to test - use `wrangler dev --remote` or `wrangler deploy`. Cron triggers only work in production.
+**VideoSelectionWorkflow**:
+
+| Step | Description | Retry Policy |
+|------|-------------|--------------|
+| `fetch-eligible-articles` | Query articles with `scraped_v2` status from last 30 minutes | 3 retries, 2s constant delay |
+| `create-video-entry` | Create video record with `doing` status | 3 retries, 2s constant delay |
+| `call-gemini-ai` | Use Gemini 3 Flash to select articles | 3 retries, 5s exponential backoff |
+| `log-cost` | Track input/output tokens and calculate cost | 3 retries, 2s constant delay |
+| `update-video-entry` | Update with AI results, set status to `todo` | 3 retries, 2s constant delay |
+
+**Note**: Workflows require remote deployment to test - use `wrangler dev --remote` or `wrangler deploy`. Cron triggers only work in production. The cron runs every 30 minutes, triggering both ScheduledNewsRefreshWorkflow and VideoSelectionWorkflow.
 
 ### Type System
 
@@ -151,6 +176,7 @@ export type Env = {
   Bindings: {
     ADMIN_USERNAME: string;
     ADMIN_PASSWORD: string;
+    GOOGLE_API_KEY: string;
     BROWSER: BrowserBinding | null;  // Can be null in local dev
     NEWS_CACHE: KVNamespace;
     DB: D1Database;
@@ -158,6 +184,7 @@ export type Env = {
     SCHEDULED_REFRESH_WORKFLOW: Workflow;
     ARTICLE_SCRAPER_WORKFLOW: Workflow;
     ARTICLE_RESCRAPE_WORKFLOW: Workflow;
+    VIDEO_SELECTION_WORKFLOW: Workflow;
   }
 };
 ```
@@ -318,11 +345,51 @@ CREATE TABLE article_comments (
   scraped_at TEXT NOT NULL,
   FOREIGN KEY (article_id) REFERENCES articles(id)
 );
+
+CREATE TABLE models (
+  id TEXT PRIMARY KEY,                    -- e.g., "gemini-3-flash-preview"
+  name TEXT NOT NULL,                     -- e.g., "Gemini 3 Flash"
+  description TEXT,                       -- Model description
+  input_cost_per_million REAL NOT NULL,   -- Cost per 1M input tokens (e.g., 0.50)
+  output_cost_per_million REAL NOT NULL,  -- Cost per 1M output tokens (e.g., 3.00)
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE videos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  notes TEXT,                    -- Newline-joined selection rationale strings
+  short_title TEXT,              -- English title for video
+  articles TEXT,                 -- JSON array of pick_id values
+  video_type TEXT NOT NULL,      -- "short" | "long"
+  selection_status TEXT NOT NULL DEFAULT 'todo',  -- "todo" | "doing" | "done"
+  total_cost REAL DEFAULT 0,     -- Sum of all cost_logs for this video
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE cost_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  video_id INTEGER NOT NULL,
+  log_type TEXT NOT NULL,        -- e.g., "video-selection", "script-generation"
+  model_id TEXT NOT NULL,        -- FK to models.id
+  attempt_id INTEGER DEFAULT 1,  -- Attempt number for retries
+  input_tokens INTEGER,
+  output_tokens INTEGER,
+  cost REAL NOT NULL,            -- Calculated cost for this operation
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (video_id) REFERENCES videos(id),
+  FOREIGN KEY (model_id) REFERENCES models(id)
+);
 ```
 
 - **news_snapshots.data**: JSON string containing the full YahooNewsResponse
 - **articles.status**: pending | not_available | retry_1 | retry_2 | error | scraped_v1 | scraped_v2
 - **article_versions.version**: 1 (first scrape) or 2 (rescrape after 1 hour)
+- **models.id**: Model identifier (e.g., "gemini-3-flash-preview")
+- **videos.video_type**: short (60-120s, 1080x1920) | long (4-6min, 1920x1080)
+- **videos.selection_status**: todo | doing | done
+- **videos.articles**: JSON array of pick_id values selected by AI
+- **cost_logs.log_type**: Operation type (e.g., "video-selection", "script-generation")
 
 ## Yahoo News Japan Scraper
 
@@ -351,6 +418,72 @@ Article scraper uses semantic HTML selectors:
 - **Pagination**: Dual strategy - pagination links and pagination containers
 
 **Best Practice**: Always use semantic HTML selectors (`article`, `h1`, `p`) or stable class names (`.article_body`) instead of generated/hashed class names.
+
+## Gemini AI Integration
+
+The application uses Google's Gemini AI to intelligently select articles for video generation.
+
+### Model Configuration
+
+- **Model**: `gemini-3-flash-preview` (Gemini 3 Flash)
+- **Pricing**:
+  - Input: $0.50 per 1M tokens
+  - Output: $3.00 per 1M tokens
+- **Purpose**: Analyze recently scraped articles and select the most important ones for video generation
+- **Package**: `@google/genai` (Google's official Gemini API client)
+
+### Selection Criteria
+
+The AI evaluates articles based on five criteria:
+
+1. **IMPORTANCE**: Impact on society, public interest, significance
+2. **TIMELINESS**: Breaking news, trending topics, time-sensitive updates
+3. **CLARITY**: Story is clear and can be explained effectively
+4. **VISUAL POTENTIAL**: Story can be illustrated with graphics/footage
+5. **ENGAGEMENT**: Likely to capture viewer attention
+
+### AI Input Format
+
+Articles are formatted with 4-digit indices for efficient reference:
+
+```json
+[
+  {
+    "index": "1234",
+    "title": "Article title",
+    "dateTime": "2024-01-01 12:00",
+    "source": "News Source"
+  }
+]
+```
+
+**Index Mapping**: The service creates a mapping between 4-digit indices and pick_id values. Indices are extracted from the first 4 characters of pick_id, with collision handling using last 4 characters or incremental suffixes.
+
+### AI Output Format
+
+```json
+{
+  "notes": ["reason 1", "reason 2", "reason 3"],
+  "short_title": "English title for the video (max 50 chars)",
+  "articles": ["1234", "5678"],
+  "video_type": "short" | "long"
+}
+```
+
+- **notes**: Array of 2-5 clear, concise reasons for selection
+- **short_title**: English title under 50 characters
+- **articles**: Array of 4-digit indices selected by AI (mapped back to pick_ids)
+- **video_type**:
+  - `short` (60-120s, 1080x1920 vertical): Breaking news, urgent updates, trending topics
+  - `long` (4-6 min, 1920x1080 horizontal): In-depth analysis, informative content, complex stories
+
+### Cost Tracking
+
+All AI operations are tracked in the `cost_logs` table:
+- Input/output token counts are recorded
+- Cost is calculated based on model pricing
+- Total cost per video is aggregated from all related operations
+- Costs are displayed in the videos UI ($0.0000 format)
 
 ## Platform Notes
 

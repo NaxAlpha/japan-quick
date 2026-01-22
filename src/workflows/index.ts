@@ -7,9 +7,11 @@ export { NewsScraperWorkflow } from './news-scraper.workflow.js';
 export { ScheduledNewsRefreshWorkflow } from './scheduled-refresh.workflow.js';
 export { ArticleScraperWorkflow } from './article-scraper.workflow.js';
 export { ArticleRescrapeWorkflow } from './article-rescrape.workflow.js';
+export { VideoSelectionWorkflow } from './video-selection.workflow.js';
 export type {
   NewsScraperParams,
   NewsScraperResult,
   ScheduledRefreshParams,
   ScheduledRefreshResult
 } from './types.js';
+export type { VideoSelectionParams, VideoSelectionResult } from './video-selection.workflow.js';

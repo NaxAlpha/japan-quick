@@ -43,4 +43,15 @@ frontendRoutes.get('/article/:id', (c) => {
   return c.html(html);
 });
 
+// Videos page - uses videos-page component
+frontendRoutes.get('/videos', (c) => {
+  const html = renderPageTemplate({
+    title: 'Video Selections - Japan Quick',
+    description: 'AI-selected videos for generation',
+    componentName: 'videos-page',
+    scriptPath: '/frontend/pages/videos-page.js'
+  });
+  return c.html(html);
+});
+
 export { frontendRoutes };

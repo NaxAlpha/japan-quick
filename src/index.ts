@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { basicAuth } from './middleware/auth.js';
 import { newsRoutes } from './routes/news.js';
 import { articleRoutes } from './routes/articles.js';
+import { videoRoutes } from './routes/videos.js';
 import { frontendRoutes } from './routes/frontend.js';
 import type { Env } from './types/news.js';
 
@@ -10,7 +11,8 @@ export {
   NewsScraperWorkflow,
   ScheduledNewsRefreshWorkflow,
   ArticleScraperWorkflow,
-  ArticleRescrapeWorkflow
+  ArticleRescrapeWorkflow,
+  VideoSelectionWorkflow
 } from './workflows/index.js';
 
 const app = new Hono<Env>();
@@ -26,6 +28,9 @@ app.route('/api/news', newsRoutes);
 
 // Article API routes (protected)
 app.route('/api/articles', articleRoutes);
+
+// Video API routes (protected)
+app.route('/api/videos', videoRoutes);
 
 // Other API routes (protected)
 app.get('/api/status', (c) => {
@@ -59,6 +64,12 @@ export default {
         params: {}
       });
       console.log('Created article rescrape workflow:', rescrapeInstance.id);
+
+      // Create an instance of the video selection workflow
+      const videoInstance = await env.VIDEO_SELECTION_WORKFLOW.create({
+        params: {}
+      });
+      console.log('Created video selection workflow:', videoInstance.id);
     } catch (error) {
       console.error('Failed to create scheduled workflows:', error);
     }
