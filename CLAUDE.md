@@ -4,9 +4,21 @@ Your goal: produce code that is predictable, debuggable, and easy for future LLM
 
 ALWAYS use #runSubagent. Your context window size is limited - especially the output. So you should always work in discrete steps and run each step using #runSubAgent. You want to avoid putting anything in the main context window when possible.
 
-Each time you complete a task or learn important information about the project, you must update the `AI.md` file before handing over control to the user. This file should contain: summary of the project, file tree with 1-line descriptions, high-level architecture, and a "compound engineer" section where the AI documents engineering practices as it interacts with the user. When starting a new task, always read `AI.md` first to ensure you are aware of any important information.
+Each time you complete a task or learn important information about the project, you must update the `AI.md` file before handing over control to the user. When starting a new task, always read `AI.md` first to ensure you are aware of any important information.
+
+**AI.md**: Keep current state only (summary, file tree, architecture, commands, auth, schemas, platform learnings, practices). NEVER add dated entries, version IDs, or incident-specific notes.
 
 ALWAYS check your work before returning control to the user. Run tests if available, verify builds, etc. Never return incomplete or unverified work to the user.
+
+## Manual Verification
+
+After code changes, verify in production before marking complete:
+
+1. **Deploy**: `bun run deploy` (note version ID)
+2. **Tail logs**: `wrangler tail --format pretty` (separate terminal)
+3. **Test affected endpoints/workflows** using curl/browser
+4. **Verify**: logs show no errors, expected behavior works
+5. **Report**: version ID, test results, errors, output samples
 
 ## Mandatory Coding Principles
 
