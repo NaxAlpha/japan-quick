@@ -129,7 +129,7 @@ describe('News Routes', () => {
     expect(mockEnv.NEWS_CACHE.put).toHaveBeenCalledWith(
       'yahoo-japan-top-picks',
       expect.any(String),
-      expect.objectContaining({ expirationTtl: 300 })
+      expect.objectContaining({ expirationTtl: 2100 })
     );
   });
 });

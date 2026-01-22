@@ -1,6 +1,6 @@
 /**
  * ScheduledNewsRefreshWorkflow - Cron-triggered background refresh
- * Always scrapes fresh news (no cache check) every 15 minutes
+ * Always scrapes fresh news (no cache check) every 30 minutes
  * Automatically cleans up snapshots older than 30 days
  * Triggers article scraping for new pickup IDs
  */
@@ -20,7 +20,7 @@ interface WorkflowEnv {
 }
 
 const CACHE_KEY = 'yahoo-japan-top-picks';
-const CACHE_TTL = 300; // 5 minutes
+const CACHE_TTL = 2100; // 35 minutes
 
 // Helper to extract pickId from a pickup URL
 function extractPickId(url: string): string | null {
