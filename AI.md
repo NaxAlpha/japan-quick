@@ -120,7 +120,7 @@ japan-quick/
 | `VIDEO_SELECTION_WORKFLOW` | Workflow | Video selection workflow |
 | `ADMIN_USERNAME` | Var | Basic auth username |
 | `ADMIN_PASSWORD` | Var | Basic auth password |
-| `GOOGLE_API_KEY` | Var | Gemini API key |
+| `GOOGLE_API_KEY` | Secret | Gemini API key (stored in Cloudflare Secrets) |
 
 ### Cloudflare Workflows
 
@@ -280,6 +280,29 @@ curl -u admin:password https://your-worker.workers.dev/api/hello
 ```
 
 **Note**: Credentials in `wrangler.toml` are visible to anyone with repo access.
+
+## Secrets Management
+
+### Google API Key (Gemini)
+
+The `GOOGLE_API_KEY` is stored in **Cloudflare Secrets** (not in `wrangler.toml`) for security:
+
+```bash
+# Add/update secret (using key from ~/.zshrc)
+echo $GOOGLE_API_KEY | wrangler secret put GOOGLE_API_KEY
+
+# List all secrets
+wrangler secret list
+
+# Delete a secret
+wrangler secret delete GOOGLE_API_KEY
+```
+
+**Important**:
+- Never commit API keys to `wrangler.toml` or version control
+- Store sensitive keys in Cloudflare Secrets
+- Keep local copies in `~/.zshrc` or secure environment
+- Secrets are accessible in code via `env.GOOGLE_API_KEY` (same as vars)
 
 ## Data Schemas
 

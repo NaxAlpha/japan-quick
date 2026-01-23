@@ -22,7 +22,6 @@ database_id = "f1417a4f-09de-4ae4-94fe-653ed953c0a6"
 [vars]
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "GvkP525fTX0ocMTw8XtAqM9ECvNIx50v"
-GOOGLE_API_KEY = "AIzaSyDlKBx2MIqWfZGrSO8oMv2ZhW2_fMq8aBw"
 
 # Workflow bindings
 [[workflows]]
