@@ -16,7 +16,8 @@ japan-quick/
 ├── migrations/
 │   ├── 002_articles.sql        # Database migration for articles tables
 │   ├── 003_videos.sql          # Database migration for videos, models, cost_logs tables
-│   └── 004_youtube_auth.sql    # Database migration for YouTube OAuth tokens
+│   ├── 004_youtube_auth.sql    # Database migration for YouTube OAuth tokens
+│   └── 005_comment_reactions.sql # Database migration for comment reactions and replies
 ├── src/
 │   ├── index.ts                # Cloudflare Workers backend with Hono + workflow exports
 │   ├── middleware/
@@ -435,6 +436,10 @@ CREATE TABLE article_comments (
   posted_at TEXT,
   likes INTEGER DEFAULT 0,
   replies_count INTEGER DEFAULT 0,
+  reactions_empathized INTEGER DEFAULT 0,  -- "共感した" count
+  reactions_understood INTEGER DEFAULT 0,  -- "なるほど" count
+  reactions_questioning INTEGER DEFAULT 0, -- "うーん" count
+  replies TEXT,  -- JSON string of CommentReply[] for nested replies
   scraped_at TEXT NOT NULL,
   FOREIGN KEY (article_id) REFERENCES articles(id)
 );
@@ -511,6 +516,38 @@ Article scraper uses semantic HTML selectors:
 - **Pagination**: Dual strategy - pagination links and pagination containers
 
 **Best Practice**: Always use semantic HTML selectors (`article`, `h1`, `p`) or stable class names (`.article_body`) instead of generated/hashed class names.
+
+### Comment Scraping (Improved)
+
+The comment scraper extracts detailed comment data from Yahoo News:
+- **Hybrid extraction**: Tries `window.__PRELOADED_STATE__` JSON first (faster), falls back to HTML parsing
+- **Reaction breakdown**: 共感した (empathized), なるほど (understood), うーん (questioning) counts
+- **Nested replies**: Clicks "返信" buttons to extract and embed replies within parent comments
+- **Full content**: Clicks "続きを見る" links to expand truncated comments
+- **Fault tolerance**: Returns empty array on failure, doesn't block article scraping
+
+**Comment Data Structure**:
+```typescript
+{
+  commentId?: string;
+  author?: string;
+  content: string;
+  postedAt?: string;
+  likes: number;  // For backwards compatibility = reactions.empathized
+  reactions: {
+    empathized: number;   // "共感した" count
+    understood: number;   // "なるほど" count
+    questioning: number;  // "うーん" count
+  };
+  replies: Array<{
+    commentId?: string;
+    author?: string;
+    content: string;
+    postedAt?: string;
+    reactions?: { empathized, understood, questioning };
+  }>;
+}
+```
 
 ## Gemini AI Integration
 

@@ -38,6 +38,22 @@ export interface ArticleVersion {
   createdAt: string;
 }
 
+// Reaction breakdown for Yahoo News comments
+export interface CommentReactions {
+  empathized: number;   // "共感した" count
+  understood: number;   // "なるほど" count
+  questioning: number;  // "うーん" count
+}
+
+// Reply data structure (nested within parent comment)
+export interface CommentReply {
+  commentId?: string;
+  author?: string;
+  content: string;
+  postedAt?: string;
+  reactions?: CommentReactions;
+}
+
 // Database article comment record
 export interface ArticleComment {
   id: number;
@@ -49,6 +65,10 @@ export interface ArticleComment {
   postedAt?: string;
   likes: number;
   repliesCount: number;
+  reactionsEmpathized: number;
+  reactionsUnderstood: number;
+  reactionsQuestioning: number;
+  replies?: string; // JSON string of CommentReply[]
   scrapedAt: string;
   createdAt: string;
 }
@@ -76,6 +96,8 @@ export interface ScrapedComment {
   postedAt?: string;
   likes: number;
   repliesCount: number;
+  reactions: CommentReactions;     // Reaction breakdown
+  replies: CommentReply[];          // Embedded nested replies
 }
 
 // Workflow input parameters

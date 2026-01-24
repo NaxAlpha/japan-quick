@@ -237,12 +237,14 @@ export async function scrapeArticleCore(params: ScrapeArticleCoreParams): Promis
     ).bind(articleId, version).run();
     log.articleScraperCore.info('Old comments deleted', { pickId, articleId, version });
 
-    // Insert new comments
+    // Insert new comments with reaction breakdown and nested replies
     for (const comment of commentsData) {
       await db.prepare(`
         INSERT INTO article_comments (
-          article_id, version, comment_id, author, content, posted_at, likes, replies_count, scraped_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+          article_id, version, comment_id, author, content, posted_at,
+          likes, replies_count, reactions_empathized, reactions_understood,
+          reactions_questioning, replies, scraped_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       `).bind(
         articleId,
         version,
@@ -251,7 +253,11 @@ export async function scrapeArticleCore(params: ScrapeArticleCoreParams): Promis
         comment.content,
         comment.postedAt || null,
         comment.likes,
-        comment.repliesCount
+        comment.repliesCount,
+        comment.reactions.empathized,
+        comment.reactions.understood,
+        comment.reactions.questioning,
+        comment.replies.length > 0 ? JSON.stringify(comment.replies) : null
       ).run();
     }
     log.articleScraperCore.info('Comments saved', { pickId, articleId, version, commentCount: commentsData.length });

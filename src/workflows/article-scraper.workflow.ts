@@ -289,12 +289,14 @@ export class ArticleScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, Arti
           'DELETE FROM article_comments WHERE article_id = ? AND version = ?'
         ).bind(articleId, version).run();
 
-        // Insert new comments
+        // Insert new comments with reaction breakdown and nested replies
         for (const comment of commentsData) {
           await this.env.DB.prepare(`
             INSERT INTO article_comments (
-              article_id, version, comment_id, author, content, posted_at, likes, replies_count, scraped_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+              article_id, version, comment_id, author, content, posted_at,
+              likes, replies_count, reactions_empathized, reactions_understood,
+              reactions_questioning, replies, scraped_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
           `).bind(
             articleId,
             version,
@@ -303,7 +305,11 @@ export class ArticleScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, Arti
             comment.content,
             comment.postedAt || null,
             comment.likes,
-            comment.repliesCount
+            comment.repliesCount,
+            comment.reactions.empathized,
+            comment.reactions.understood,
+            comment.reactions.questioning,
+            comment.replies.length > 0 ? JSON.stringify(comment.replies) : null
           ).run();
         }
       });
