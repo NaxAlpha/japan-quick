@@ -88,10 +88,11 @@ japan-quick/
     - `POST /api/articles/trigger/:pickId` - Manual trigger
     - `GET /api/articles/status/:workflowId` - Workflow status
   - **Video API Routes (protected):**
-    - `GET /api/videos` - List 10 most recent videos
+    - `GET /api/videos` - List videos with pagination (page query param, returns pagination metadata)
     - `GET /api/videos/:id` - Get single video with cost logs
     - `POST /api/videos/trigger` - Manual workflow trigger
     - `GET /api/videos/status/:workflowId` - Workflow status
+    - `DELETE /api/videos/:id` - Delete video and its cost logs
 
 ### Frontend (Lit + TypeScript)
 
@@ -159,11 +160,13 @@ Cron-triggered background refresh (every 30 minutes):
 
 | Step | Description | Retry Policy |
 |------|-------------|--------------|
-| `fetch-eligible-articles` | Query articles with `scraped_v2` status from last 30 minutes | 3 retries, 2s constant delay |
+| `fetch-eligible-articles` | Query articles with `scraped_v2` status from last 24 hours, excluding articles already used in videos | 3 retries, 2s constant delay |
 | `create-video-entry` | Create video record with `doing` status | 3 retries, 2s constant delay |
 | `call-gemini-ai` | Use Gemini 3 Flash to select articles | 3 retries, 5s exponential backoff |
 | `log-cost` | Track input/output tokens and calculate cost | 3 retries, 2s constant delay |
 | `update-video-entry` | Update with AI results, set status to `todo` | 3 retries, 2s constant delay |
+
+**Error Handling**: Workflow sets video status to `error` on failure instead of leaving it stuck in `doing`.
 
 **Note**: Workflows require remote deployment to test - use `wrangler dev --remote` or `wrangler deploy`. Cron triggers only work in production. The cron runs every 30 minutes, triggering both ScheduledNewsRefreshWorkflow and VideoSelectionWorkflow.
 
@@ -240,6 +243,10 @@ bun run deploy
 - **Production URL**: `https://japan-quick.nax.workers.dev`
 - **Worker Subdomain**: `nax.workers.dev`
 
+### Workflow Scheduling
+
+- **VideoSelectionWorkflow**: Runs hourly only during JST business hours (8am-8pm JST, which is UTC 23:00, 00:00-11:00)
+
 ## Authentication
 
 The application uses **Basic HTTP Authentication** to protect API routes only. Frontend pages are publicly accessible.
@@ -252,6 +259,8 @@ Credentials are stored in `wrangler.toml` under `[vars]`:
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "GvkP525fTX0ocMTw8XtAqM9ECvNIx50v"
 ```
+
+**Note**: `GOOGLE_API_KEY` is stored as a Cloudflare Secret (not in `wrangler.toml`) for security.
 
 To change the password, generate a new one:
 ```bash
@@ -410,7 +419,7 @@ CREATE TABLE cost_logs (
 - **article_versions.version**: 1 (first scrape) or 2 (rescrape after 1 hour)
 - **models.id**: Model identifier (e.g., "gemini-3-flash-preview")
 - **videos.video_type**: short (60-120s, 1080x1920) | long (4-6min, 1920x1080)
-- **videos.selection_status**: todo | doing | done
+- **videos.selection_status**: todo | doing | done | error
 - **videos.articles**: JSON array of pick_id values selected by AI
 - **cost_logs.log_type**: Operation type (e.g., "video-selection", "script-generation")
 
@@ -499,6 +508,13 @@ Articles are formatted with 4-digit indices for efficient reference:
 - **video_type**:
   - `short` (60-120s, 1080x1920 vertical): Breaking news, urgent updates, trending topics
   - `long` (4-6 min, 1920x1080 horizontal): In-depth analysis, informative content, complex stories
+
+**The AI MUST always select at least one article**: The prompt requires the AI to select at least one article, ensuring every workflow run produces a video selection.
+
+**Prompt Configuration**:
+- Includes examples for both short and long video types
+- Content preferences: useful, helpful, educational
+- Exclusions: celebrity gossip, death-related content, personal life stories
 
 ### Cost Tracking
 

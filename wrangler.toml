@@ -50,5 +50,5 @@ binding = "VIDEO_SELECTION_WORKFLOW"
 class_name = "VideoSelectionWorkflow"
 
 # Cron triggers for scheduled news refresh (every 30 minutes)
-[triggers]
-crons = ["*/30 * * * *"]
+# [triggers]
+# crons = ["*/30 * * * *"]

@@ -22,6 +22,8 @@ export interface VideoSelectionResult {
 
 export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], VideoSelectionParams, VideoSelectionResult> {
   async run(event: WorkflowEvent<VideoSelectionParams>, step: WorkflowStep): Promise<VideoSelectionResult> {
+    let videoId: number | null = null;
+
     try {
       // Step 1: Fetch eligible articles
       const articles = await step.do('fetch-eligible-articles', {
@@ -52,7 +54,11 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
           FROM articles
           WHERE status = 'scraped_v2'
             AND second_scraped_at IS NOT NULL
-            AND datetime(second_scraped_at) >= datetime('now', '-30 minutes')
+            AND datetime(second_scraped_at) >= datetime('now', '-24 hours')
+            AND pick_id NOT IN (
+              SELECT json_each.value FROM videos, json_each(videos.articles)
+              WHERE videos.articles IS NOT NULL
+            )
           ORDER BY second_scraped_at DESC
         `).all();
 
@@ -70,7 +76,7 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
       console.log(`VideoSelectionWorkflow: Found ${articles.length} eligible articles`);
 
       // Step 2: Create video entry with status 'doing'
-      const videoId = await step.do('create-video-entry', {
+      videoId = await step.do('create-video-entry', {
         retries: {
           limit: 3,
           delay: "2 seconds",
@@ -177,6 +183,19 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
       };
     } catch (error) {
       console.error('VideoSelectionWorkflow failed:', error);
+
+      // If we created a video entry, update its status to error
+      if (videoId !== null) {
+        try {
+          await this.env.DB.prepare(`
+            UPDATE videos SET selection_status = 'error', notes = ? WHERE id = ?
+          `).bind(error instanceof Error ? error.message : 'Unknown error', videoId).run();
+          console.log(`VideoSelectionWorkflow: Updated video ${videoId} status to error`);
+        } catch (updateError) {
+          console.error('Failed to update video status to error:', updateError);
+        }
+      }
+
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error'
