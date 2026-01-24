@@ -1,15 +1,16 @@
 /**
  * ArticleRescrapeWorkflow - Cron-triggered workflow to rescrape articles
  * Finds articles with scheduled_rescrape_at <= now AND status = 'scraped_v1'
- * Triggers ArticleScraperWorkflow with isRescrape=true for each
+ * Scrapes each article serially with 10-second delays
  */
 
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
+import { scrapeArticleCore } from '../services/article-scraper-core.js';
 import type { ArticleRescrapeParams, ArticleRescrapeResult } from '../types/article.js';
 
 interface WorkflowEnv {
+  BROWSER: any;
   DB: D1Database;
-  ARTICLE_SCRAPER_WORKFLOW: Workflow;
 }
 
 export class ArticleRescrapeWorkflow extends WorkflowEntrypoint<WorkflowEnv, ArticleRescrapeParams, ArticleRescrapeResult> {
@@ -45,39 +46,47 @@ export class ArticleRescrapeWorkflow extends WorkflowEntrypoint<WorkflowEnv, Art
 
       console.log(`ArticleRescrapeWorkflow: Found ${dueArticles.length} articles due for rescrape`);
 
-      // Step 2: Trigger rescrapes for each article
-      const triggeredPickIds = await step.do('trigger-rescrapes', {
-        retries: {
-          limit: 3,
-          delay: "2 seconds",
-          backoff: "constant"
-        }
-      }, async () => {
-        const triggered: string[] = [];
+      // Step 2: Rescrape each article serially with delays
+      const scrapedPickIds: string[] = [];
+      const failedPickIds: string[] = [];
 
-        for (const pickId of dueArticles) {
-          try {
-            await this.env.ARTICLE_SCRAPER_WORKFLOW.create({
-              params: {
-                pickId,
-                isRescrape: true
-              }
-            });
-            triggered.push(pickId);
-          } catch (error) {
-            console.error(`Failed to trigger rescrape for pickId=${pickId}:`, error);
+      for (let i = 0; i < dueArticles.length; i++) {
+        const pickId = dueArticles[i];
+        console.log(`[ArticleRescrapeWorkflow] Rescraping article ${i + 1}/${dueArticles.length}: pickId=${pickId}`);
+
+        const result = await step.do(`rescrape-article-${pickId}`, {
+          retries: {
+            limit: 2,
+            delay: "5 seconds",
+            backoff: "constant"
           }
+        }, async () => {
+          return await scrapeArticleCore({
+            browser: this.env.BROWSER,
+            db: this.env.DB,
+            pickId,
+            isRescrape: true
+          });
+        });
+
+        if (result.success) {
+          scrapedPickIds.push(pickId);
+        } else {
+          failedPickIds.push(pickId);
         }
 
-        return triggered;
-      });
+        // Add delay between articles (except after the last one)
+        if (i < dueArticles.length - 1) {
+          await step.sleep(`delay-after-${pickId}`, 10000); // 10 seconds
+        }
+      }
 
-      console.log(`ArticleRescrapeWorkflow completed: triggered ${triggeredPickIds.length} rescrapes`);
+      console.log(`ArticleRescrapeWorkflow completed: scraped ${scrapedPickIds.length}, failed ${failedPickIds.length}`);
 
       return {
         success: true,
-        triggeredCount: triggeredPickIds.length,
-        pickIds: triggeredPickIds
+        triggeredCount: scrapedPickIds.length,
+        pickIds: scrapedPickIds
       };
     } catch (error) {
       console.error('ArticleRescrapeWorkflow failed:', error);

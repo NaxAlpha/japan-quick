@@ -58,7 +58,7 @@ export default {
       const isJSTBusinessHours = hour === 23 || (hour >= 0 && hour <= 11);
       const isHourMark = minute === 0;
 
-      // Always run news workflows (every 30 min)
+      // Always run news workflows (hourly)
       const refreshInstance = await env.SCHEDULED_REFRESH_WORKFLOW.create({
         params: {}
       });

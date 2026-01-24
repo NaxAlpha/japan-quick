@@ -1,6 +1,8 @@
 /**
  * News API routes - Workflow-based endpoints
  * POST /api/news/trigger - Create new workflow instance
+ * POST /api/news/trigger-refresh - Manually trigger scheduled refresh workflow
+ * POST /api/news/trigger-rescrape - Manually trigger article rescrape workflow
  * GET /api/news/status/:id - Get workflow status
  * GET /api/news/result/:id - Get completed result
  * GET /api/news/latest - Get most recent D1 snapshot with article status
@@ -42,6 +44,46 @@ newsRoutes.post('/trigger', async (c) => {
     return c.json({
       success: false,
       error: error instanceof Error ? error.message : 'Failed to create workflow'
+    }, 500);
+  }
+});
+
+// POST /api/news/trigger-refresh - Manually trigger scheduled refresh workflow
+newsRoutes.post('/trigger-refresh', async (c) => {
+  try {
+    const instance = await c.env.SCHEDULED_REFRESH_WORKFLOW.create({
+      params: {}
+    });
+
+    return c.json({
+      success: true,
+      workflowId: instance.id
+    });
+  } catch (error) {
+    console.error('Failed to create scheduled refresh workflow:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to create scheduled refresh workflow'
+    }, 500);
+  }
+});
+
+// POST /api/news/trigger-rescrape - Manually trigger article rescrape workflow
+newsRoutes.post('/trigger-rescrape', async (c) => {
+  try {
+    const instance = await c.env.ARTICLE_RESCRAPE_WORKFLOW.create({
+      params: {}
+    });
+
+    return c.json({
+      success: true,
+      workflowId: instance.id
+    });
+  } catch (error) {
+    console.error('Failed to create article rescrape workflow:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to create article rescrape workflow'
     }, 500);
   }
 });
