@@ -175,6 +175,7 @@ export class AppRoot extends LitElement {
 
                     <div class="navigation-section">
                         <a href="/news" class="nav-button">View Yahoo News Japan</a>
+                        <a href="/videos" class="nav-button">View Videos</a>
                     </div>
 
                     <div class="test-section">

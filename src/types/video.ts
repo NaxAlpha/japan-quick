@@ -1,7 +1,7 @@
 // Video type definitions
 
 export type VideoType = 'short' | 'long';
-export type VideoSelectionStatus = 'todo' | 'doing' | 'done';
+export type VideoSelectionStatus = 'todo' | 'doing' | 'done' | 'error';
 
 // Database record interface (notes as string, total_cost field)
 export interface Video {

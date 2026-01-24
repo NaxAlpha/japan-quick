@@ -53,23 +53,31 @@ export default {
     console.log('Scheduled task triggered at:', new Date(event.scheduledTime).toISOString());
 
     try {
-      // Create an instance of the scheduled refresh workflow
+      const hour = new Date(event.scheduledTime).getUTCHours();
+      const minute = new Date(event.scheduledTime).getUTCMinutes();
+      const isJSTBusinessHours = hour === 23 || (hour >= 0 && hour <= 11);
+      const isHourMark = minute === 0;
+
+      // Always run news workflows (every 30 min)
       const refreshInstance = await env.SCHEDULED_REFRESH_WORKFLOW.create({
         params: {}
       });
       console.log('Created scheduled refresh workflow:', refreshInstance.id);
 
-      // Create an instance of the article rescrape workflow
       const rescrapeInstance = await env.ARTICLE_RESCRAPE_WORKFLOW.create({
         params: {}
       });
       console.log('Created article rescrape workflow:', rescrapeInstance.id);
 
-      // Create an instance of the video selection workflow
-      const videoInstance = await env.VIDEO_SELECTION_WORKFLOW.create({
-        params: {}
-      });
-      console.log('Created video selection workflow:', videoInstance.id);
+      // Video selection: hourly during JST 8am-8pm only
+      if (isJSTBusinessHours && isHourMark) {
+        const videoInstance = await env.VIDEO_SELECTION_WORKFLOW.create({
+          params: {}
+        });
+        console.log('Created video selection workflow:', videoInstance.id);
+      } else {
+        console.log('Skipped video selection workflow (outside JST business hours or not on the hour)');
+      }
     } catch (error) {
       console.error('Failed to create scheduled workflows:', error);
     }

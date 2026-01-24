@@ -6,7 +6,7 @@
  */
 
 import { LitElement, html, css } from 'lit';
-import { customElement, state } from 'lit/decorators.js';
+import { customElement, state, property } from 'lit/decorators.js';
 
 type VideoType = 'short' | 'long';
 type VideoSelectionStatus = 'todo' | 'doing' | 'done';
@@ -231,6 +231,72 @@ export class VideosPage extends LitElement {
     .home-link:hover {
       background: rgba(255, 255, 255, 0.3);
     }
+
+    .video-footer {
+      margin-top: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid #e5e7eb;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .status-container {
+      display: flex;
+      align-items: center;
+    }
+
+    .status-badge.error {
+      background: #dc2626;
+    }
+
+    .delete-button {
+      padding: 0.5rem 1rem;
+      background: #ef4444;
+      border: none;
+      border-radius: 0.25rem;
+      color: white;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .delete-button:hover:not(:disabled) {
+      background: #dc2626;
+    }
+
+    .delete-button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .load-more-container {
+      display: flex;
+      justify-content: center;
+      margin-top: 2rem;
+    }
+
+    .load-more-button {
+      padding: 0.75rem 2rem;
+      background: rgba(255, 255, 255, 0.2);
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      border-radius: 0.5rem;
+      color: white;
+      font-size: 1rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .load-more-button:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.3);
+    }
+
+    .load-more-button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
   `;
 
   @state()
@@ -244,6 +310,18 @@ export class VideosPage extends LitElement {
 
   @state()
   private triggering: boolean = false;
+
+  @state()
+  currentPage = 1;
+
+  @state()
+  hasMore = false;
+
+  @state()
+  loadingMore = false;
+
+  @property({ type: Object })
+  deleting = new Set<number>();
 
   /**
    * Generate Basic Auth headers for API requests
@@ -262,12 +340,12 @@ export class VideosPage extends LitElement {
     this.loadVideos();
   }
 
-  private async loadVideos() {
+  private async loadVideos(page: number = 1) {
     try {
       this.loading = true;
       this.error = null;
 
-      const response = await fetch('/api/videos', {
+      const response = await fetch(`/api/videos?page=${page}`, {
         headers: this.getAuthHeaders()
       });
 
@@ -277,7 +355,19 @@ export class VideosPage extends LitElement {
 
       const data = await response.json();
       if (data.success) {
-        this.videos = data.videos;
+        if (page > 1) {
+          // Append videos for pagination
+          this.videos = [...this.videos, ...data.videos];
+        } else {
+          // Replace videos for initial load
+          this.videos = data.videos;
+        }
+
+        // Update pagination state
+        if (data.pagination) {
+          this.currentPage = data.pagination.currentPage;
+          this.hasMore = data.pagination.hasMore;
+        }
       } else {
         throw new Error(data.error || 'Failed to load videos');
       }
@@ -285,6 +375,17 @@ export class VideosPage extends LitElement {
       this.error = err instanceof Error ? err.message : 'Failed to load videos';
     } finally {
       this.loading = false;
+    }
+  }
+
+  private async loadMoreVideos() {
+    try {
+      this.loadingMore = true;
+      await this.loadVideos(this.currentPage + 1);
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : 'Failed to load more videos';
+    } finally {
+      this.loadingMore = false;
     }
   }
 
@@ -317,6 +418,40 @@ export class VideosPage extends LitElement {
       this.error = err instanceof Error ? err.message : 'Failed to trigger workflow';
     } finally {
       this.triggering = false;
+    }
+  }
+
+  private async deleteVideo(videoId: number) {
+    if (!confirm('Are you sure you want to delete this video? This action cannot be undone.')) {
+      return;
+    }
+
+    try {
+      this.deleting.add(videoId);
+      this.requestUpdate();
+
+      const response = await fetch(`/api/videos/${videoId}`, {
+        method: 'DELETE',
+        headers: this.getAuthHeaders()
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      if (data.success) {
+        // Remove video from local state
+        this.videos = this.videos.filter(v => v.id !== videoId);
+        this.deleting.delete(videoId);
+        this.requestUpdate();
+      } else {
+        throw new Error(data.error || 'Failed to delete video');
+      }
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : 'Failed to delete video';
+      this.deleting.delete(videoId);
+      this.requestUpdate();
     }
   }
 
@@ -378,16 +513,28 @@ export class VideosPage extends LitElement {
       <div class="videos-list">
         ${this.videos.map(video => this.renderVideoCard(video))}
       </div>
+      ${this.hasMore ? html`
+        <div class="load-more-container">
+          <button
+            class="load-more-button"
+            ?disabled=${this.loadingMore}
+            @click=${this.loadMoreVideos}
+          >
+            ${this.loadingMore ? 'Loading...' : 'Load More'}
+          </button>
+        </div>
+      ` : ''}
     `;
   }
 
   private renderVideoCard(video: ParsedVideo) {
+    const isDeleting = this.deleting.has(video.id);
+
     return html`
       <div class="video-card">
         <div class="video-header">
           <h2 class="video-title">${video.short_title || 'Untitled Video'}</h2>
           <div class="badges">
-            ${this.getStatusBadge(video.selection_status)}
             ${this.getTypeBadge(video.video_type)}
           </div>
         </div>
@@ -416,6 +563,19 @@ export class VideosPage extends LitElement {
             </ul>
           </div>
         ` : ''}
+
+        <div class="video-footer">
+          <div class="status-container">
+            ${this.getStatusBadge(video.selection_status)}
+          </div>
+          <button
+            class="delete-button"
+            ?disabled=${isDeleting}
+            @click=${() => this.deleteVideo(video.id)}
+          >
+            ${isDeleting ? 'Deleting...' : 'Delete'}
+          </button>
+        </div>
       </div>
     `;
   }

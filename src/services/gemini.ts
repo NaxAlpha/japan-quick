@@ -19,6 +19,7 @@ interface SelectionResult {
   tokenUsage: TokenUsage;
 }
 
+
 export class GeminiService {
   private genai: GoogleGenAI;
 
@@ -80,14 +81,21 @@ Analyze these articles and select the MOST IMPORTANT article(s) for video genera
 
 VIDEO TYPES:
 - "short" (60-120s, 1080x1920 vertical): Breaking news, urgent updates, trending topics
+  Examples: Earthquake warning, market movement, sudden policy announcement
 - "long" (4-6 min, 1920x1080 horizontal): In-depth analysis, informative content, complex stories
+  Examples: New technology explanation, historical analysis, detailed policy breakdown
+
+PREFERENCES:
+- PREFER: Useful, helpful, educational, story-like content
+
+EXCLUSIONS:
+- EXCLUDE: Celebrity gossip, death-related incidents, personal life of famous people
 
 SELECTION CRITERIA:
 1. IMPORTANCE: Impact on society, public interest, significance
 2. TIMELINESS: Breaking news, trending topics, time-sensitive updates
 3. CLARITY: Story is clear and can be explained effectively
-4. VISUAL POTENTIAL: Story can be illustrated with graphics/footage
-5. ENGAGEMENT: Likely to capture viewer attention
+4. ENGAGEMENT: Likely to capture viewer attention
 
 RESPONSE FORMAT (JSON only):
 {
@@ -97,12 +105,13 @@ RESPONSE FORMAT (JSON only):
   "video_type": "short" | "long"
 }
 
+
 RULES:
 - Use the 4-digit indices (e.g., ["1234", "5678"]) in the "articles" field
 - Provide 2-5 clear, concise reasons in the "notes" array
 - short_title must be in English and under 50 characters
 - Select "short" for urgent/trending, "long" for in-depth/analysis
-- You MUST select at least one article
+- You MUST select at least one article from the list
 
 Respond with ONLY the JSON object, no other text.`;
   }
@@ -136,6 +145,7 @@ Respond with ONLY the JSON object, no other text.`;
       throw new Error('No text in Gemini response');
     }
     const cleanText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
     const parsed: AISelectionOutput = JSON.parse(cleanText);
 
     // Map AI indices back to pick_ids

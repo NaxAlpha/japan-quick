@@ -1,7 +1,8 @@
 /**
  * Video API routes - Video selection workflow endpoints
- * GET /api/videos - List 10 most recent videos
+ * GET /api/videos - List 10 most recent videos (supports ?page=N)
  * GET /api/videos/:id - Get single video
+ * DELETE /api/videos/:id - Delete video and cost logs
  * POST /api/videos/trigger - Manual workflow trigger
  * GET /api/videos/status/:workflowId - Workflow status
  */
@@ -14,20 +15,40 @@ import { parseVideo } from '../types/video.js';
 
 const videoRoutes = new Hono<{ Bindings: Env['Bindings'] }>();
 
-// GET /api/videos - List 10 most recent videos
+// GET /api/videos - List 10 most recent videos with pagination
 videoRoutes.get('/', async (c) => {
   try {
+    const page = parseInt(c.req.query('page') || '1');
+    const limit = 10;
+    const offset = (page - 1) * limit;
+
+    // Get total count
+    const countResult = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM videos
+    `).first<{ count: number }>();
+
+    const total = countResult?.count || 0;
+
+    // Get paginated videos
     const result = await c.env.DB.prepare(`
       SELECT * FROM videos
       ORDER BY created_at DESC
-      LIMIT 10
-    `).all();
+      LIMIT ? OFFSET ?
+    `).bind(limit, offset).all();
 
     const videos = (result.results as Video[]).map(parseVideo);
 
+    const hasMore = offset + videos.length < total;
+
     return c.json({
       success: true,
-      videos
+      videos,
+      pagination: {
+        page,
+        limit,
+        total,
+        hasMore
+      }
     });
   } catch (error) {
     console.error('Failed to fetch videos:', error);
@@ -72,6 +93,46 @@ videoRoutes.get('/:id', async (c) => {
     return c.json({
       success: false,
       error: error instanceof Error ? error.message : 'Failed to fetch video'
+    }, 500);
+  }
+});
+
+// DELETE /api/videos/:id - Delete video and its cost logs
+videoRoutes.delete('/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+
+    // Check if video exists
+    const video = await c.env.DB.prepare(`
+      SELECT id FROM videos WHERE id = ?
+    `).bind(id).first();
+
+    if (!video) {
+      return c.json({
+        success: false,
+        error: 'Video not found'
+      }, 404);
+    }
+
+    // Delete cost_logs first (foreign key constraint)
+    await c.env.DB.prepare(`
+      DELETE FROM cost_logs WHERE video_id = ?
+    `).bind(id).run();
+
+    // Delete the video
+    await c.env.DB.prepare(`
+      DELETE FROM videos WHERE id = ?
+    `).bind(id).run();
+
+    return c.json({
+      success: true,
+      message: 'Video deleted successfully'
+    });
+  } catch (error) {
+    console.error('Failed to delete video:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to delete video'
     }, 500);
   }
 });
