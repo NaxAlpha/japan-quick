@@ -3,7 +3,9 @@ import { basicAuth } from './middleware/auth.js';
 import { newsRoutes } from './routes/news.js';
 import { articleRoutes } from './routes/articles.js';
 import { videoRoutes } from './routes/videos.js';
+import youtubeRoutes from './routes/youtube.js';
 import { frontendRoutes } from './routes/frontend.js';
+import { renderPageTemplate } from './lib/html-template.js';
 import type { Env } from './types/news.js';
 import { log } from './lib/logger.js';
 
@@ -27,6 +29,9 @@ log.app.info('Japan Quick API initialized', { version: '1.0.0' });
 // Apply auth middleware to ALL API routes (including workflows)
 app.use('/api/*', basicAuth());
 
+// Apply auth middleware to settings page
+app.use('/settings', basicAuth());
+
 // News/Workflow API routes (protected)
 app.route('/api/news', newsRoutes);
 
@@ -35,6 +40,20 @@ app.route('/api/articles', articleRoutes);
 
 // Video API routes (protected)
 app.route('/api/videos', videoRoutes);
+
+// YouTube API routes (protected)
+app.route('/api/youtube', youtubeRoutes);
+
+// Settings page (protected)
+app.get('/settings', (c) => {
+  const html = renderPageTemplate({
+    title: 'Settings - Japan Quick',
+    description: 'Application Settings',
+    componentName: 'settings-page',
+    scriptPath: '/frontend/pages/settings-page.js'
+  });
+  return c.html(html);
+});
 
 // Other API routes (protected)
 app.get('/api/status', (c) => {
