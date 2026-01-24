@@ -15,7 +15,8 @@ japan-quick/
 │   └── index.html              # Main HTML entry point with app-root custom element
 ├── migrations/
 │   ├── 002_articles.sql        # Database migration for articles tables
-│   └── 003_videos.sql          # Database migration for videos, models, cost_logs tables
+│   ├── 003_videos.sql          # Database migration for videos, models, cost_logs tables
+│   └── 004_youtube_auth.sql    # Database migration for YouTube OAuth tokens
 ├── src/
 │   ├── index.ts                # Cloudflare Workers backend with Hono + workflow exports
 │   ├── middleware/
@@ -33,21 +34,25 @@ japan-quick/
 │   │   └── pages/
 │   │       ├── news-page.ts    # News page component (workflow trigger/poll/result pattern)
 │   │       ├── article-page.ts # Article detail page component
-│   │       └── videos-page.ts  # Videos page component (video selection management)
+│   │       ├── videos-page.ts  # Videos page component (video selection management)
+│   │       └── settings-page.ts # Settings page component (YouTube OAuth connection)
 │   ├── services/
 │   │   ├── news-scraper.ts           # Yahoo News Japan scraper (filters pickup URLs only, with thorough logging)
 │   │   ├── article-scraper.ts        # Yahoo News article scraper (full content + comments)
 │   │   ├── article-scraper-core.ts   # Core article scraping logic (serial processing)
-│   │   └── gemini.ts                 # Gemini AI service (article selection for videos)
+│   │   ├── gemini.ts                 # Gemini AI service (article selection for videos)
+│   │   └── youtube-auth.ts           # YouTube OAuth 2.0 service (token management, channel operations)
 │   ├── types/
 │   │   ├── news.ts             # News type definitions + Env type (single source of truth)
 │   │   ├── article.ts          # Article type definitions
-│   │   └── video.ts            # Video type definitions (Video, Model, CostLog interfaces)
+│   │   ├── video.ts            # Video type definitions (Video, Model, CostLog interfaces)
+│   │   └── youtube.ts          # YouTube OAuth type definitions
 │   ├── routes/
 │   │   ├── news.ts             # API routes for news workflow management
 │   │   ├── articles.ts         # API routes for article management
 │   │   ├── videos.ts           # API routes for video workflow management
-│   │   └── frontend.ts         # Frontend route handlers
+│   │   ├── youtube.ts          # API routes for YouTube OAuth (status, auth URL, callback, refresh, disconnect)
+│   │   └── frontend.ts         # Frontend route handlers (/, /news, /article/:id, /videos, /settings)
 │   ├── lib/
 │   │   ├── logger.ts           # Structured logging utility with request ID tracking
 │   │   └── html-template.ts    # HTML template utilities (with props support)
@@ -76,6 +81,7 @@ japan-quick/
   - `GET /news` - News page (public, renders news-page component)
   - `GET /article/:id` - Article detail page (public, renders article-page component)
   - `GET /videos` - Videos page (public, renders videos-page component)
+  - `GET /settings` - Settings page (public, renders settings-page component - YouTube OAuth)
   - `GET /api/status` - Service status endpoint (protected)
   - `GET /api/hello` - Health check/JSON API endpoint (protected)
   - **News Workflow Routes (protected):**
@@ -97,6 +103,12 @@ japan-quick/
     - `POST /api/videos/trigger` - Manual workflow trigger
     - `GET /api/videos/status/:workflowId` - Workflow status
     - `DELETE /api/videos/:id` - Delete video and its cost logs
+  - **YouTube OAuth API Routes (protected):**
+    - `GET /api/youtube/status` - Get current YouTube authentication status
+    - `GET /api/youtube/auth/url` - Generate OAuth authorization URL
+    - `GET /api/youtube/oauth/callback` - Handle OAuth callback from Google (redirects to /settings)
+    - `POST /api/youtube/refresh` - Manually refresh access token
+    - `DELETE /api/youtube/auth` - Deauthorize and clear tokens
 
 ### Frontend (Lit + TypeScript)
 
@@ -116,8 +128,8 @@ japan-quick/
 | Binding | Type | Purpose |
 |---------|------|---------|
 | `BROWSER` | Browser Binding | Puppeteer-based scraping in production |
-| `NEWS_CACHE` | KV Namespace | Cache scraped news for 35 minutes |
-| `DB` | D1 Database | Store news snapshots and articles |
+| `NEWS_CACHE` | KV Namespace | Cache scraped news for 35 minutes; OAuth state storage (5min TTL) |
+| `DB` | D1 Database | Store news snapshots, articles, videos, and YouTube auth tokens |
 | `NEWS_SCRAPER_WORKFLOW` | Workflow | Durable news scraping workflow |
 | `SCHEDULED_REFRESH_WORKFLOW` | Workflow | Cron-triggered background refresh workflow |
 | `ARTICLE_SCRAPER_WORKFLOW` | Workflow | Article content scraping workflow |
@@ -126,6 +138,9 @@ japan-quick/
 | `ADMIN_USERNAME` | Var | Basic auth username |
 | `ADMIN_PASSWORD` | Var | Basic auth password |
 | `GOOGLE_API_KEY` | Secret | Gemini API key (stored in Cloudflare Secrets) |
+| `YOUTUBE_CLIENT_ID` | Secret | YouTube OAuth client ID |
+| `YOUTUBE_CLIENT_SECRET` | Secret | YouTube OAuth client secret |
+| `YOUTUBE_REDIRECT_URI` | Secret | YouTube OAuth redirect URI |
 
 ### Cloudflare Workflows
 
@@ -569,6 +584,69 @@ All AI operations are tracked in the `cost_logs` table:
 - Cost is calculated based on model pricing
 - Total cost per video is aggregated from all related operations
 - Costs are displayed in the videos UI ($0.0000 format)
+
+## YouTube OAuth 2.0 Integration
+
+### Overview
+
+The application integrates with YouTube OAuth 2.0 to enable video uploads to YouTube channels. Users can connect their YouTube channel through the settings page at `/settings`.
+
+### OAuth Scopes
+
+The integration requests the following YouTube scopes:
+- `https://www.googleapis.com/auth/youtube.upload` - Upload videos to channel
+- `https://www.googleapis.com/auth/youtube` - Manage YouTube account
+- `https://www.googleapis.com/auth/yt-analytics.readonly` - View channel analytics
+
+### OAuth Flow
+
+1. User clicks "Connect YouTube Channel" on `/settings`
+2. Frontend calls `GET /api/youtube/auth/url` to get OAuth URL and state
+3. User is redirected to Google's OAuth consent screen
+4. After approval, Google redirects to `/api/youtube/oauth/callback`
+5. Backend exchanges authorization code for access and refresh tokens
+6. Backend fetches channel info and stores in `youtube_auth` table
+7. User is redirected back to `/settings?success=connected`
+
+### Token Management
+
+- **Access Token**: Stored in `youtube_auth.access_token`, expires after 1 hour
+- **Refresh Token**: Stored in `youtube_auth.refresh_token`, used to get new access tokens
+- **Auto-Refresh**: When token expires in < 5 minutes, auto-refresh on next API call
+- **Manual Refresh**: User can click "Refresh Token" button in settings
+
+### Database Schema
+
+```sql
+CREATE TABLE youtube_auth (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id TEXT NOT NULL UNIQUE,
+  channel_title TEXT,
+  access_token TEXT NOT NULL,
+  refresh_token TEXT NOT NULL,
+  token_type TEXT NOT NULL DEFAULT 'Bearer',
+  scopes TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
+### State Management (CSRF Protection)
+
+OAuth state is stored in `NEWS_CACHE` KV namespace with 5-minute TTL:
+- Key: `oauth_state:{random_state}`
+- Value: `{"createdAt": timestamp}`
+- Deleted after verification (one-time use)
+
+### Settings Page (`/settings`)
+
+The settings page displays:
+- Connection status badge (Connected / Not Connected)
+- Channel name and ID (when connected)
+- Token expiry time with color-coded warnings
+- Granted permissions as formatted badges
+- Connect / Disconnect / Refresh Token buttons
 
 ## Platform Notes
 

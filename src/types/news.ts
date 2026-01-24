@@ -56,5 +56,8 @@ export type Env = {
     ARTICLE_RESCRAPE_WORKFLOW: Workflow;
     VIDEO_SELECTION_WORKFLOW: Workflow;
     GOOGLE_API_KEY: string;
+    YOUTUBE_CLIENT_ID: string;
+    YOUTUBE_CLIENT_SECRET: string;
+    YOUTUBE_REDIRECT_URI: string;
   }
 };
