@@ -8,6 +8,7 @@ import { GeminiService } from '../services/gemini.js';
 import type { Article } from '../types/article.js';
 import type { Video } from '../types/video.js';
 import type { Env } from '../types/news.js';
+import { log, generateRequestId } from '../lib/logger.js';
 
 export interface VideoSelectionParams {
   // Empty - cron triggered
@@ -22,10 +23,15 @@ export interface VideoSelectionResult {
 
 export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], VideoSelectionParams, VideoSelectionResult> {
   async run(event: WorkflowEvent<VideoSelectionParams>, step: WorkflowStep): Promise<VideoSelectionResult> {
+    const reqId = generateRequestId();
+    const workflowId = event.id;
+    const startTime = Date.now();
+    log.videoSelectionWorkflow.info(reqId, 'Workflow started', { workflowId });
     let videoId: number | null = null;
 
     try {
       // Step 1: Fetch eligible articles
+      const fetchStart = Date.now();
       const articles = await step.do('fetch-eligible-articles', {
         retries: {
           limit: 3,
@@ -64,18 +70,18 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
 
         return result.results as Article[];
       });
+      log.videoSelectionWorkflow.info(reqId, 'Step completed', { step: 'fetch-eligible-articles', durationMs: Date.now() - fetchStart, articleCount: articles.length });
 
       if (articles.length === 0) {
-        console.log('VideoSelectionWorkflow: No eligible articles found');
+        log.videoSelectionWorkflow.info(reqId, 'Workflow completed (no eligible articles)', { durationMs: Date.now() - startTime });
         return {
           success: true,
           articlesProcessed: 0
         };
       }
 
-      console.log(`VideoSelectionWorkflow: Found ${articles.length} eligible articles`);
-
       // Step 2: Create video entry with status 'doing'
+      const createStart = Date.now();
       videoId = await step.do('create-video-entry', {
         retries: {
           limit: 3,
@@ -95,10 +101,10 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
 
         return result.id;
       });
-
-      console.log(`VideoSelectionWorkflow: Created video entry with id=${videoId}`);
+      log.videoSelectionWorkflow.info(reqId, 'Step completed', { step: 'create-video-entry', durationMs: Date.now() - createStart, videoId });
 
       // Step 3: Call Gemini AI
+      const geminiStart = Date.now();
       const selectionResult = await step.do('call-gemini-ai', {
         retries: {
           limit: 3,
@@ -107,13 +113,13 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
         }
       }, async () => {
         const geminiService = new GeminiService(this.env.GOOGLE_API_KEY);
-        return await geminiService.selectArticles(articles);
+        return await geminiService.selectArticles(reqId, articles);
       });
-
-      console.log(`VideoSelectionWorkflow: AI selected ${selectionResult.articles.length} article(s)`);
+      log.videoSelectionWorkflow.info(reqId, 'Step completed', { step: 'call-gemini-ai', durationMs: Date.now() - geminiStart, selectedArticleCount: selectionResult.articles.length, inputTokens: selectionResult.tokenUsage.inputTokens, outputTokens: selectionResult.tokenUsage.outputTokens });
 
       // Step 4: Log cost
-      await step.do('log-cost', {
+      const costStart = Date.now();
+      const costData = await step.do('log-cost', {
         retries: {
           limit: 3,
           delay: "2 seconds",
@@ -133,10 +139,12 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
           VALUES (?, 'video-selection', 'gemini-3-flash-preview', 1, ?, ?, ?)
         `).bind(videoId, inputTokens, outputTokens, totalCost).run();
 
-        console.log(`VideoSelectionWorkflow: Logged cost ${totalCost.toFixed(4)} (${inputTokens} input, ${outputTokens} output tokens)`);
+        return { inputTokens, outputTokens, totalCost };
       });
+      log.videoSelectionWorkflow.info(reqId, 'Step completed', { step: 'log-cost', durationMs: Date.now() - costStart, cost: costData.totalCost });
 
       // Step 5: Update video entry with AI results
+      const updateStart = Date.now();
       await step.do('update-video-entry', {
         retries: {
           limit: 3,
@@ -170,11 +178,10 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
           totalCost,
           videoId
         ).run();
-
-        console.log(`VideoSelectionWorkflow: Updated video entry with AI results`);
       });
+      log.videoSelectionWorkflow.info(reqId, 'Step completed', { step: 'update-video-entry', durationMs: Date.now() - updateStart });
 
-      console.log(`VideoSelectionWorkflow completed successfully: videoId=${videoId}`);
+      log.videoSelectionWorkflow.info(reqId, 'Workflow completed', { durationMs: Date.now() - startTime, videoId, articlesProcessed: articles.length, selectedArticles: selectionResult.articles.length });
 
       return {
         success: true,
@@ -182,7 +189,7 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
         articlesProcessed: articles.length
       };
     } catch (error) {
-      console.error('VideoSelectionWorkflow failed:', error);
+      log.videoSelectionWorkflow.error(reqId, 'Workflow failed', error as Error);
 
       // If we created a video entry, update its status to error
       if (videoId !== null) {
@@ -190,9 +197,9 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
           await this.env.DB.prepare(`
             UPDATE videos SET selection_status = 'error', notes = ? WHERE id = ?
           `).bind(error instanceof Error ? error.message : 'Unknown error', videoId).run();
-          console.log(`VideoSelectionWorkflow: Updated video ${videoId} status to error`);
+          log.videoSelectionWorkflow.info(reqId, 'Video entry updated to error status', { videoId });
         } catch (updateError) {
-          console.error('Failed to update video status to error:', updateError);
+          log.videoSelectionWorkflow.error(reqId, 'Failed to update video status to error', updateError as Error);
         }
       }
 

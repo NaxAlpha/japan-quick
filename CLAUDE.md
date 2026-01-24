@@ -62,3 +62,28 @@ These coding principles are mandatory:
 9. Quality
 - Favor deterministic, testable behavior.
 - Keep tests simple and focused on verifying observable behavior.
+
+## Logging
+
+Use the logger from `src/lib/logger.ts` for all logging.
+
+### Log Format
+```
+[reqId] [timestamp] [level] [component] message | key=value
+```
+
+### Usage
+```typescript
+import { log, generateRequestId } from '../lib/logger.js';
+
+const reqId = generateRequestId();
+log.gemini.info(reqId, 'Operation started', { pickId: '12345' });
+log.gemini.error(reqId, 'Operation failed', error as Error, { pickId: '12345' });
+```
+
+### Guidelines
+- Generate reqId once per request/workflow, pass it through all calls
+- Always include relevant IDs: pickId, videoId, articleId, workflowId
+- Include durationMs for operations that take time
+- Use INFO for key operations, DEBUG for verbose details
+- Use ERROR with the error object for failures

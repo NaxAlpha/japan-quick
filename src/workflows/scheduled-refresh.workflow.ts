@@ -11,6 +11,7 @@ import { YahooNewsScraper } from '../services/news-scraper.js';
 import { scrapeArticleCore } from '../services/article-scraper-core.js';
 import type { YahooNewsResponse } from '../types/news.js';
 import type { ScheduledRefreshParams, ScheduledRefreshResult } from './types.js';
+import { log, generateRequestId } from '../lib/logger.js';
 
 interface WorkflowEnv {
   BROWSER: any;
@@ -30,10 +31,14 @@ function extractPickId(url: string): string | null {
 
 export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv, ScheduledRefreshParams, ScheduledRefreshResult> {
   async run(event: WorkflowEvent<ScheduledRefreshParams>, step: WorkflowStep): Promise<ScheduledRefreshResult> {
-    console.log('[ScheduledNewsRefreshWorkflow] Started');
+    const reqId = generateRequestId();
+    const workflowId = event.id;
+    const startTime = Date.now();
+    log.scheduledRefreshWorkflow.info(reqId, 'Workflow started', { workflowId });
+
     try {
       // Step 1: Scrape fresh news (always, no cache check)
-      console.log('[ScheduledNewsRefreshWorkflow] Starting fresh news scrape');
+      const scrapeStart = Date.now();
       const topPicks = await step.do('scrape-fresh-news', {
         retries: {
           limit: 5,
@@ -46,7 +51,7 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
         const result = await scraper.scrape(this.env.BROWSER);
         return result;
       });
-      console.log(`[ScheduledNewsRefreshWorkflow] News scrape completed: ${topPicks.length} items`);
+      log.scheduledRefreshWorkflow.info(reqId, 'Step completed', { step: 'scrape-fresh-news', durationMs: Date.now() - scrapeStart, itemCount: topPicks.length });
 
       // Build response object
       const newsData: YahooNewsResponse = {
@@ -56,6 +61,7 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
       };
 
       // Step 2: Update cache
+      const cacheStart = Date.now();
       await step.do('update-cache', {
         retries: {
           limit: 3,
@@ -67,8 +73,10 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
           expirationTtl: CACHE_TTL
         });
       });
+      log.scheduledRefreshWorkflow.info(reqId, 'Step completed', { step: 'update-cache', durationMs: Date.now() - cacheStart });
 
       // Step 3: Save snapshot to D1
+      const snapshotStart = Date.now();
       const snapshotName = await step.do('save-snapshot', {
         retries: {
           limit: 3,
@@ -87,9 +95,11 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
 
         return snapshotName;
       });
+      log.scheduledRefreshWorkflow.info(reqId, 'Step completed', { step: 'save-snapshot', durationMs: Date.now() - snapshotStart, snapshotName });
 
       // Step 4: Clean up old snapshots (older than 30 days)
-      await step.do('cleanup-old-snapshots', {
+      const cleanupStart = Date.now();
+      const cleanupCount = await step.do('cleanup-old-snapshots', {
         retries: {
           limit: 3,
           delay: "1 second",
@@ -100,12 +110,12 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
           "DELETE FROM news_snapshots WHERE datetime(captured_at) < datetime('now', '-30 days')"
         ).run();
 
-        if (result.meta.changes > 0) {
-          console.log(`Cleaned up ${result.meta.changes} old snapshots`);
-        }
+        return result.meta.changes;
       });
+      log.scheduledRefreshWorkflow.info(reqId, 'Step completed', { step: 'cleanup-old-snapshots', durationMs: Date.now() - cleanupStart, deletedCount: cleanupCount });
 
       // Step 5: Find new articles to scrape
+      const findArticlesStart = Date.now();
       const newPickIds = await step.do('find-new-articles', {
         retries: {
           limit: 3,
@@ -119,7 +129,6 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
           .filter((id): id is string => id !== null);
 
         if (pickIds.length === 0) {
-          console.log('No pickup IDs found in scraped news');
           return [];
         }
 
@@ -135,19 +144,14 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
 
         const newPickIds = pickIds.filter(id => !existingPickIds.has(id));
 
-        if (newPickIds.length === 0) {
-          console.log('No new pickup IDs to scrape');
-          return [];
-        }
-
-        console.log(`Found ${newPickIds.length} new pickup IDs to scrape`);
         return newPickIds;
       });
+      log.scheduledRefreshWorkflow.info(reqId, 'Step completed', { step: 'find-new-articles', durationMs: Date.now() - findArticlesStart, newArticleCount: newPickIds.length });
 
       // Step 6: Scrape each new article serially with delays
       for (let i = 0; i < newPickIds.length; i++) {
         const pickId = newPickIds[i];
-        console.log(`[ScheduledRefreshWorkflow] Scraping article ${i + 1}/${newPickIds.length}: pickId=${pickId}`);
+        const articleStart = Date.now();
 
         await step.do(`scrape-article-${pickId}`, {
           retries: {
@@ -164,13 +168,15 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
           });
         });
 
+        log.scheduledRefreshWorkflow.info(reqId, 'Article scraped', { pickId, index: i + 1, total: newPickIds.length, durationMs: Date.now() - articleStart });
+
         // Add delay between articles (except after the last one)
         if (i < newPickIds.length - 1) {
           await step.sleep(`delay-after-${pickId}`, 10000); // 10 seconds
         }
       }
 
-      console.log(`Scheduled refresh completed: ${snapshotName} with ${topPicks.length} items`);
+      log.scheduledRefreshWorkflow.info(reqId, 'Workflow completed', { durationMs: Date.now() - startTime, itemCount: topPicks.length, newArticlesScraped: newPickIds.length, snapshotName });
 
       return {
         success: true,
@@ -179,7 +185,7 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
         scrapedCount: topPicks.length
       };
     } catch (error) {
-      console.error('ScheduledNewsRefreshWorkflow failed:', error);
+      log.scheduledRefreshWorkflow.error(reqId, 'Workflow failed', error as Error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error'

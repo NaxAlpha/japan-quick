@@ -5,6 +5,7 @@
 
 import puppeteer from '@cloudflare/puppeteer';
 import type { ScrapedArticleData, ScrapedComment } from '../types/article.js';
+import { log, generateRequestId } from '../lib/logger.js';
 
 const USER_AGENT = 'Mozilla/5.0 (compatible; JapanQuick/1.0)';
 const TIMEOUT_MS = 30000;
@@ -28,23 +29,53 @@ export class ArticleScraper {
    * Scrape the pickup page to get the article URL
    * Returns whether the article is external (not available) or internal Yahoo article
    */
-  async scrapePickupPage(browser: any, pickId: string): Promise<PickupScrapeResult> {
+  async scrapePickupPage(reqId: string, browser: any, pickId: string): Promise<PickupScrapeResult> {
+    const startTime = Date.now();
+    log.articleScraper.info(reqId, 'Pickup page scraping started', { pickId });
+
     const pickupUrl = `https://news.yahoo.co.jp/pickup/${pickId}`;
-    return await this.scrapePickupWithBrowser(browser, pickupUrl);
+
+    try {
+      const result = await this.scrapePickupWithBrowser(reqId, browser, pickupUrl);
+      const durationMs = Date.now() - startTime;
+
+      log.articleScraper.info(reqId, 'Pickup page scraping completed', {
+        pickId,
+        isExternal: result.isExternal,
+        hasArticleUrl: !!result.articleUrl,
+        articleId: result.articleId || 'N/A',
+        durationMs
+      });
+
+      return result;
+    } catch (error) {
+      const durationMs = Date.now() - startTime;
+      log.articleScraper.error(reqId, 'Pickup page scraping failed', {
+        pickId,
+        error: error instanceof Error ? error.message : String(error),
+        durationMs
+      });
+      throw error;
+    }
   }
 
-  private async scrapePickupWithBrowser(browserBinding: any, pickupUrl: string): Promise<PickupScrapeResult> {
+  private async scrapePickupWithBrowser(reqId: string, browserBinding: any, pickupUrl: string): Promise<PickupScrapeResult> {
     if (!browserBinding) {
+      log.articleScraper.error(reqId, 'Browser binding not available');
       throw new Error('Browser binding is not available. Browser rendering is required for scraping.');
     }
 
+    log.articleScraper.info(reqId, 'Launching browser for pickup page', { pickupUrl });
     const browser = await puppeteer.launch(browserBinding);
     const page = await browser.newPage();
     await page.setUserAgent(USER_AGENT);
+
+    log.articleScraper.info(reqId, 'Loading pickup page', { pickupUrl });
     await page.goto(pickupUrl, {
       waitUntil: 'domcontentloaded',
       timeout: TIMEOUT_MS
     });
+    log.articleScraper.info(reqId, 'Pickup page loaded successfully', { pickupUrl });
 
     const result = await page.evaluate(() => {
       // Look for the "記事全文を読む" link
@@ -96,6 +127,12 @@ export class ArticleScraper {
       return { isExternal: true };
     });
 
+    log.articleScraper.info(reqId, 'Extracted pickup page data', {
+      isExternal: result.isExternal,
+      hasArticleUrl: !!result.articleUrl,
+      articleId: result.articleId || 'N/A'
+    });
+
     await page.close();
     await browser.disconnect();
     return result;
@@ -104,22 +141,52 @@ export class ArticleScraper {
   /**
    * Scrape the article page content
    */
-  async scrapeArticlePage(browser: any, articleUrl: string): Promise<ScrapedArticleData> {
-    return await this.scrapeArticleWithBrowser(browser, articleUrl);
+  async scrapeArticlePage(reqId: string, browser: any, articleUrl: string): Promise<ScrapedArticleData> {
+    const startTime = Date.now();
+    log.articleScraper.info(reqId, 'Article page scraping started', { articleUrl });
+
+    try {
+      const result = await this.scrapeArticleWithBrowser(reqId, browser, articleUrl);
+      const durationMs = Date.now() - startTime;
+
+      log.articleScraper.info(reqId, 'Article page scraping completed', {
+        articleUrl,
+        articleId: result.articleId || 'N/A',
+        title: result.title || 'N/A',
+        pageCount: result.pageCount,
+        imageCount: result.images?.length || 0,
+        durationMs
+      });
+
+      return result;
+    } catch (error) {
+      const durationMs = Date.now() - startTime;
+      log.articleScraper.error(reqId, 'Article page scraping failed', {
+        articleUrl,
+        error: error instanceof Error ? error.message : String(error),
+        durationMs
+      });
+      throw error;
+    }
   }
 
-  private async scrapeArticleWithBrowser(browserBinding: any, articleUrl: string): Promise<ScrapedArticleData> {
+  private async scrapeArticleWithBrowser(reqId: string, browserBinding: any, articleUrl: string): Promise<ScrapedArticleData> {
     if (!browserBinding) {
+      log.articleScraper.error(reqId, 'Browser binding not available');
       throw new Error('Browser binding is not available. Browser rendering is required for scraping.');
     }
 
+    log.articleScraper.info(reqId, 'Launching browser for article page', { articleUrl });
     const browser = await puppeteer.launch(browserBinding);
     const page = await browser.newPage();
     await page.setUserAgent(USER_AGENT);
+
+    log.articleScraper.info(reqId, 'Loading article page', { articleUrl });
     await page.goto(articleUrl, {
       waitUntil: 'domcontentloaded',
       timeout: TIMEOUT_MS
     });
+    log.articleScraper.info(reqId, 'Article page loaded successfully', { articleUrl });
 
     const firstPageData = await page.evaluate(() => {
       // Extract title from article h1
@@ -295,13 +362,32 @@ export class ArticleScraper {
       };
     });
 
+    log.articleScraper.info(reqId, 'Article content extracted', {
+      articleUrl,
+      articleId: firstPageData.articleId || 'N/A',
+      title: firstPageData.title || 'N/A',
+      contentLength: firstPageData.content?.length || 0,
+      pageCount: firstPageData.pageCount
+    });
+
     // If there are multiple pages, scrape them too
     if (firstPageData.pageCount > 1) {
+      log.articleScraper.info(reqId, 'Multi-page article detected, starting pagination scrape', {
+        articleUrl,
+        pageCount: firstPageData.pageCount
+      });
+
       const allContent = [firstPageData.content];
       const allContentText = [firstPageData.contentText || ''];
       const allImages = [...firstPageData.images];
 
       for (let pageNum = 2; pageNum <= firstPageData.pageCount; pageNum++) {
+        log.articleScraper.info(reqId, 'Scraping article page', {
+          articleUrl,
+          pageNum,
+          totalPages: firstPageData.pageCount
+        });
+
         const pageUrl = `${articleUrl}?page=${pageNum}`;
         await page.goto(pageUrl, {
           waitUntil: 'domcontentloaded',
@@ -385,7 +471,21 @@ export class ArticleScraper {
         allContent.push(pageData.content);
         allContentText.push(pageData.contentText);
         allImages.push(...pageData.images);
+
+        log.articleScraper.info(reqId, 'Article page scraped', {
+          articleUrl,
+          pageNum,
+          contentLength: pageData.content?.length || 0,
+          imageCount: pageData.images?.length || 0
+        });
       }
+
+      log.articleScraper.info(reqId, 'Pagination scraping completed', {
+        articleUrl,
+        totalPagesScraped: firstPageData.pageCount,
+        totalContentLength: allContent.join('').length,
+        totalImages: allImages.length
+      });
 
       firstPageData.content = allContent.join('\n<!-- page break -->\n');
       firstPageData.contentText = allContentText.join('\n\n');
@@ -400,27 +500,59 @@ export class ArticleScraper {
   /**
    * Scrape comments from the article's comments page
    */
-  async scrapeCommentsPage(browser: any, articleUrl: string): Promise<ScrapedComment[]> {
+  async scrapeCommentsPage(reqId: string, browser: any, articleUrl: string): Promise<ScrapedComment[]> {
+    const startTime = Date.now();
     const commentsUrl = `${articleUrl}/comments`;
-    return await this.scrapeCommentsWithBrowser(browser, commentsUrl);
+    log.articleScraper.info(reqId, 'Comments scraping started', { articleUrl, commentsUrl });
+
+    try {
+      const result = await this.scrapeCommentsWithBrowser(reqId, browser, commentsUrl);
+      const durationMs = Date.now() - startTime;
+
+      log.articleScraper.info(reqId, 'Comments scraping completed', {
+        articleUrl,
+        commentsUrl,
+        commentCount: result.length,
+        durationMs
+      });
+
+      return result;
+    } catch (error) {
+      const durationMs = Date.now() - startTime;
+      log.articleScraper.error(reqId, 'Comments scraping failed', {
+        articleUrl,
+        commentsUrl,
+        error: error instanceof Error ? error.message : String(error),
+        durationMs
+      });
+      throw error;
+    }
   }
 
-  private async scrapeCommentsWithBrowser(browserBinding: any, commentsUrl: string): Promise<ScrapedComment[]> {
+  private async scrapeCommentsWithBrowser(reqId: string, browserBinding: any, commentsUrl: string): Promise<ScrapedComment[]> {
     if (!browserBinding) {
+      log.articleScraper.error(reqId, 'Browser binding not available');
       throw new Error('Browser binding is not available. Browser rendering is required for scraping.');
     }
 
+    log.articleScraper.info(reqId, 'Launching browser for comments page', { commentsUrl });
     const browser = await puppeteer.launch(browserBinding);
     const page = await browser.newPage();
     await page.setUserAgent(USER_AGENT);
 
     try {
+      log.articleScraper.info(reqId, 'Loading comments page', { commentsUrl });
       await page.goto(commentsUrl, {
         waitUntil: 'domcontentloaded',
         timeout: TIMEOUT_MS
       });
+      log.articleScraper.info(reqId, 'Comments page loaded successfully', { commentsUrl });
     } catch (error) {
       // Comments page might not exist
+      log.articleScraper.warn(reqId, 'Comments page not accessible, returning empty comments', {
+        commentsUrl,
+        error: error instanceof Error ? error.message : String(error)
+      });
       await page.close();
       await browser.disconnect();
       return [];
@@ -485,6 +617,11 @@ export class ArticleScraper {
       return results;
     });
 
+    log.articleScraper.info(reqId, 'Comments extracted from page', {
+      commentsUrl,
+      commentCount: comments.length
+    });
+
     await page.close();
     await browser.disconnect();
     return comments;
@@ -493,24 +630,61 @@ export class ArticleScraper {
   /**
    * Full scrape: pickup page -> article -> comments
    */
-  async scrapeFullArticle(browser: any, pickId: string): Promise<FullScrapeResult> {
-    // Step 1: Scrape pickup page to get article URL
-    const pickupResult = await this.scrapePickupPage(browser, pickId);
+  async scrapeFullArticle(reqId: string, browser: any, pickId: string): Promise<FullScrapeResult> {
+    const startTime = Date.now();
+    log.articleScraper.info(reqId, 'Full article scraping started', { pickId });
 
-    if (pickupResult.isExternal || !pickupResult.articleUrl) {
-      return { isExternal: true };
+    try {
+      // Step 1: Scrape pickup page to get article URL
+      log.articleScraper.info(reqId, 'Step 1: Scraping pickup page', { pickId });
+      const pickupResult = await this.scrapePickupPage(reqId, browser, pickId);
+
+      if (pickupResult.isExternal || !pickupResult.articleUrl) {
+        log.articleScraper.info(reqId, 'Article is external, skipping further scraping', {
+          pickId,
+          isExternal: pickupResult.isExternal,
+          hasArticleUrl: !!pickupResult.articleUrl
+        });
+        return { isExternal: true };
+      }
+
+      // Step 2: Scrape article content
+      log.articleScraper.info(reqId, 'Step 2: Scraping article content', {
+        pickId,
+        articleUrl: pickupResult.articleUrl
+      });
+      const article = await this.scrapeArticlePage(reqId, browser, pickupResult.articleUrl);
+
+      // Step 3: Scrape comments
+      log.articleScraper.info(reqId, 'Step 3: Scraping comments', {
+        pickId,
+        articleUrl: pickupResult.articleUrl
+      });
+      const comments = await this.scrapeCommentsPage(reqId, browser, pickupResult.articleUrl);
+
+      const durationMs = Date.now() - startTime;
+      log.articleScraper.info(reqId, 'Full article scraping completed', {
+        pickId,
+        articleId: article.articleId || 'N/A',
+        articleTitle: article.title || 'N/A',
+        commentCount: comments.length,
+        pageCount: article.pageCount,
+        durationMs
+      });
+
+      return {
+        isExternal: false,
+        article,
+        comments
+      };
+    } catch (error) {
+      const durationMs = Date.now() - startTime;
+      log.articleScraper.error(reqId, 'Full article scraping failed', {
+        pickId,
+        error: error instanceof Error ? error.message : String(error),
+        durationMs
+      });
+      throw error;
     }
-
-    // Step 2: Scrape article content
-    const article = await this.scrapeArticlePage(browser, pickupResult.articleUrl);
-
-    // Step 3: Scrape comments
-    const comments = await this.scrapeCommentsPage(browser, pickupResult.articleUrl);
-
-    return {
-      isExternal: false,
-      article,
-      comments
-    };
   }
 }

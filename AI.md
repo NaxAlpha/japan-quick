@@ -35,7 +35,7 @@ japan-quick/
 │   │       ├── article-page.ts # Article detail page component
 │   │       └── videos-page.ts  # Videos page component (video selection management)
 │   ├── services/
-│   │   ├── news-scraper.ts           # Yahoo News Japan scraper (filters pickup URLs only)
+│   │   ├── news-scraper.ts           # Yahoo News Japan scraper (filters pickup URLs only, with thorough logging)
 │   │   ├── article-scraper.ts        # Yahoo News article scraper (full content + comments)
 │   │   ├── article-scraper-core.ts   # Core article scraping logic (serial processing)
 │   │   └── gemini.ts                 # Gemini AI service (article selection for videos)
@@ -49,6 +49,7 @@ japan-quick/
 │   │   ├── videos.ts           # API routes for video workflow management
 │   │   └── frontend.ts         # Frontend route handlers
 │   ├── lib/
+│   │   ├── logger.ts           # Structured logging utility with request ID tracking
 │   │   └── html-template.ts    # HTML template utilities (with props support)
 │   └── tests/
 │       ├── unit/               # Unit tests for services, routes, lib
@@ -244,6 +245,36 @@ bun run deploy
 - **Type Safety**: Full TypeScript coverage with strict mode enabled
 - **Module System**: ES modules throughout (type: "module" in package.json)
 - **Testing**: Vitest with Cloudflare Workers pool for unit and integration tests
+
+### Logging
+
+The application uses a structured logging utility (`src/lib/logger.ts`) for consistent, debuggable logs.
+
+**Log format:** `[reqId] [timestamp] [level] [component] message | key=value`
+
+**Usage:**
+```typescript
+import { log, generateRequestId } from '../lib/logger.js';
+
+// Routes and workflows - generate reqId once, pass through
+const reqId = generateRequestId();
+log.newsRoutes.info(reqId, 'Request received', { method: 'POST', path: '/trigger' });
+
+// Services - accept reqId as first parameter
+async selectArticles(reqId: string, articles: Article[]) {
+  log.gemini.info(reqId, 'Article selection started', { articleCount: articles.length });
+}
+
+// Middleware and utility - no reqId needed (auto-generated)
+log.auth.info('Auth attempt', { path: '/api/hello', hasUsername: 'present' });
+```
+
+**Guidelines:**
+- Generate `reqId` once per request/workflow, pass to all service calls
+- Always include relevant IDs: `pickId`, `videoId`, `articleId`, `workflowId`
+- Include `durationMs` for operations that take time
+- Use INFO for key operations, ERROR with error object for failures
+- Request IDs enable correlation of logs from parallel operations
 
 ### Testing & Verification
 
