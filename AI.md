@@ -35,9 +35,10 @@ japan-quick/
 │   │       ├── article-page.ts # Article detail page component
 │   │       └── videos-page.ts  # Videos page component (video selection management)
 │   ├── services/
-│   │   ├── news-scraper.ts     # Yahoo News Japan scraper (filters pickup URLs only)
-│   │   ├── article-scraper.ts  # Yahoo News article scraper (full content + comments)
-│   │   └── gemini.ts           # Gemini AI service (article selection for videos)
+│   │   ├── news-scraper.ts           # Yahoo News Japan scraper (filters pickup URLs only)
+│   │   ├── article-scraper.ts        # Yahoo News article scraper (full content + comments)
+│   │   ├── article-scraper-core.ts   # Core article scraping logic (serial processing)
+│   │   └── gemini.ts                 # Gemini AI service (article selection for videos)
 │   ├── types/
 │   │   ├── news.ts             # News type definitions + Env type (single source of truth)
 │   │   ├── article.ts          # Article type definitions
@@ -77,7 +78,9 @@ japan-quick/
   - `GET /api/status` - Service status endpoint (protected)
   - `GET /api/hello` - Health check/JSON API endpoint (protected)
   - **News Workflow Routes (protected):**
-    - `POST /api/news/trigger` - Create new workflow instance
+    - `POST /api/news/trigger` - Create new workflow instance (NewsScraperWorkflow)
+    - `POST /api/news/trigger-refresh` - Manually trigger scheduled refresh workflow
+    - `POST /api/news/trigger-rescrape` - Manually trigger article rescrape workflow
     - `GET /api/news/status/:id` - Get workflow status
     - `GET /api/news/result/:id` - Get completed workflow result
     - `GET /api/news/latest` - Get most recent D1 snapshot with article status
@@ -138,10 +141,13 @@ The application uses **Cloudflare Workflows** for durable, retriable execution o
 
 **ScheduledNewsRefreshWorkflow**:
 
-Cron-triggered background refresh (every 30 minutes):
+Cron-triggered background refresh (hourly):
 - `scrape-fresh-news` - Always scrape fresh (no cache check)
 - `update-cache` - Update KV cache
 - `save-snapshot` - Save to D1
+- `find-new-articles` - Identify new pickup IDs not yet in database
+- `scrape-article-${pickId}` - Serial article scraping using scrapeArticleCore() with 10-second delays between articles
+- Uses src/services/article-scraper-core.ts for fault-tolerant scraping (comments failures don't block article saves)
 
 **ArticleScraperWorkflow**:
 
@@ -156,6 +162,15 @@ Cron-triggered background refresh (every 30 minutes):
 
 **Article Status Progression**: `pending` → `retry_1` → `retry_2` → `error` → `scraped_v1` → `scraped_v2`
 
+**ArticleRescrapeWorkflow**:
+
+Cron-triggered article rescraping (hourly):
+- `find-due-articles` - Query articles with `scraped_v1` status and scheduled_rescrape_at <= now
+- `rescrape-article-${pickId}` - Serial rescraping using scrapeArticleCore() with 10-second delays
+- Updates status to `scraped_v2`, sets second_scraped_at, clears scheduled_rescrape_at
+- Tracks both scrapedPickIds and failedPickIds for reporting
+- Uses src/services/article-scraper-core.ts with isRescrape=true
+
 **VideoSelectionWorkflow**:
 
 | Step | Description | Retry Policy |
@@ -168,7 +183,7 @@ Cron-triggered background refresh (every 30 minutes):
 
 **Error Handling**: Workflow sets video status to `error` on failure instead of leaving it stuck in `doing`.
 
-**Note**: Workflows require remote deployment to test - use `wrangler dev --remote` or `wrangler deploy`. Cron triggers only work in production. The cron runs every 30 minutes, triggering both ScheduledNewsRefreshWorkflow and VideoSelectionWorkflow.
+**Note**: Workflows require remote deployment to test - use `wrangler dev --remote` or `wrangler deploy`. Cron triggers only work in production. The cron runs hourly (0 * * * *), triggering ScheduledNewsRefreshWorkflow, ArticleRescrapeWorkflow, and VideoSelectionWorkflow (during JST business hours only).
 
 ### Type System
 

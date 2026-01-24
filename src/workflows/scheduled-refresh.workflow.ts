@@ -8,6 +8,7 @@
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
 import puppeteer from '@cloudflare/puppeteer';
 import { YahooNewsScraper } from '../services/news-scraper.js';
+import { scrapeArticleCore } from '../services/article-scraper-core.js';
 import type { YahooNewsResponse } from '../types/news.js';
 import type { ScheduledRefreshParams, ScheduledRefreshResult } from './types.js';
 
@@ -15,7 +16,6 @@ interface WorkflowEnv {
   BROWSER: any;
   NEWS_CACHE: KVNamespace;
   DB: D1Database;
-  ARTICLE_SCRAPER_WORKFLOW: Workflow;
   ADMIN_PASSWORD: string;
 }
 
@@ -105,8 +105,8 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
         }
       });
 
-      // Step 5: Trigger article scraping for new pickup IDs
-      await step.do('trigger-article-scrapes', {
+      // Step 5: Find new articles to scrape
+      const newPickIds = await step.do('find-new-articles', {
         retries: {
           limit: 3,
           delay: "2 seconds",
@@ -120,7 +120,7 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
 
         if (pickIds.length === 0) {
           console.log('No pickup IDs found in scraped news');
-          return;
+          return [];
         }
 
         // Check which pickIds are new (not in articles table)
@@ -137,26 +137,38 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
 
         if (newPickIds.length === 0) {
           console.log('No new pickup IDs to scrape');
-          return;
+          return [];
         }
 
         console.log(`Found ${newPickIds.length} new pickup IDs to scrape`);
-
-        // Trigger article scraper workflow for each new pickId
-        for (const pickId of newPickIds) {
-          try {
-            await this.env.ARTICLE_SCRAPER_WORKFLOW.create({
-              params: {
-                pickId,
-                isRescrape: false
-              }
-            });
-            console.log(`Triggered article scraper for pickId=${pickId}`);
-          } catch (error) {
-            console.error(`Failed to trigger article scraper for pickId=${pickId}:`, error);
-          }
-        }
+        return newPickIds;
       });
+
+      // Step 6: Scrape each new article serially with delays
+      for (let i = 0; i < newPickIds.length; i++) {
+        const pickId = newPickIds[i];
+        console.log(`[ScheduledRefreshWorkflow] Scraping article ${i + 1}/${newPickIds.length}: pickId=${pickId}`);
+
+        await step.do(`scrape-article-${pickId}`, {
+          retries: {
+            limit: 2,
+            delay: "5 seconds",
+            backoff: "constant"
+          }
+        }, async () => {
+          return await scrapeArticleCore({
+            browser: this.env.BROWSER,
+            db: this.env.DB,
+            pickId,
+            isRescrape: false
+          });
+        });
+
+        // Add delay between articles (except after the last one)
+        if (i < newPickIds.length - 1) {
+          await step.sleep(`delay-after-${pickId}`, 10000); // 10 seconds
+        }
+      }
 
       console.log(`Scheduled refresh completed: ${snapshotName} with ${topPicks.length} items`);
 
