@@ -4,7 +4,7 @@
  */
 
 import puppeteer from '@cloudflare/puppeteer';
-import type { ScrapedArticleData, ScrapedComment } from '../types/article.js';
+import type { ScrapedArticleData, ScrapedComment, CommentReactions, CommentReply } from '../types/article.js';
 import { log, generateRequestId } from '../lib/logger.js';
 
 const USER_AGENT = 'Mozilla/5.0 (compatible; JapanQuick/1.0)';
@@ -532,7 +532,8 @@ export class ArticleScraper {
   private async scrapeCommentsWithBrowser(reqId: string, browserBinding: any, commentsUrl: string): Promise<ScrapedComment[]> {
     if (!browserBinding) {
       log.articleScraper.error(reqId, 'Browser binding not available');
-      throw new Error('Browser binding is not available. Browser rendering is required for scraping.');
+      // Return empty array instead of throwing - fault tolerance
+      return [];
     }
 
     log.articleScraper.info(reqId, 'Launching browser for comments page', { commentsUrl });
@@ -558,73 +559,591 @@ export class ArticleScraper {
       return [];
     }
 
-    const comments = await page.evaluate(() => {
-      const results: Array<{
-        commentId?: string;
-        author?: string;
-        content: string;
-        postedAt?: string;
-        likes: number;
-        repliesCount: number;
-      }> = [];
+    try {
+      // Strategy 1: Try JSON extraction from window.__PRELOADED_STATE__
+      log.articleScraper.info(reqId, 'Attempting JSON extraction from __PRELOADED_STATE__');
+      let comments = await this.extractCommentsFromJSON(page, reqId);
 
-      // Try to find comments in inline JSON
-      const scripts = document.querySelectorAll('script');
-      for (const script of scripts) {
-        const content = script.textContent || '';
-        if (content.includes('"comments"') || content.includes('"text"')) {
-          try {
-            // Look for comment patterns in JSON
-            const textMatches = content.matchAll(/"text"\s*:\s*"([^"]+)"/g);
-            for (const match of textMatches) {
-              const text = match[1];
-              // Skip very short or non-comment text
-              if (text.length > 10 && !text.includes('http')) {
+      if (comments.length === 0) {
+        // Strategy 2: Fallback to HTML parsing
+        log.articleScraper.info(reqId, 'JSON extraction yielded no results, falling back to HTML parsing');
+        comments = await this.extractCommentsFromHTML(page, reqId);
+      }
+
+      log.articleScraper.info(reqId, 'Initial comments extracted', { commentCount: comments.length });
+
+      // Strategy 3: Expand truncated comments
+      comments = await this.expandTruncatedComments(page, comments, reqId);
+      log.articleScraper.info(reqId, 'Truncated comments expanded', { commentCount: comments.length });
+
+      // Strategy 4: Extract nested replies
+      comments = await this.extractNestedReplies(page, comments, reqId);
+      log.articleScraper.info(reqId, 'Nested replies extracted', { commentCount: comments.length });
+
+      log.articleScraper.info(reqId, 'Comments extraction completed', {
+        commentsUrl,
+        finalCommentCount: comments.length
+      });
+
+      await page.close();
+      await browser.disconnect();
+      return comments;
+    } catch (error) {
+      log.articleScraper.error(reqId, 'Comments extraction failed, returning empty array', {
+        commentsUrl,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      await page.close();
+      await browser.disconnect();
+      return [];
+    }
+  }
+
+  /**
+   * Extract comments from window.__PRELOADED_STATE__ JSON object
+   * This is faster and more reliable than HTML parsing
+   */
+  private async extractCommentsFromJSON(page: any, reqId: string): Promise<ScrapedComment[]> {
+    try {
+      const comments = await page.evaluate(() => {
+        const results: Array<{
+          commentId?: string;
+          author?: string;
+          content: string;
+          postedAt?: string;
+          likes: number;
+          repliesCount: number;
+          reactions: {
+            empathized: number;
+            understood: number;
+            questioning: number;
+          };
+          replies: Array<{
+            commentId?: string;
+            author?: string;
+            content: string;
+            postedAt?: string;
+            reactions?: {
+              empathized: number;
+              understood: number;
+              questioning: number;
+            };
+          }>;
+        }> = [];
+
+        // Try to get preloaded state
+        const preloadedState = (window as any).__PRELOADED_STATE__;
+        if (!preloadedState) {
+          return results;
+        }
+
+        // Navigate through the state structure to find comments
+        // Yahoo News comment structure varies, so we try multiple paths
+        const state = preloadedState?.responseCache || preloadedState;
+        if (!state) {
+          return results;
+        }
+
+        // Look for comments data in the state
+        const stateKeys = Object.keys(state);
+        for (const key of stateKeys) {
+          const data = state[key];
+          if (data?.comments) {
+            const commentsData = data.comments;
+
+            // Process comments based on structure
+            const commentsList = commentsData.items || commentsData.data || commentsData;
+            if (!Array.isArray(commentsList)) {
+              continue;
+            }
+
+            for (const comment of commentsList) {
+              // Extract comment data from various possible structures
+              const commentData = comment.comment || comment;
+
+              // Extract author
+              let author: string | undefined;
+              if (commentData.author?.nickname) {
+                author = commentData.author.nickname;
+              } else if (commentData.author?.name) {
+                author = commentData.author.name;
+              } else if (commentData.userProfile?.nickname) {
+                author = commentData.userProfile.nickname;
+              }
+
+              // Extract content
+              let content = '';
+              if (commentData.content?.text) {
+                content = commentData.content.text;
+              } else if (commentData.body) {
+                content = commentData.body;
+              } else if (commentData.text) {
+                content = commentData.text;
+              }
+
+              // Extract postedAt
+              let postedAt: string | undefined;
+              if (commentData.postedAt || commentData.created_at) {
+                postedAt = commentData.postedAt || commentData.created_at;
+              } else if (commentData.createdAt) {
+                postedAt = commentData.createdAt;
+              }
+
+              // Extract reactions
+              const reactions: { empathized: number; understood: number; questioning: number } = {
+                empathized: 0,
+                understood: 0,
+                questioning: 0
+              };
+
+              if (commentData.reactions) {
+                if (commentData.reactions.empathized || commentData.reactions.agree) {
+                  reactions.empathized = commentData.reactions.empathized || commentData.reactions.agree || 0;
+                }
+                if (commentData.reactions.understood || commentData.reactions.insightful) {
+                  reactions.understood = commentData.reactions.understood || commentData.reactions.insightful || 0;
+                }
+                if (commentData.reactions.questioning || commentData.reactions.doubtful) {
+                  reactions.questioning = commentData.reactions.questioning || commentData.reactions.doubtful || 0;
+                }
+              } else if (commentData.likes !== undefined) {
+                reactions.empathized = commentData.likes;
+              }
+
+              // Extract replies count
+              let repliesCount = 0;
+              if (commentData.repliesCount !== undefined) {
+                repliesCount = commentData.repliesCount;
+              } else if (commentData.reply_count !== undefined) {
+                repliesCount = commentData.reply_count;
+              }
+
+              results.push({
+                commentId: commentData.id || commentData.comment_id || commentData.pid,
+                author,
+                content,
+                postedAt,
+                likes: reactions.empathized, // For backwards compatibility
+                repliesCount,
+                reactions,
+                replies: [] // Will be populated separately
+              });
+            }
+          }
+        }
+
+        return results;
+      });
+
+      log.articleScraper.info(reqId, 'JSON extraction completed', { commentCount: comments.length });
+      return comments;
+    } catch (error) {
+      log.articleScraper.error(reqId, 'JSON extraction failed', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return [];
+    }
+  }
+
+  /**
+   * Extract comments from HTML elements using CSS selectors
+   * Fallback when JSON extraction fails
+   */
+  private async extractCommentsFromHTML(page: any, reqId: string): Promise<ScrapedComment[]> {
+    try {
+      const comments = await page.evaluate(() => {
+        const results: Array<{
+          commentId?: string;
+          author?: string;
+          content: string;
+          postedAt?: string;
+          likes: number;
+          repliesCount: number;
+          reactions: {
+            empathized: number;
+            understood: number;
+            questioning: number;
+          };
+          replies: Array<{
+            commentId?: string;
+            author?: string;
+            content: string;
+            postedAt?: string;
+            reactions?: {
+              empathized: number;
+              understood: number;
+              questioning: number;
+            };
+          }>;
+        }> = [];
+
+        // Yahoo News comment selectors (based on exploration)
+        const commentSelectors = [
+          '.viewableWrapper article',
+          'article[class*="iwTXsY"]',
+          '[data-comment-id]',
+          '.comment-item',
+          '.Comment'
+        ];
+
+        for (const selector of commentSelectors) {
+          const commentElements = document.querySelectorAll(selector);
+          if (commentElements.length > 0) {
+            commentElements.forEach(el => {
+              // Extract comment ID
+              let commentId: string | undefined;
+              const articleEl = el.closest('article');
+              if (articleEl?.id) {
+                commentId = articleEl.id;
+              } else {
+                commentId = el.getAttribute('data-comment-id') || undefined;
+              }
+
+              // Extract author from user link
+              let author: string | undefined;
+              const authorLink = el.querySelector('a[href*="/users/"]');
+              if (authorLink) {
+                author = authorLink.textContent?.trim() || undefined;
+              }
+
+              // Extract content from p tags (excluding time/dialog classes)
+              const pTags = el.querySelectorAll('p');
+              let content = '';
+              for (const p of pTags) {
+                const classList = Array.from(p.classList || []);
+                const isTimeOrDialog = classList.some(c =>
+                  c.includes('time') || c.includes('dialog') || c.includes('meta')
+                );
+                if (!isTimeOrDialog) {
+                  const text = p.textContent?.trim();
+                  if (text) {
+                    content += text + '\n';
+                  }
+                }
+              }
+              content = content.trim();
+
+              // Extract timestamp
+              let postedAt: string | undefined;
+              const timeEl = el.querySelector('time');
+              if (timeEl) {
+                postedAt = timeEl.getAttribute('datetime') || timeEl.textContent?.trim() || undefined;
+              }
+
+              // Extract reactions - look for reaction buttons/counts
+              const reactions: { empathized: number; understood: number; questioning: number } = {
+                empathized: 0,
+                understood: 0,
+                questioning: 0
+              };
+
+              // Try to find reaction counts in various formats
+              const reactionElements = el.querySelectorAll('[class*="reaction"], [class*="empathize"], [class*="agree"]');
+              reactionElements.forEach(reactionEl => {
+                const text = reactionEl.textContent || '';
+                // Look for Japanese reaction labels
+                if (text.includes('共感')) {
+                  const match = text.match(/\d+/);
+                  if (match) reactions.empathized = parseInt(match[0], 10);
+                } else if (text.includes('なるほど')) {
+                  const match = text.match(/\d+/);
+                  if (match) reactions.understood = parseInt(match[0], 10);
+                } else if (text.includes('うーん')) {
+                  const match = text.match(/\d+/);
+                  if (match) reactions.questioning = parseInt(match[0], 10);
+                }
+              });
+
+              // Extract replies count
+              let repliesCount = 0;
+              const replyButton = el.querySelector('button');
+              if (replyButton) {
+                const replyText = replyButton.textContent || '';
+                const match = replyText.match(/返信\s*(\d+)/);
+                if (match) {
+                  repliesCount = parseInt(match[1], 10);
+                }
+              }
+
+              if (content.length > 0) {
                 results.push({
-                  content: text,
-                  likes: 0,
-                  repliesCount: 0
+                  commentId,
+                  author,
+                  content,
+                  postedAt,
+                  likes: reactions.empathized, // For backwards compatibility
+                  repliesCount,
+                  reactions,
+                  replies: []
                 });
               }
+            });
+
+            // Break if we found comments with this selector
+            if (results.length > 0) {
+              break;
             }
-          } catch {
-            // Continue
           }
+        }
+
+        return results;
+      });
+
+      log.articleScraper.info(reqId, 'HTML extraction completed', { commentCount: comments.length });
+      return comments;
+    } catch (error) {
+      log.articleScraper.error(reqId, 'HTML extraction failed', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return [];
+    }
+  }
+
+  /**
+   * Expand truncated comments by clicking "続きを見る" (View more) links
+   */
+  private async expandTruncatedComments(
+    page: any,
+    comments: ScrapedComment[],
+    reqId: string
+  ): Promise<ScrapedComment[]> {
+    try {
+      const expandedComments = await page.evaluate((commentIds) => {
+        const expanded: Array<{
+          commentId?: string;
+          content: string;
+        }> = [];
+
+        for (const id of commentIds) {
+          const commentEl = id ? document.getElementById(id) : null;
+          if (!commentEl) continue;
+
+          // Look for "続きを見る" (View more) or similar expansion buttons
+          const expandButton = commentEl.querySelector('button') as HTMLElement;
+          const expandText = expandButton?.textContent || '';
+
+          if (expandText.includes('続き') || expandText.includes('もっと見') || expandText.includes('展開')) {
+            // Click to expand
+            expandButton?.click();
+
+            // Wait a bit for content to load
+            // Note: We can't use async/await in evaluate, so we return what we have
+            // The expanded content will be available on next extraction
+          }
+
+          // Extract updated content
+          const pTags = commentEl.querySelectorAll('p');
+          let content = '';
+          for (const p of pTags) {
+            const classList = Array.from(p.classList || []);
+            const isTimeOrDialog = classList.some(c =>
+              c.includes('time') || c.includes('dialog') || c.includes('meta')
+            );
+            if (!isTimeOrDialog) {
+              const text = p.textContent?.trim();
+              if (text) {
+                content += text + '\n';
+              }
+            }
+          }
+
+          expanded.push({
+            commentId: id,
+            content: content.trim()
+          });
+        }
+
+        return expanded;
+      }, comments.map(c => c.commentId || ''));
+
+      // Update comments with expanded content
+      for (const expanded of expandedComments) {
+        const comment = comments.find(c => c.commentId === expanded.commentId);
+        if (comment && expanded.content.length > comment.content.length) {
+          comment.content = expanded.content;
+          log.articleScraper.debug(reqId, 'Comment expanded', {
+            commentId: expanded.commentId,
+            originalLength: comment.content.length,
+            expandedLength: expanded.content.length
+          });
         }
       }
 
-      // Also try to find comments in HTML elements
-      const commentElements = document.querySelectorAll('[data-comment-id], .comment-item, .Comment');
-      commentElements.forEach(el => {
-        const commentId = el.getAttribute('data-comment-id') || undefined;
-        const authorEl = el.querySelector('.comment-author, .author');
-        const contentEl = el.querySelector('.comment-content, .comment-text');
-        const timeEl = el.querySelector('time, .comment-time');
-        const likesEl = el.querySelector('.likes-count, .thumbs-up');
+      log.articleScraper.info(reqId, 'Truncated comments expanded', { expandedCount: expandedComments.length });
+      return comments;
+    } catch (error) {
+      log.articleScraper.error(reqId, 'Failed to expand truncated comments', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return comments; // Return original comments on failure
+    }
+  }
 
-        if (contentEl) {
-          results.push({
-            commentId,
-            author: authorEl?.textContent?.trim(),
-            content: contentEl.textContent?.trim() || '',
-            postedAt: timeEl?.getAttribute('datetime') || timeEl?.textContent?.trim(),
-            likes: parseInt(likesEl?.textContent || '0', 10) || 0,
-            repliesCount: 0
+  /**
+   * Extract nested replies by clicking "返信" (Reply) buttons
+   */
+  private async extractNestedReplies(
+    page: any,
+    comments: ScrapedComment[],
+    reqId: string
+  ): Promise<ScrapedComment[]> {
+    try {
+      const commentsWithReplies = await page.evaluate((commentIds) => {
+        const results: Array<{
+          commentId?: string;
+          replies: Array<{
+            commentId?: string;
+            author?: string;
+            content: string;
+            postedAt?: string;
+            reactions?: {
+              empathized: number;
+              understood: number;
+              questioning: number;
+            };
+          }>;
+        }> = [];
+
+        for (const id of commentIds) {
+          if (!id) continue;
+
+          const commentEl = document.getElementById(id);
+          if (!commentEl) continue;
+
+          // Look for reply button with "返信 X 件" text
+          const buttons = commentEl.querySelectorAll('button');
+          for (const button of buttons) {
+            const text = button.textContent || '';
+            const match = text.match(/返信\s*(\d+)/);
+
+            if (match) {
+              const replyCount = parseInt(match[1], 10);
+              if (replyCount > 0) {
+                // Click to expand replies
+                (button as HTMLElement).click();
+
+                // Wait for replies to load (brief pause)
+                // In a real async scenario we'd wait, but in evaluate we do our best
+
+                // Extract reply content
+                const replies: Array<{
+                  commentId?: string;
+                  author?: string;
+                  content: string;
+                  postedAt?: string;
+                  reactions?: {
+                    empathized: number;
+                    understood: number;
+                    questioning: number;
+                  };
+                }> = [];
+
+                // Look for nested reply elements
+                // Replies are often in a nested container or dialog
+                const replyElements = commentEl.querySelectorAll('article article, .reply, [class*="reply"]');
+
+                replyElements.forEach(replyEl => {
+                  // Extract reply ID
+                  const replyArticle = replyEl.closest('article');
+                  const replyId = replyArticle?.id || replyEl.getAttribute('data-comment-id') || undefined;
+
+                  // Extract reply author
+                  let author: string | undefined;
+                  const authorLink = replyEl.querySelector('a[href*="/users/"]');
+                  if (authorLink) {
+                    author = authorLink.textContent?.trim() || undefined;
+                  }
+
+                  // Extract reply content
+                  const pTags = replyEl.querySelectorAll('p');
+                  let content = '';
+                  for (const p of pTags) {
+                    const classList = Array.from(p.classList || []);
+                    const isTimeOrDialog = classList.some(c =>
+                      c.includes('time') || c.includes('dialog') || c.includes('meta')
+                    );
+                    if (!isTimeOrDialog) {
+                      const text = p.textContent?.trim();
+                      if (text) {
+                        content += text + '\n';
+                      }
+                    }
+                  }
+
+                  // Extract reply timestamp
+                  let postedAt: string | undefined;
+                  const timeEl = replyEl.querySelector('time');
+                  if (timeEl) {
+                    postedAt = timeEl.getAttribute('datetime') || timeEl.textContent?.trim() || undefined;
+                  }
+
+                  // Extract reply reactions
+                  const reactions: { empathized: number; understood: number; questioning: number } = {
+                    empathized: 0,
+                    understood: 0,
+                    questioning: 0
+                  };
+
+                  const reactionElements = replyEl.querySelectorAll('[class*="reaction"]');
+                  reactionElements.forEach(reactionEl => {
+                    const rText = reactionEl.textContent || '';
+                    if (rText.includes('共感')) {
+                      const rMatch = rText.match(/\d+/);
+                      if (rMatch) reactions.empathized = parseInt(rMatch[0], 10);
+                    } else if (rText.includes('なるほど')) {
+                      const rMatch = rText.match(/\d+/);
+                      if (rMatch) reactions.understood = parseInt(rMatch[0], 10);
+                    } else if (rText.includes('うーん')) {
+                      const rMatch = rText.match(/\d+/);
+                      if (rMatch) reactions.questioning = parseInt(rMatch[0], 10);
+                    }
+                  });
+
+                  if (content.trim().length > 0) {
+                    replies.push({
+                      commentId: replyId,
+                      author,
+                      content: content.trim(),
+                      postedAt,
+                      reactions
+                    });
+                  }
+                });
+
+                results.push({
+                  commentId: id,
+                  replies
+                });
+              }
+            }
+          }
+        }
+
+        return results;
+      }, comments.map(c => c.commentId || ''));
+
+      // Update comments with replies
+      for (const item of commentsWithReplies) {
+        const comment = comments.find(c => c.commentId === item.commentId);
+        if (comment) {
+          comment.replies = item.replies;
+          log.articleScraper.debug(reqId, 'Replies extracted for comment', {
+            commentId: item.commentId,
+            replyCount: item.replies.length
           });
         }
+      }
+
+      log.articleScraper.info(reqId, 'Nested replies extracted', {
+        commentsWithReplies: commentsWithReplies.length
       });
-
-      return results;
-    });
-
-    log.articleScraper.info(reqId, 'Comments extracted from page', {
-      commentsUrl,
-      commentCount: comments.length
-    });
-
-    await page.close();
-    await browser.disconnect();
-    return comments;
+      return comments;
+    } catch (error) {
+      log.articleScraper.error(reqId, 'Failed to extract nested replies', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return comments; // Return original comments on failure
+    }
   }
 
   /**
