@@ -7,6 +7,7 @@
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
 import { scrapeArticleCore } from '../services/article-scraper-core.js';
 import type { ArticleRescrapeParams, ArticleRescrapeResult } from '../types/article.js';
+import { log, generateRequestId } from '../lib/logger.js';
 
 interface WorkflowEnv {
   BROWSER: any;
@@ -15,8 +16,14 @@ interface WorkflowEnv {
 
 export class ArticleRescrapeWorkflow extends WorkflowEntrypoint<WorkflowEnv, ArticleRescrapeParams, ArticleRescrapeResult> {
   async run(event: WorkflowEvent<ArticleRescrapeParams>, step: WorkflowStep): Promise<ArticleRescrapeResult> {
+    const reqId = generateRequestId();
+    const workflowId = event.id;
+    const startTime = Date.now();
+    log.articleRescrapeWorkflow.info(reqId, 'Workflow started', { workflowId });
+
     try {
       // Step 1: Find articles due for rescrape
+      const findStart = Date.now();
       const dueArticles = await step.do('find-due-articles', {
         retries: {
           limit: 3,
@@ -34,9 +41,10 @@ export class ArticleRescrapeWorkflow extends WorkflowEntrypoint<WorkflowEnv, Art
 
         return result.results.map(row => (row as { pick_id: string }).pick_id);
       });
+      log.articleRescrapeWorkflow.info(reqId, 'Step completed', { step: 'find-due-articles', durationMs: Date.now() - findStart, dueCount: dueArticles.length });
 
       if (dueArticles.length === 0) {
-        console.log('ArticleRescrapeWorkflow: No articles due for rescrape');
+        log.articleRescrapeWorkflow.info(reqId, 'Workflow completed (no articles due)', { durationMs: Date.now() - startTime });
         return {
           success: true,
           triggeredCount: 0,
@@ -44,15 +52,13 @@ export class ArticleRescrapeWorkflow extends WorkflowEntrypoint<WorkflowEnv, Art
         };
       }
 
-      console.log(`ArticleRescrapeWorkflow: Found ${dueArticles.length} articles due for rescrape`);
-
       // Step 2: Rescrape each article serially with delays
       const scrapedPickIds: string[] = [];
       const failedPickIds: string[] = [];
 
       for (let i = 0; i < dueArticles.length; i++) {
         const pickId = dueArticles[i];
-        console.log(`[ArticleRescrapeWorkflow] Rescraping article ${i + 1}/${dueArticles.length}: pickId=${pickId}`);
+        const articleStart = Date.now();
 
         const result = await step.do(`rescrape-article-${pickId}`, {
           retries: {
@@ -71,8 +77,10 @@ export class ArticleRescrapeWorkflow extends WorkflowEntrypoint<WorkflowEnv, Art
 
         if (result.success) {
           scrapedPickIds.push(pickId);
+          log.articleRescrapeWorkflow.info(reqId, 'Article rescraped successfully', { pickId, index: i + 1, total: dueArticles.length, durationMs: Date.now() - articleStart });
         } else {
           failedPickIds.push(pickId);
+          log.articleRescrapeWorkflow.warn(reqId, 'Article rescrape failed', { pickId, index: i + 1, total: dueArticles.length, durationMs: Date.now() - articleStart, error: result.error });
         }
 
         // Add delay between articles (except after the last one)
@@ -81,7 +89,7 @@ export class ArticleRescrapeWorkflow extends WorkflowEntrypoint<WorkflowEnv, Art
         }
       }
 
-      console.log(`ArticleRescrapeWorkflow completed: scraped ${scrapedPickIds.length}, failed ${failedPickIds.length}`);
+      log.articleRescrapeWorkflow.info(reqId, 'Workflow completed', { durationMs: Date.now() - startTime, scrapedCount: scrapedPickIds.length, failedCount: failedPickIds.length });
 
       return {
         success: true,
@@ -89,7 +97,7 @@ export class ArticleRescrapeWorkflow extends WorkflowEntrypoint<WorkflowEnv, Art
         pickIds: scrapedPickIds
       };
     } catch (error) {
-      console.error('ArticleRescrapeWorkflow failed:', error);
+      log.articleRescrapeWorkflow.error(reqId, 'Workflow failed', error as Error);
       return {
         success: false,
         triggeredCount: 0,

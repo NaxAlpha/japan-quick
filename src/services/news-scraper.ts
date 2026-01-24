@@ -6,6 +6,7 @@
 
 import puppeteer from '@cloudflare/puppeteer';
 import type { YahooNewsTopPick } from '../types/news.js';
+import { log } from '../lib/logger.js';
 
 const TOP_PICKS_URL = 'https://news.yahoo.co.jp/topics/top-picks';
 const USER_AGENT = 'Mozilla/5.0 (compatible; JapanQuick/1.0)';
@@ -33,70 +34,94 @@ function deduplicateByUrl(items: YahooNewsTopPick[]): YahooNewsTopPick[] {
 
 export class YahooNewsScraper {
   async scrape(browserBinding: any): Promise<YahooNewsTopPick[]> {
-    // Browser-only scraping - no HTTP fallback
-    if (!browserBinding) {
-      throw new Error('Browser binding is not available. Browser rendering is required for scraping.');
-    }
+    log.newsScraper.info('News scraping started');
+    const startTime = Date.now();
 
-    const browser = await puppeteer.launch(browserBinding);
-    const page = await browser.newPage();
-    await page.setUserAgent(USER_AGENT);
-    await page.goto(TOP_PICKS_URL, {
-      waitUntil: 'domcontentloaded',
-      timeout: 20000
-    });
+    try {
+      // Browser-only scraping - no HTTP fallback
+      if (!browserBinding) {
+        throw new Error('Browser binding is not available. Browser rendering is required for scraping.');
+      }
 
-    const topPicks = await page.evaluate(() => {
-      const items: Array<{
-        title: string;
-        url: string;
-        thumbnailUrl?: string;
-        publishedAt?: string;
-      }> = [];
+      const browser = await puppeteer.launch(browserBinding);
+      const page = await browser.newPage();
+      await page.setUserAgent(USER_AGENT);
 
-      const listItems = document.querySelectorAll('ul.newsFeed_list > li');
-
-      listItems.forEach((li) => {
-        const linkEl = li.querySelector('a');
-        if (!linkEl) return;
-
-        const url = linkEl.getAttribute('href');
-        if (!url) return;
-
-        const absoluteUrl = url.startsWith('http')
-          ? url
-          : `https://news.yahoo.co.jp${url}`;
-
-        const imgEl = linkEl.querySelector('img');
-        const thumbnailUrl = imgEl?.getAttribute('src') || undefined;
-
-        const timeEl = linkEl.querySelector('time');
-        const timeText = timeEl?.textContent?.trim() || '';
-
-        let fullText = linkEl.textContent?.trim() || '';
-        if (timeText && fullText.includes(timeText)) {
-          fullText = fullText.replace(timeText, '').trim();
-        }
-
-        const title = fullText;
-
-        if (title && absoluteUrl) {
-          items.push({
-            title,
-            url: absoluteUrl,
-            thumbnailUrl,
-            publishedAt: timeText || undefined
-          });
-        }
+      log.newsScraper.info('Navigating to page', { url: TOP_PICKS_URL });
+      await page.goto(TOP_PICKS_URL, {
+        waitUntil: 'domcontentloaded',
+        timeout: 20000
       });
 
-      return items;
-    });
+      const topPicks = await page.evaluate(() => {
+        const items: Array<{
+          title: string;
+          url: string;
+          thumbnailUrl?: string;
+          publishedAt?: string;
+        }> = [];
 
-    await page.close();
-    await browser.disconnect();
+        const listItems = document.querySelectorAll('ul.newsFeed_list > li');
 
-    // Filter and deduplicate using shared helpers
-    return deduplicateByUrl(filterPickupItems(topPicks));
+        listItems.forEach((li) => {
+          const linkEl = li.querySelector('a');
+          if (!linkEl) return;
+
+          const url = linkEl.getAttribute('href');
+          if (!url) return;
+
+          const absoluteUrl = url.startsWith('http')
+            ? url
+            : `https://news.yahoo.co.jp${url}`;
+
+          const imgEl = linkEl.querySelector('img');
+          const thumbnailUrl = imgEl?.getAttribute('src') || undefined;
+
+          const timeEl = linkEl.querySelector('time');
+          const timeText = timeEl?.textContent?.trim() || '';
+
+          let fullText = linkEl.textContent?.trim() || '';
+          if (timeText && fullText.includes(timeText)) {
+            fullText = fullText.replace(timeText, '').trim();
+          }
+
+          const title = fullText;
+
+          if (title && absoluteUrl) {
+            items.push({
+              title,
+              url: absoluteUrl,
+              thumbnailUrl,
+              publishedAt: timeText || undefined
+            });
+          }
+        });
+
+        return items;
+      });
+
+      log.newsScraper.info('News list extraction completed', { itemCount: topPicks.length });
+
+      await page.close();
+      await browser.disconnect();
+
+      // Filter and deduplicate using shared helpers
+      const originalCount = topPicks.length;
+      const filteredPickupItems = filterPickupItems(topPicks);
+      const filteredCount = filteredPickupItems.length;
+      log.newsScraper.info('Filtering results', { originalCount, filteredCount });
+
+      const finalResult = deduplicateByUrl(filteredPickupItems);
+      const dedupedCount = finalResult.length;
+      log.newsScraper.info('Deduplication completed', { filteredCount, dedupedCount });
+
+      const durationMs = Date.now() - startTime;
+      log.newsScraper.info('News scraping completed', { articleCount: dedupedCount, durationMs });
+
+      return finalResult;
+    } catch (error) {
+      log.newsScraper.error('News scraping failed', error as Error);
+      throw error;
+    }
   }
 }

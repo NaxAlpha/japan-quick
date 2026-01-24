@@ -6,6 +6,7 @@
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
 import type { YahooNewsResponse } from '../types/news.js';
 import type { NewsScraperParams, NewsScraperResult, ScheduledRefreshResult } from './types.js';
+import { log, generateRequestId } from '../lib/logger.js';
 
 interface WorkflowEnv {
   BROWSER: any;
@@ -18,10 +19,15 @@ const CACHE_KEY = 'yahoo-japan-top-picks';
 
 export class NewsScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, NewsScraperParams, NewsScraperResult> {
   async run(event: WorkflowEvent<NewsScraperParams>, step: WorkflowStep): Promise<NewsScraperResult> {
+    const reqId = generateRequestId();
+    const workflowId = event.id;
     const params = event.payload;
+    const startTime = Date.now();
+    log.newsScraperWorkflow.info(reqId, 'Workflow started', { workflowId, skipCache: params.skipCache });
 
     try {
       // Step 1: Check cache (unless skipCache is true)
+      const checkCacheStart = Date.now();
       let cachedData: YahooNewsResponse | null = null;
       if (!params.skipCache) {
         cachedData = await step.do('check-cache', {
@@ -38,9 +44,11 @@ export class NewsScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, NewsScr
           return null;
         });
       }
+      log.newsScraperWorkflow.info(reqId, 'Step completed', { step: 'check-cache', durationMs: Date.now() - checkCacheStart, cached: !!cachedData });
 
       // If we have valid cached data, return it
       if (cachedData) {
+        log.newsScraperWorkflow.info(reqId, 'Workflow completed (cached)', { durationMs: Date.now() - startTime, itemCount: cachedData.topPicks.length });
         return {
           success: true,
           data: {
@@ -51,6 +59,7 @@ export class NewsScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, NewsScr
       }
 
       // Step 2: Trigger ScheduledNewsRefreshWorkflow to scrape fresh data
+      const refreshStart = Date.now();
       const refreshResult = await step.do('trigger-refresh-workflow', {
         retries: {
           limit: 3,
@@ -77,9 +86,11 @@ export class NewsScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, NewsScr
 
         return status.output as ScheduledRefreshResult;
       });
+      log.newsScraperWorkflow.info(reqId, 'Step completed', { step: 'trigger-refresh-workflow', durationMs: Date.now() - refreshStart, success: refreshResult.success });
 
       // Check if the refresh workflow succeeded
       if (!refreshResult.success || !refreshResult.data) {
+        log.newsScraperWorkflow.error(reqId, 'Refresh workflow failed', { error: refreshResult.error || 'Refresh workflow failed' });
         return {
           success: false,
           error: refreshResult.error || 'Refresh workflow failed'
@@ -87,13 +98,14 @@ export class NewsScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, NewsScr
       }
 
       // Return the fresh data from the refresh workflow
+      log.newsScraperWorkflow.info(reqId, 'Workflow completed', { durationMs: Date.now() - startTime, itemCount: refreshResult.data.topPicks.length, snapshotName: refreshResult.snapshotName });
       return {
         success: true,
         data: refreshResult.data,
         snapshotName: refreshResult.snapshotName
       };
     } catch (error) {
-      console.error('NewsScraperWorkflow failed:', error);
+      log.newsScraperWorkflow.error(reqId, 'Workflow failed', error as Error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error'

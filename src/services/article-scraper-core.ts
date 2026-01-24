@@ -6,6 +6,7 @@
 
 import { ArticleScraper } from './article-scraper.js';
 import type { ArticleStatus } from '../types/article.js';
+import { log, generateRequestId } from '../lib/logger.js';
 
 interface ScrapeArticleCoreParams {
   browser: any;
@@ -41,7 +42,8 @@ function sleep(ms: number): Promise<void> {
  */
 export async function scrapeArticleCore(params: ScrapeArticleCoreParams): Promise<ScrapeArticleCoreResult> {
   const { browser, db, pickId, isRescrape } = params;
-  console.log(`[scrapeArticleCore] Started for pickId=${pickId}, isRescrape=${isRescrape}`);
+  const startTime = Date.now();
+  log.articleScraperCore.info('Scraping started', { pickId, isRescrape });
 
   try {
     // Step 1: Check if article exists in DB
@@ -52,7 +54,7 @@ export async function scrapeArticleCore(params: ScrapeArticleCoreParams): Promis
     // If not rescrape and article already exists with scraped status, skip
     if (!isRescrape && existingArticle &&
         (existingArticle.status === 'scraped_v1' || existingArticle.status === 'scraped_v2')) {
-      console.log(`[scrapeArticleCore] pickId=${pickId} already scraped, skipping`);
+      log.articleScraperCore.info('Article already scraped, skipping', { pickId, status: existingArticle.status });
       return {
         success: true,
         pickId,
@@ -68,12 +70,13 @@ export async function scrapeArticleCore(params: ScrapeArticleCoreParams): Promis
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        pickupResult = await scraper.scrapePickupPage(browser, pickId);
-        console.log(`[scrapeArticleCore] pickId=${pickId} pickup scrape succeeded on attempt ${attempt}`);
+        const reqId = generateRequestId();
+        pickupResult = await scraper.scrapePickupPage(reqId, browser, pickId);
+        log.articleScraperCore.info('Pickup page scrape succeeded', { pickId, attempt });
         break;
       } catch (error) {
         lastError = error instanceof Error ? error.message : 'Unknown error';
-        console.error(`[scrapeArticleCore] Pickup scrape attempt ${attempt} failed for pickId=${pickId}:`, lastError);
+        log.articleScraperCore.error('Pickup page scrape attempt failed', { pickId, attempt, error: lastError });
 
         // Update status based on attempt number
         if (attempt < maxRetries) {
@@ -85,7 +88,7 @@ export async function scrapeArticleCore(params: ScrapeArticleCoreParams): Promis
               status = excluded.status,
               updated_at = datetime('now')
           `).bind(pickId, retryStatus).run();
-          console.log(`[scrapeArticleCore] pickId=${pickId} retry attempt ${attempt + 1} failed, status updated to ${retryStatus}`);
+          log.articleScraperCore.info('Retry attempt failed, status updated', { pickId, attemptNumber: attempt + 1, status: retryStatus });
 
           // Wait before next retry (exponential backoff)
           await sleep((attempt + 1) * 5 * 1000); // 5s, 10s
@@ -111,7 +114,7 @@ export async function scrapeArticleCore(params: ScrapeArticleCoreParams): Promis
 
     // If external article, skip scraping
     if (pickupResult.isExternal || !pickupResult.articleUrl) {
-      console.log(`[scrapeArticleCore] pickId=${pickId} is external or has no article URL, marking as not_available`);
+      log.articleScraperCore.info('External article or no URL, marking as not available', { pickId, isExternal: pickupResult.isExternal, hasUrl: !!pickupResult.articleUrl });
       await db.prepare(`
         INSERT INTO articles (pick_id, status, detected_at)
         VALUES (?, 'not_available', datetime('now'))
@@ -128,18 +131,27 @@ export async function scrapeArticleCore(params: ScrapeArticleCoreParams): Promis
     }
 
     // Step 3: Scrape article content
-    console.log(`[scrapeArticleCore] pickId=${pickId} starting article scrape for URL: ${pickupResult.articleUrl}`);
-    const articleData = await scraper.scrapeArticlePage(browser, pickupResult.articleUrl);
-    console.log(`[scrapeArticleCore] pickId=${pickId} article scraped: ${articleData.content?.length || 0} chars HTML, ${articleData.contentText?.length || 0} chars text`);
+    log.articleScraperCore.info('Starting article content scrape', { pickId, url: pickupResult.articleUrl });
+    const reqId = generateRequestId();
+    const articleData = await scraper.scrapeArticlePage(reqId, browser, pickupResult.articleUrl);
+    log.articleScraperCore.info('Article content scraped', {
+      pickId,
+      htmlChars: articleData.content?.length || 0,
+      textChars: articleData.contentText?.length || 0
+    });
 
     // Step 4: Scrape comments (fault-tolerant - don't fail if comments scraping fails)
-    console.log(`[scrapeArticleCore] pickId=${pickId} starting comments scrape`);
+    log.articleScraperCore.info('Starting comments scrape', { pickId });
     let comments: any[] = [];
     try {
-      comments = await scraper.scrapeCommentsPage(browser, pickupResult.articleUrl);
-      console.log(`[scrapeArticleCore] pickId=${pickId} comments scraped: ${comments?.length || 0} comments`);
+      const reqId = generateRequestId();
+      comments = await scraper.scrapeCommentsPage(reqId, browser, pickupResult.articleUrl);
+      log.articleScraperCore.info('Comments scraped', { pickId, commentCount: comments?.length || 0 });
     } catch (commentError) {
-      console.error(`[scrapeArticleCore] pickId=${pickId} comments scraping failed (will continue without comments):`, commentError instanceof Error ? commentError.message : commentError);
+      log.articleScraperCore.error('Comments scraping failed (continuing without comments)', {
+        pickId,
+        error: commentError instanceof Error ? commentError.message : String(commentError)
+      });
       comments = [];
     }
 
@@ -147,10 +159,11 @@ export async function scrapeArticleCore(params: ScrapeArticleCoreParams): Promis
     const article = { ...articleData, ...pickupResult };
     const commentsData = comments || [];
     const version = isRescrape ? 2 : 1;
-    console.log(`[scrapeArticleCore] pickId=${pickId} preparing to save version ${version} to database`);
+    log.articleScraperCore.info('Preparing to save to database', { pickId, version });
 
     // Step 5: Save article record
     let articleId: number;
+    log.articleScraperCore.info('Saving article record', { pickId, exists: !!existingArticle });
     if (existingArticle) {
       // Update existing article
       await db.prepare(`
@@ -193,6 +206,7 @@ export async function scrapeArticleCore(params: ScrapeArticleCoreParams): Promis
         article.modifiedAt || null
       ).run();
       articleId = result.meta.last_row_id as number;
+      log.articleScraperCore.info('Article record inserted', { pickId, articleId });
     }
 
     // Step 6: Save version
@@ -214,12 +228,14 @@ export async function scrapeArticleCore(params: ScrapeArticleCoreParams): Promis
       article.pageCount,
       JSON.stringify(article.images)
     ).run();
+    log.articleScraperCore.info('Article version saved', { pickId, articleId, version, pageCount: article.pageCount });
 
     // Step 7: Save comments
     // Delete old comments for this version
     await db.prepare(
       'DELETE FROM article_comments WHERE article_id = ? AND version = ?'
     ).bind(articleId, version).run();
+    log.articleScraperCore.info('Old comments deleted', { pickId, articleId, version });
 
     // Insert new comments
     for (const comment of commentsData) {
@@ -238,6 +254,7 @@ export async function scrapeArticleCore(params: ScrapeArticleCoreParams): Promis
         comment.repliesCount
       ).run();
     }
+    log.articleScraperCore.info('Comments saved', { pickId, articleId, version, commentCount: commentsData.length });
 
     // Step 8: Update status and schedule rescrape
     const newStatus: ArticleStatus = isRescrape ? 'scraped_v2' : 'scraped_v1';
@@ -263,7 +280,14 @@ export async function scrapeArticleCore(params: ScrapeArticleCoreParams): Promis
       `).bind(newStatus, articleId).run();
     }
 
-    console.log(`[scrapeArticleCore] Completed: pickId=${pickId}, status=${newStatus}, version=${version}`);
+    const durationMs = Date.now() - startTime;
+    log.articleScraperCore.info('Scraping completed', {
+      pickId,
+      articleId,
+      status: newStatus,
+      version,
+      durationMs
+    });
 
     return {
       success: true,
@@ -275,10 +299,11 @@ export async function scrapeArticleCore(params: ScrapeArticleCoreParams): Promis
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     const errorStack = error instanceof Error ? error.stack : undefined;
-    console.error(`[scrapeArticleCore] FATAL ERROR for pickId=${pickId}:`, errorMessage);
-    if (errorStack) {
-      console.error(`[scrapeArticleCore] Stack trace:`, errorStack);
-    }
+    log.articleScraperCore.error('Fatal error during scraping', {
+      pickId,
+      error: errorMessage,
+      stack: errorStack
+    });
     return {
       success: false,
       pickId,

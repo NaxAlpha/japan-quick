@@ -5,6 +5,7 @@
 import { GoogleGenAI } from '@google/genai';
 import type { AIArticleInput, AISelectionOutput, VideoType } from '../types/video.js';
 import type { Article } from '../types/article.js';
+import { log } from '../lib/logger.js';
 
 interface TokenUsage {
   inputTokens: number;
@@ -119,53 +120,75 @@ Respond with ONLY the JSON object, no other text.`;
   /**
    * Call Gemini AI to select articles
    */
-  async selectArticles(articles: Article[]): Promise<SelectionResult> {
-    // Format articles and create index mapping
-    const { formatted, mapping } = this.formatArticlesForAI(articles);
+  async selectArticles(reqId: string, articles: Article[]): Promise<SelectionResult> {
+    log.gemini.info(reqId, 'Article selection started', { articleCount: articles.length });
+    const startTime = Date.now();
 
-    // Build prompt
-    const prompt = this.buildSelectionPrompt(formatted);
+    try {
+      // Format articles and create index mapping
+      const { formatted, mapping } = this.formatArticlesForAI(articles);
 
-    // Call Gemini API using the correct format
-    const response = await this.genai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: prompt
-    });
+      // Build prompt
+      const prompt = this.buildSelectionPrompt(formatted);
 
-    // Extract token usage
-    const usageMetadata = response.usageMetadata;
-    const tokenUsage: TokenUsage = {
-      inputTokens: usageMetadata?.promptTokenCount || 0,
-      outputTokens: usageMetadata?.candidatesTokenCount || 0
-    };
+      // Call Gemini API using the correct format
+      const response = await this.genai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: prompt
+      });
 
-    // Parse JSON response
-    const text = response.text;
-    if (!text) {
-      throw new Error('No text in Gemini response');
-    }
-    const cleanText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      // Extract token usage
+      const usageMetadata = response.usageMetadata;
+      const tokenUsage: TokenUsage = {
+        inputTokens: usageMetadata?.promptTokenCount || 0,
+        outputTokens: usageMetadata?.candidatesTokenCount || 0
+      };
 
-    const parsed: AISelectionOutput = JSON.parse(cleanText);
+      const durationMs = Date.now() - startTime;
+      log.gemini.info(reqId, 'Gemini API call completed', {
+        durationMs,
+        inputTokens: tokenUsage.inputTokens,
+        outputTokens: tokenUsage.outputTokens
+      });
 
-    // Map AI indices back to pick_ids
-    const pickIds = parsed.articles.map(index => {
-      const pickId = mapping.get(index);
-      if (!pickId) {
-        throw new Error(`Invalid article index from AI: ${index}`);
+      // Parse JSON response
+      const text = response.text;
+      if (!text) {
+        throw new Error('No text in Gemini response');
       }
-      return pickId;
-    });
+      const cleanText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
 
-    // Convert notes array to newline-joined string
-    const notesString = parsed.notes.join('\n');
+      const parsed: AISelectionOutput = JSON.parse(cleanText);
 
-    return {
-      notes: notesString,
-      shortTitle: parsed.short_title,
-      articles: pickIds,
-      videoType: parsed.video_type,
-      tokenUsage
-    };
+      // Map AI indices back to pick_ids
+      const pickIds = parsed.articles.map(index => {
+        const pickId = mapping.get(index);
+        if (!pickId) {
+          throw new Error(`Invalid article index from AI: ${index}`);
+        }
+        return pickId;
+      });
+
+      // Convert notes array to newline-joined string
+      const notesString = parsed.notes.join('\n');
+
+      const result = {
+        notes: notesString,
+        shortTitle: parsed.short_title,
+        articles: pickIds,
+        videoType: parsed.video_type,
+        tokenUsage
+      };
+
+      log.gemini.info(reqId, 'Article selection completed', {
+        selectedCount: result.articles.length,
+        videoType: result.videoType
+      });
+
+      return result;
+    } catch (error) {
+      log.gemini.error(reqId, 'Article selection failed', error as Error);
+      throw error;
+    }
   }
 }

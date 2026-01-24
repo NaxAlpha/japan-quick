@@ -9,6 +9,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../types/news.js';
 import type { Article, ArticleVersion, ArticleComment, ArticleScraperParams, ArticleScraperResult } from '../types/article.js';
+import { log, generateRequestId } from '../lib/logger.js';
 
 const articleRoutes = new Hono<{ Bindings: Env['Bindings'] }>();
 
@@ -68,8 +69,12 @@ function rowToComment(row: Record<string, unknown>): ArticleComment {
 
 // GET /api/articles/:id - Get article by pick:xxx or article_id
 articleRoutes.get('/:id', async (c) => {
+  const reqId = generateRequestId();
+  const startTime = Date.now();
+  const id = c.req.param('id');
+  log.articleRoutes.info(reqId, 'Request received', { method: 'GET', path: `/:id`, id });
+
   try {
-    const id = c.req.param('id');
     let article: Record<string, unknown> | null = null;
 
     // Check if id is in format "pick:xxx"
@@ -86,6 +91,7 @@ articleRoutes.get('/:id', async (c) => {
     }
 
     if (!article) {
+      log.articleRoutes.warn(reqId, 'Article not found', { id });
       return c.json({
         success: false,
         error: 'Article not found'
@@ -120,20 +126,26 @@ articleRoutes.get('/:id', async (c) => {
       comments
     });
   } catch (error) {
-    console.error('Failed to get article:', error);
+    log.articleRoutes.error(reqId, 'Request failed', error as Error);
     return c.json({
       success: false,
       error: error instanceof Error ? error.message : 'Failed to get article'
     }, 500);
+  } finally {
+    const durationMs = Date.now() - startTime;
+    log.articleRoutes.info(reqId, 'Request completed', { status: 200, durationMs });
   }
 });
 
 // GET /api/articles/:id/version/:version - Get specific version
 articleRoutes.get('/:id/version/:version', async (c) => {
-  try {
-    const id = c.req.param('id');
-    const versionNum = parseInt(c.req.param('version'), 10);
+  const reqId = generateRequestId();
+  const startTime = Date.now();
+  const id = c.req.param('id');
+  const versionNum = parseInt(c.req.param('version'), 10);
+  log.articleRoutes.info(reqId, 'Request received', { method: 'GET', path: `/:id/version/:version`, id, version: versionNum });
 
+  try {
     let article: Record<string, unknown> | null = null;
 
     if (id.startsWith('pick:')) {
@@ -148,6 +160,7 @@ articleRoutes.get('/:id/version/:version', async (c) => {
     }
 
     if (!article) {
+      log.articleRoutes.warn(reqId, 'Article not found', { id });
       return c.json({
         success: false,
         error: 'Article not found'
@@ -162,6 +175,7 @@ articleRoutes.get('/:id/version/:version', async (c) => {
     ).bind(articleObj.id, versionNum).first();
 
     if (!version) {
+      log.articleRoutes.warn(reqId, 'Version not found', { id, version: versionNum });
       return c.json({
         success: false,
         error: 'Version not found'
@@ -186,18 +200,25 @@ articleRoutes.get('/:id/version/:version', async (c) => {
       comments
     });
   } catch (error) {
-    console.error('Failed to get article version:', error);
+    log.articleRoutes.error(reqId, 'Request failed', error as Error);
     return c.json({
       success: false,
       error: error instanceof Error ? error.message : 'Failed to get article version'
     }, 500);
+  } finally {
+    const durationMs = Date.now() - startTime;
+    log.articleRoutes.info(reqId, 'Request completed', { status: 200, durationMs });
   }
 });
 
 // POST /api/articles/trigger/:pickId - Manual trigger
 articleRoutes.post('/trigger/:pickId', async (c) => {
+  const reqId = generateRequestId();
+  const startTime = Date.now();
+  const pickId = c.req.param('pickId');
+  log.articleRoutes.info(reqId, 'Request received', { method: 'POST', path: `/trigger/${pickId}` });
+
   try {
-    const pickId = c.req.param('pickId');
     const body = await c.req.json<{ isRescrape?: boolean }>().catch(() => ({}));
 
     const params: ArticleScraperParams = {
@@ -210,27 +231,36 @@ articleRoutes.post('/trigger/:pickId', async (c) => {
       params
     });
 
+    log.articleRoutes.info(reqId, 'Workflow created', { workflowId: instance.id, pickId });
     return c.json({
       success: true,
       workflowId: instance.id,
       pickId
     });
   } catch (error) {
-    console.error('Failed to create article scraper workflow:', error);
+    log.articleRoutes.error(reqId, 'Request failed', error as Error);
     return c.json({
       success: false,
       error: error instanceof Error ? error.message : 'Failed to create workflow'
     }, 500);
+  } finally {
+    const durationMs = Date.now() - startTime;
+    log.articleRoutes.info(reqId, 'Request completed', { status: 200, durationMs });
   }
 });
 
 // GET /api/articles/status/:workflowId - Workflow status
 articleRoutes.get('/status/:workflowId', async (c) => {
+  const reqId = generateRequestId();
+  const startTime = Date.now();
+  const workflowId = c.req.param('workflowId');
+  log.articleRoutes.info(reqId, 'Request received', { method: 'GET', path: `/status/${workflowId}` });
+
   try {
-    const workflowId = c.req.param('workflowId');
     const instance = await c.env.ARTICLE_SCRAPER_WORKFLOW.get(workflowId);
 
     if (!instance) {
+      log.articleRoutes.warn(reqId, 'Workflow not found', { workflowId });
       return c.json({
         success: false,
         error: 'Workflow not found'
@@ -246,11 +276,14 @@ articleRoutes.get('/status/:workflowId', async (c) => {
       output: status.output as ArticleScraperResult | undefined
     });
   } catch (error) {
-    console.error('Failed to get workflow status:', error);
+    log.articleRoutes.error(reqId, 'Request failed', error as Error);
     return c.json({
       success: false,
       error: error instanceof Error ? error.message : 'Failed to get workflow status'
     }, 500);
+  } finally {
+    const durationMs = Date.now() - startTime;
+    log.articleRoutes.info(reqId, 'Request completed', { status: 200, durationMs });
   }
 });
 

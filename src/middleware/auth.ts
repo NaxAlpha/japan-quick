@@ -1,13 +1,19 @@
 import { MiddlewareHandler } from 'hono'
 import type { Env } from '../types/news.js'
+import { log } from '../lib/logger.js'
 
 export const basicAuth = (): MiddlewareHandler<{
   Bindings: Env['Bindings']
 }> => {
   return async (c, next) => {
+    const path = c.req.path
     const authHeader = c.req.header('Authorization')
+    const hasUsername = authHeader ? 'present' : 'missing'
+
+    log.auth.info('Auth attempt', { path, hasUsername })
 
     if (!authHeader || !authHeader.startsWith('Basic ')) {
+      log.auth.error('Auth failed: Missing or invalid Authorization header', { path })
       return unauthorized(c)
     }
 
@@ -16,6 +22,7 @@ export const basicAuth = (): MiddlewareHandler<{
       const [username, password] = credentials.split(':')
 
       if (!username || !password) {
+        log.auth.error('Auth failed: Missing username or password in credentials', { path, username: !!username })
         return unauthorized(c)
       }
 
@@ -23,13 +30,15 @@ export const basicAuth = (): MiddlewareHandler<{
       const validPassword = c.env.ADMIN_PASSWORD
 
       if (username !== validUsername || password !== validPassword) {
+        log.auth.error('Auth failed: Invalid credentials', { path, username })
         return unauthorized(c)
       }
 
+      log.auth.info('Auth success', { path, username })
       await next()
     } catch (error) {
-      // Log error for debugging (credentials may be malformed)
-      console.error('Auth error:', error instanceof Error ? error.message : 'Unknown error')
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      log.auth.error('Auth error: Malformed credentials', { path, error: message })
       return unauthorized(c)
     }
   }

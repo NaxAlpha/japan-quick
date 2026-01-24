@@ -5,6 +5,7 @@ import { articleRoutes } from './routes/articles.js';
 import { videoRoutes } from './routes/videos.js';
 import { frontendRoutes } from './routes/frontend.js';
 import type { Env } from './types/news.js';
+import { log } from './lib/logger.js';
 
 // Export workflow classes for Cloudflare Workers
 export {
@@ -19,6 +20,9 @@ const app = new Hono<Env>();
 
 // Frontend page routes (no auth required for UI)
 app.route('/', frontendRoutes);
+
+// Log app initialization
+log.app.info('Japan Quick API initialized', { version: '1.0.0' });
 
 // Apply auth middleware to ALL API routes (including workflows)
 app.use('/api/*', basicAuth());
@@ -50,7 +54,8 @@ app.get('/api/hello', (c) => {
 export default {
   fetch: app.fetch,
   scheduled: async (event: ScheduledEvent, env: Env['Bindings'], ctx: ExecutionContext) => {
-    console.log('Scheduled task triggered at:', new Date(event.scheduledTime).toISOString());
+    const scheduledTime = new Date(event.scheduledTime).toISOString();
+    log.app.info('Scheduled handler invoked', { scheduledTime });
 
     try {
       const hour = new Date(event.scheduledTime).getUTCHours();
@@ -62,24 +67,29 @@ export default {
       const refreshInstance = await env.SCHEDULED_REFRESH_WORKFLOW.create({
         params: {}
       });
-      console.log('Created scheduled refresh workflow:', refreshInstance.id);
+      log.app.info('Created scheduled refresh workflow', { workflowId: refreshInstance.id });
 
       const rescrapeInstance = await env.ARTICLE_RESCRAPE_WORKFLOW.create({
         params: {}
       });
-      console.log('Created article rescrape workflow:', rescrapeInstance.id);
+      log.app.info('Created article rescrape workflow', { workflowId: rescrapeInstance.id });
 
       // Video selection: hourly during JST 8am-8pm only
       if (isJSTBusinessHours && isHourMark) {
         const videoInstance = await env.VIDEO_SELECTION_WORKFLOW.create({
           params: {}
         });
-        console.log('Created video selection workflow:', videoInstance.id);
+        log.app.info('Created video selection workflow', { workflowId: videoInstance.id });
       } else {
-        console.log('Skipped video selection workflow (outside JST business hours or not on the hour)');
+        log.app.info('Skipped video selection workflow', {
+          reason: 'outside JST business hours or not on the hour',
+          isJSTBusinessHours,
+          isHourMark
+        });
       }
     } catch (error) {
-      console.error('Failed to create scheduled workflows:', error);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      log.app.error('Failed to create scheduled workflows', { error: message });
     }
   }
 };
