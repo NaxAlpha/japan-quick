@@ -1,6 +1,8 @@
 /**
  * Settings page component - Application settings
  * Displays YouTube authentication status and allows connection/disconnection
+ *
+ * Tokyo Cyber-Industrial aesthetic
  */
 
 import { LitElement, html, css } from 'lit';
@@ -20,6 +22,9 @@ interface YouTubeAuthStatus {
 @customElement('settings-page')
 export class SettingsPage extends LitElement {
   static styles = css`
+    @import url('https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Zen+Tokyo+Zoo&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=Inter:wght@400;500;600;700;800&display=swap');
+
     :host {
       display: block;
       width: 100%;
@@ -30,215 +35,381 @@ export class SettingsPage extends LitElement {
       padding: 2rem;
       max-width: 800px;
       margin: 0 auto;
+      background: #f5f3f0;
+      min-height: 100vh;
+      position: relative;
+    }
+
+    /* Background pattern */
+    .container::before {
+      content: '';
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-image: url("data:image/svg+xml,%3Csvg width='120' height='60' viewBox='0 0 120 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 30 Q 15 15, 30 30 T 60 30 T 90 30 T 120 30' stroke='%23e63946' stroke-width='0.5' fill='none' opacity='0.06'/%3E%3C/svg%3E");
+      background-size: 120px 60px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* Japanese character decoration */
+    .japanese-deco {
+      position: fixed;
+      font-family: 'Zen Tokyo Zoo', sans-serif;
+      font-size: clamp(10rem, 25vw, 20rem);
+      color: rgba(230, 57, 70, 0.03);
+      line-height: 1;
+      pointer-events: none;
+      z-index: 0;
+      user-select: none;
+    }
+
+    .japanese-deco.top {
+      top: 10%;
+      right: -5%;
+      transform: rotate(5deg);
+    }
+
+    .japanese-deco.bottom {
+      bottom: 5%;
+      left: -5%;
+      transform: rotate(-5deg);
+    }
+
+    /* Back link */
+    .home-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      background: #0a0a0a;
+      color: #ffffff;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      font-weight: 400;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      border: 2px solid #0a0a0a;
+      text-decoration: none;
+      transition: all 0.15s ease-out;
+      box-shadow: 2px 2px 0 #0a0a0a;
+      margin-bottom: 2rem;
+      position: relative;
+      z-index: 1;
+    }
+
+    .home-link:hover {
+      background: #e63946;
+      border-color: #e63946;
+      transform: translate(-1px, -1px);
+      box-shadow: 3px 3px 0 #0a0a0a;
     }
 
     h1 {
-      color: white;
-      font-size: 1.5rem;
-      font-weight: 700;
-      margin-bottom: 1.5rem;
+      font-family: 'Zen Tokyo Zoo', sans-serif;
+      font-size: clamp(1.75rem, 5vw, 2.5rem);
+      font-weight: 400;
+      line-height: 1.1;
+      color: #0a0a0a;
+      margin: 0 0 2rem 0;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+      position: relative;
+      z-index: 1;
     }
 
     .settings-section {
-      background: white;
-      border-radius: 0.5rem;
-      padding: 1.5rem;
+      background: #ffffff;
+      border: 3px solid #0a0a0a;
+      box-shadow: 4px 4px 0 #0a0a0a;
+      padding: 2rem;
       margin-bottom: 1.5rem;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      position: relative;
+      z-index: 1;
+    }
+
+    .settings-section::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: #e63946;
     }
 
     .section-title {
-      font-size: 1.125rem;
-      font-weight: 600;
-      color: #1a1a1a;
+      font-family: 'Zen Tokyo Zoo', sans-serif;
+      font-size: clamp(1.25rem, 3vw, 1.5rem);
+      font-weight: 400;
+      color: #0a0a0a;
       margin: 0 0 1rem 0;
+      text-transform: uppercase;
       display: flex;
       align-items: center;
-      gap: 0.5rem;
+      gap: 1rem;
+      flex-wrap: wrap;
     }
 
     .status-badge {
-      display: inline-block;
-      padding: 0.25rem 0.75rem;
-      border-radius: 0.25rem;
-      font-size: 0.75rem;
-      font-weight: 500;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.625rem;
+      font-weight: 400;
+      padding: 0.25rem 0.5rem;
+      border: 1px solid #0a0a0a;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
       white-space: nowrap;
     }
 
     .status-badge.connected {
-      background: #10b981;
-      color: white;
+      background: #2d6a4f;
+      color: #ffffff;
+      border-color: #2d6a4f;
     }
 
     .status-badge.not-connected {
-      background: #6b7280;
-      color: white;
+      background: #78746c;
+      color: #ffffff;
+      border-color: #78746c;
+    }
+
+    .description {
+      font-family: 'Inter', 'Noto Sans JP', sans-serif;
+      font-size: 0.9375rem;
+      color: #58544c;
+      margin: 0 0 1.5rem 0;
+      line-height: 1.6;
     }
 
     .channel-info {
-      margin: 1rem 0;
+      margin: 1.5rem 0;
       padding: 1rem;
-      background: #f9fafb;
-      border-radius: 0.375rem;
-      border: 1px solid #e5e7eb;
+      background: #0a0a0a;
+      border: 2px solid #0a0a0a;
+      box-shadow: 3px 3px 0 #e63946;
     }
 
     .channel-name {
-      font-size: 1rem;
-      font-weight: 600;
-      color: #1a1a1a;
-      margin: 0 0 0.25rem 0;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.875rem;
+      font-weight: 400;
+      color: #e63946;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin: 0 0 0.5rem 0;
     }
 
     .channel-id {
-      font-size: 0.875rem;
-      color: #6b7280;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      color: #f5f3f0;
       margin: 0;
     }
 
     .token-info {
       margin: 1rem 0;
-      font-size: 0.875rem;
-      color: #6b7280;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      color: #78746c;
     }
 
     .token-info-row {
       display: flex;
       justify-content: space-between;
-      padding: 0.25rem 0;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid #e8e6e1;
+    }
+
+    .token-info-row:last-child {
+      border-bottom: none;
     }
 
     .token-expires-soon {
-      color: #f59e0b;
-      font-weight: 500;
+      color: #f97316;
+      font-weight: 700;
     }
 
     .token-expired {
-      color: #ef4444;
-      font-weight: 500;
+      color: #e63946;
+      font-weight: 700;
     }
 
     .scopes-list {
-      margin: 1rem 0;
-      font-size: 0.875rem;
+      margin: 1.5rem 0;
     }
 
     .scopes-title {
-      font-weight: 600;
-      color: #1a1a1a;
-      margin-bottom: 0.5rem;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      font-weight: 400;
+      color: #0a0a0a;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 0.75rem;
     }
 
     .scope-item {
-      padding: 0.25rem 0.5rem;
-      background: #f3f4f6;
-      border-radius: 0.25rem;
+      padding: 0.375rem 0.625rem;
+      background: #f5f3f0;
+      border: 1px solid #0a0a0a;
       display: inline-block;
       margin: 0.125rem;
-      font-size: 0.75rem;
-      color: #374151;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      color: #0a0a0a;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
     }
 
     .button-group {
       display: flex;
       gap: 0.75rem;
-      margin-top: 1rem;
+      margin-top: 1.5rem;
+      flex-wrap: wrap;
     }
 
     .button {
-      padding: 0.625rem 1.25rem;
-      border-radius: 0.375rem;
-      font-size: 0.875rem;
-      font-weight: 500;
+      padding: 0.875rem 1.5rem;
+      border: 3px solid #0a0a0a;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      font-weight: 400;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
       cursor: pointer;
-      transition: background 0.2s;
-      border: none;
+      transition: all 0.15s ease-out;
+      box-shadow: 4px 4px 0 #0a0a0a;
     }
 
     .button:disabled {
       opacity: 0.6;
       cursor: not-allowed;
+      transform: none;
+      box-shadow: 4px 4px 0 #0a0a0a;
     }
 
     .button-primary {
-      background: #3b82f6;
-      color: white;
+      background: #e63946;
+      color: #ffffff;
+      border-color: #e63946;
     }
 
     .button-primary:hover:not(:disabled) {
-      background: #2563eb;
+      background: #0a0a0a;
+      border-color: #0a0a0a;
+      transform: translate(-2px, -2px);
+      box-shadow: 6px 6px 0 #e63946;
     }
 
     .button-danger {
       background: #ef4444;
-      color: white;
+      color: #ffffff;
+      border-color: #ef4444;
     }
 
     .button-danger:hover:not(:disabled) {
-      background: #dc2626;
+      background: #0a0a0a;
+      border-color: #0a0a0a;
+      transform: translate(-2px, -2px);
+      box-shadow: 6px 6px 0 #ef4444;
     }
 
     .button-secondary {
-      background: #6b7280;
-      color: white;
+      background: #78746c;
+      color: #ffffff;
+      border-color: #78746c;
     }
 
     .button-secondary:hover:not(:disabled) {
-      background: #4b5563;
+      background: #0a0a0a;
+      border-color: #0a0a0a;
+      transform: translate(-2px, -2px);
+      box-shadow: 6px 6px 0 #78746c;
     }
 
     .status-message {
       text-align: center;
-      padding: 2rem 1rem;
-      color: rgba(255, 255, 255, 0.8);
-      font-size: 1rem;
+      padding: 3rem 1rem;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.875rem;
+      color: #78746c;
+      position: relative;
+      z-index: 1;
+    }
+
+    .loading-spinner {
+      display: inline-block;
+      width: 2rem;
+      height: 2rem;
+      border: 3px solid #e8e6e1;
+      border-top-color: #e63946;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 1rem;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
     }
 
     .error-message {
-      padding: 0.75rem 1rem;
-      background: #fef2f2;
-      border: 1px solid #fecaca;
-      border-radius: 0.375rem;
-      color: #991b1b;
-      font-size: 0.875rem;
-      margin: 1rem 0;
+      padding: 1rem;
+      background: #0a0a0a;
+      border: 2px solid #e63946;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      color: #e63946;
+      margin-bottom: 1rem;
+      position: relative;
+      z-index: 1;
+    }
+
+    .error-message::before {
+      content: '[ ERROR ]';
+      display: block;
+      margin-bottom: 0.5rem;
+      font-weight: 700;
     }
 
     .success-message {
-      padding: 0.75rem 1rem;
-      background: #f0fdf4;
-      border: 1px solid #bbf7d0;
-      border-radius: 0.375rem;
-      color: #166534;
-      font-size: 0.875rem;
-      margin: 1rem 0;
+      padding: 1rem;
+      background: #0a0a0a;
+      border: 2px solid #2d6a4f;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      color: #2d6a4f;
+      margin-bottom: 1rem;
+      position: relative;
+      z-index: 1;
     }
 
-    .home-link {
-      display: inline-block;
-      margin-top: 2rem;
-      padding: 0.5rem 1rem;
-      background: rgba(255, 255, 255, 0.2);
-      border: 1px solid rgba(255, 255, 255, 0.3);
-      border-radius: 0.5rem;
-      color: white;
-      font-size: 0.875rem;
-      font-weight: 500;
-      cursor: pointer;
-      transition: background 0.2s;
-      text-decoration: none;
+    .success-message::before {
+      content: '[ SUCCESS ]';
+      display: block;
+      margin-bottom: 0.5rem;
+      font-weight: 700;
     }
 
-    .home-link:hover {
-      background: rgba(255, 255, 255, 0.3);
-    }
+    @media (max-width: 640px) {
+      .container {
+        padding: 1rem;
+      }
 
-    .description {
-      font-size: 0.875rem;
-      color: #6b7280;
-      margin: 0.5rem 0 1rem 0;
-      line-height: 1.5;
+      .settings-section {
+        padding: 1.5rem;
+      }
+
+      .button-group {
+        flex-direction: column;
+      }
+
+      .button {
+        width: 100%;
+        text-align: center;
+      }
     }
   `;
 
@@ -446,17 +617,24 @@ export class SettingsPage extends LitElement {
   render() {
     return html`
       <div class="container">
+        <!-- Japanese character decorations -->
+        <div class="japanese-deco top">設</div>
+        <div class="japanese-deco bottom">定</div>
+
+        <a href="/" class="home-link">← Back to Home</a>
+
         <h1>Settings</h1>
 
         ${this.renderMessages()}
 
         ${this.loading ? html`
-          <div class="status-message">Loading...</div>
+          <div class="status-message">
+            <div class="loading-spinner"></div>
+            <div>Loading settings...</div>
+          </div>
         ` : html`
           ${this.renderYouTubeSection()}
         `}
-
-        <a href="/" class="home-link">Back to Home</a>
       </div>
     `;
   }
@@ -547,14 +725,14 @@ export class SettingsPage extends LitElement {
           ?disabled=${this.refreshing}
           @click=${this.refreshToken}
         >
-          ${this.refreshing ? 'Refreshing...' : 'Refresh Token'}
+          ${this.refreshing ? '[ REFRESHING... ]' : '[ Refresh Token ]'}
         </button>
         <button
           class="button button-danger"
           ?disabled=${this.disconnecting}
           @click=${this.disconnect}
         >
-          ${this.disconnecting ? 'Disconnecting...' : 'Disconnect'}
+          ${this.disconnecting ? '[ DISCONNECTING... ]' : '[ Disconnect Channel ]'}
         </button>
       </div>
     `;
@@ -568,7 +746,7 @@ export class SettingsPage extends LitElement {
           ?disabled=${this.connecting}
           @click=${this.startOAuth}
         >
-          ${this.connecting ? 'Connecting...' : 'Connect YouTube Channel'}
+          ${this.connecting ? '[ CONNECTING... ]' : '[ Connect YouTube Channel ]'}
         </button>
       </div>
     `;
