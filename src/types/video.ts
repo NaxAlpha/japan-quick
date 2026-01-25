@@ -2,6 +2,22 @@
 
 export type VideoType = 'short' | 'long';
 export type VideoSelectionStatus = 'todo' | 'doing' | 'done' | 'error';
+export type ScriptStatus = 'pending' | 'generating' | 'generated' | 'error';
+
+// Script-related interfaces
+export interface Slide {
+  headline: string;           // Short title
+  imageDescription: string;   // Image prompt (always English)
+  audioNarration: string;     // Narration (article language)
+  estimatedDuration: number;  // 10-20 seconds
+}
+
+export interface VideoScript {
+  title: string;              // SEO YouTube title
+  description: string;        // SEO description
+  thumbnailDescription: string; // Compelling thumbnail image prompt
+  slides: Slide[];
+}
 
 // Database record interface (notes as string, total_cost field)
 export interface Video {
@@ -12,14 +28,18 @@ export interface Video {
   video_type: VideoType;
   selection_status: VideoSelectionStatus;
   total_cost: number;
+  script: string | null;             // JSON-serialized VideoScript
+  script_status: ScriptStatus;
+  script_error: string | null;
   created_at: string;
   updated_at: string;
 }
 
 // Frontend-ready interface (notes split by newline to array, articles parsed from JSON)
-export interface ParsedVideo extends Omit<Video, 'notes' | 'articles'> {
+export interface ParsedVideo extends Omit<Video, 'notes' | 'articles' | 'script'> {
   notes: string[];                   // Split by newline
   articles: string[];                // Parsed from JSON
+  script: VideoScript | null;        // Parsed from JSON
 }
 
 // Model info interface
@@ -66,6 +86,7 @@ export function parseVideo(video: Video): ParsedVideo {
   return {
     ...video,
     notes: video.notes ? video.notes.split('\n') : [],
-    articles: video.articles ? JSON.parse(video.articles) : []
+    articles: video.articles ? JSON.parse(video.articles) : [],
+    script: video.script ? JSON.parse(video.script) : null
   };
 }

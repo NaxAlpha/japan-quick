@@ -78,6 +78,12 @@ export class VideosPage extends LitElement {
       border-radius: 0.5rem;
       padding: 1.5rem;
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      cursor: pointer;
+      transition: box-shadow 0.2s;
+    }
+
+    .video-card:hover {
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     }
 
     .video-header {
@@ -111,21 +117,6 @@ export class VideosPage extends LitElement {
       white-space: nowrap;
     }
 
-    .badge.status-todo {
-      background: #fbbf24;
-      color: #78350f;
-    }
-
-    .badge.status-doing {
-      background: #3b82f6;
-      color: white;
-    }
-
-    .badge.status-done {
-      background: #10b981;
-      color: white;
-    }
-
     .badge.type-short {
       background: #8b5cf6;
       color: white;
@@ -147,63 +138,6 @@ export class VideosPage extends LitElement {
     .video-cost {
       font-weight: 600;
       color: #059669;
-    }
-
-    .video-articles {
-      margin-bottom: 1rem;
-    }
-
-    .video-articles-title {
-      font-size: 0.875rem;
-      font-weight: 600;
-      color: #1a1a1a;
-      margin: 0 0 0.5rem 0;
-    }
-
-    .article-links {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-    }
-
-    .article-link {
-      padding: 0.25rem 0.75rem;
-      background: #f3f4f6;
-      border: 1px solid #e5e7eb;
-      border-radius: 0.25rem;
-      color: #3b82f6;
-      text-decoration: none;
-      font-size: 0.875rem;
-      font-weight: 500;
-      transition: background 0.2s;
-    }
-
-    .article-link:hover {
-      background: #e5e7eb;
-    }
-
-    .video-notes {
-      margin-top: 1rem;
-    }
-
-    .video-notes-title {
-      font-size: 0.875rem;
-      font-weight: 600;
-      color: #1a1a1a;
-      margin: 0 0 0.5rem 0;
-    }
-
-    .notes-list {
-      list-style: disc;
-      padding-left: 1.5rem;
-      margin: 0;
-    }
-
-    .notes-list li {
-      font-size: 0.875rem;
-      color: #4b5563;
-      margin-bottom: 0.25rem;
-      line-height: 1.5;
     }
 
     .status-message {
@@ -237,17 +171,8 @@ export class VideosPage extends LitElement {
       padding-top: 1rem;
       border-top: 1px solid #e5e7eb;
       display: flex;
-      justify-content: space-between;
+      justify-content: flex-end;
       align-items: center;
-    }
-
-    .status-container {
-      display: flex;
-      align-items: center;
-    }
-
-    .status-badge.error {
-      background: #dc2626;
     }
 
     .delete-button {
@@ -465,11 +390,6 @@ export class VideosPage extends LitElement {
     });
   }
 
-  private getStatusBadge(status: VideoSelectionStatus) {
-    const classes = `badge status-${status}`;
-    return html`<span class="${classes}">${status.toUpperCase()}</span>`;
-  }
-
   private getTypeBadge(type: VideoType) {
     const classes = `badge type-${type}`;
     const label = type === 'short' ? 'Short (60-120s)' : 'Long (4-6min)';
@@ -527,11 +447,15 @@ export class VideosPage extends LitElement {
     `;
   }
 
+  private navigateToVideo(videoId: number): void {
+    window.location.href = `/video/${videoId}`;
+  }
+
   private renderVideoCard(video: ParsedVideo) {
     const isDeleting = this.deleting.has(video.id);
 
     return html`
-      <div class="video-card">
+      <div class="video-card" @click=${() => this.navigateToVideo(video.id)}>
         <div class="video-header">
           <h2 class="video-title">${video.short_title || 'Untitled Video'}</h2>
           <div class="badges">
@@ -544,34 +468,14 @@ export class VideosPage extends LitElement {
           <span class="video-cost">$${video.total_cost.toFixed(4)}</span>
         </div>
 
-        ${video.articles.length > 0 ? html`
-          <div class="video-articles">
-            <p class="video-articles-title">Articles (${video.articles.length}):</p>
-            <div class="article-links">
-              ${video.articles.map(pickId => html`
-                <a href="/article/pick:${pickId}" class="article-link">pick:${pickId}</a>
-              `)}
-            </div>
-          </div>
-        ` : ''}
-
-        ${video.notes.length > 0 ? html`
-          <div class="video-notes">
-            <p class="video-notes-title">Selection Rationale:</p>
-            <ul class="notes-list">
-              ${video.notes.map(note => html`<li>${note}</li>`)}
-            </ul>
-          </div>
-        ` : ''}
-
         <div class="video-footer">
-          <div class="status-container">
-            ${this.getStatusBadge(video.selection_status)}
-          </div>
           <button
             class="delete-button"
             ?disabled=${isDeleting}
-            @click=${() => this.deleteVideo(video.id)}
+            @click=${(e: Event) => {
+              e.stopPropagation();
+              this.deleteVideo(video.id);
+            }}
           >
             ${isDeleting ? 'Deleting...' : 'Delete'}
           </button>

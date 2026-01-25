@@ -3,7 +3,7 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
-import type { AIArticleInput, AISelectionOutput, VideoType } from '../types/video.js';
+import type { AIArticleInput, AISelectionOutput, VideoType, VideoScript } from '../types/video.js';
 import type { Article } from '../types/article.js';
 import { log } from '../lib/logger.js';
 
@@ -17,6 +17,33 @@ interface SelectionResult {
   shortTitle: string;
   articles: string[];      // Array of pick_id values
   videoType: VideoType;
+  tokenUsage: TokenUsage;
+}
+
+interface ArticleWithContent {
+  pickId: string;
+  title: string;
+  content: string;
+  contentText?: string;
+  comments: Array<{
+    author?: string;
+    content: string;
+    likes: number;
+    replies?: Array<{
+      author?: string;
+      content: string;
+    }>;
+  }>;
+  images: string[];
+}
+
+interface ScriptGenerationInput {
+  videoType: VideoType;
+  articles: ArticleWithContent[];
+}
+
+interface ScriptGenerationResult {
+  script: VideoScript;
   tokenUsage: TokenUsage;
 }
 
@@ -188,6 +215,163 @@ Respond with ONLY the JSON object, no other text.`;
       return result;
     } catch (error) {
       log.gemini.error(reqId, 'Article selection failed', error as Error);
+      throw error;
+    }
+  }
+
+  /**
+   * Build AI script generation prompt with articles and generation rules
+   */
+  buildScriptPrompt(input: ScriptGenerationInput): string {
+    const { videoType, articles } = input;
+    const isShort = videoType === 'short';
+    const aspectRatio = isShort ? '1080x1920 (vertical)' : '1920x1080 (horizontal)';
+    const targetDuration = isShort ? '60-120 seconds' : '4-6 minutes';
+    const slideCount = isShort ? '6-8 slides' : '15-17 slides';
+
+    // Format articles for the prompt
+    const articlesText = articles.map((article, idx) => {
+      let text = `### Article ${idx + 1}: ${article.title}\n\n`;
+      text += `Content:\n${article.contentText || article.content}\n\n`;
+
+      if (article.images.length > 0) {
+        text += `Reference Images:\n${article.images.join('\n')}\n\n`;
+      }
+
+      if (article.comments.length > 0) {
+        const topComments = article.comments.slice(0, 10);
+        text += `Top Comments:\n`;
+        topComments.forEach(comment => {
+          text += `- ${comment.content} (${comment.likes} likes)\n`;
+          if (comment.replies && comment.replies.length > 0) {
+            comment.replies.forEach(reply => {
+              text += `  └ ${reply.content}\n`;
+            });
+          }
+        });
+        text += '\n';
+      }
+
+      return text;
+    }).join('\n---\n\n');
+
+    return `You are an AI video script writer for "Japan Quick", creating structured video scripts for Japanese news content.
+
+VIDEO SPECS:
+- Type: ${videoType}
+- Duration: ${targetDuration}
+- Aspect Ratio: ${aspectRatio}
+- Slides: ${slideCount} (each slide 10-20 seconds)
+
+ARTICLES:
+${articlesText}
+
+TASK:
+Create a compelling video script that tells this story effectively. Follow these requirements:
+
+1. SLIDE COUNT & DURATION:
+   - Create ${slideCount} depending on article length
+   - Each slide should be 10-20 seconds (estimate based on narration)
+   - Distribute information smoothly across slides (no dumping everything at start or end)
+
+2. NARRATION LANGUAGE:
+   - Use the SAME language as the input articles for all text fields (title, description, narration)
+   - Keep the natural flow and tone of the source language
+
+3. IMAGE DESCRIPTIONS (ALWAYS IN ENGLISH):
+   - Be very precise and detailed
+   - Reference objects/subjects from the reference images provided
+   - If famous person, name them directly: "Elon Musk speaking at a podium"
+   - If generic person, prefer male unless story requires female
+   - If a generic person remains part of the story, name them in starting images and reuse: "Ken, a middle-aged businessman"
+   - Prefer angles not showing faces: from backs, from far, blurred in background
+   - For women: full modest attire, no skin showing, prefer head covers or face masks, loose clothes, use culturally relevant items
+   - Images must match story location (Japanese story = Japanese places/people/settings)
+   - Consider aspect ratio ${aspectRatio}: place objects accordingly (vertical vs horizontal composition)
+
+4. THUMBNAIL:
+   - Create a compelling thumbnail matching story content
+   - Include main characters if any (following same image description rules)
+   - Include text overlay matching the video title
+   - Make it attention-grabbing and clickable
+
+RESPONSE FORMAT (JSON only):
+{
+  "title": "SEO-optimized YouTube title in article language",
+  "description": "SEO-optimized description in article language",
+  "thumbnailDescription": "Detailed thumbnail image prompt in English",
+  "slides": [
+    {
+      "headline": "Short slide title",
+      "imageDescription": "Detailed image prompt in English",
+      "audioNarration": "Narration text in article language",
+      "estimatedDuration": 15
+    }
+  ]
+}
+
+RULES:
+- All text fields (title, description, audioNarration, headline) in article language
+- All imageDescription fields in English
+- Title should be compelling and SEO-friendly for YouTube
+- Description should summarize the video and include keywords
+- Each slide's audioNarration should match the estimatedDuration (10-20 seconds of speech)
+- Ensure smooth information flow across all slides
+
+Respond with ONLY the JSON object, no other text.`;
+  }
+
+  /**
+   * Call Gemini AI to generate video script
+   */
+  async generateScript(reqId: string, input: ScriptGenerationInput): Promise<ScriptGenerationResult> {
+    log.scriptGeneration.info(reqId, 'Script generation started', {
+      videoType: input.videoType,
+      articleCount: input.articles.length
+    });
+    const startTime = Date.now();
+
+    try {
+      // Build prompt
+      const prompt = this.buildScriptPrompt(input);
+
+      // Call Gemini API
+      const response = await this.genai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: prompt
+      });
+
+      // Extract token usage
+      const usageMetadata = response.usageMetadata;
+      const tokenUsage: TokenUsage = {
+        inputTokens: usageMetadata?.promptTokenCount || 0,
+        outputTokens: usageMetadata?.candidatesTokenCount || 0
+      };
+
+      const durationMs = Date.now() - startTime;
+      log.scriptGeneration.info(reqId, 'Gemini API call completed', {
+        durationMs,
+        inputTokens: tokenUsage.inputTokens,
+        outputTokens: tokenUsage.outputTokens
+      });
+
+      // Parse JSON response
+      const text = response.text;
+      if (!text) {
+        throw new Error('No text in Gemini response');
+      }
+      const cleanText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
+      const script: VideoScript = JSON.parse(cleanText);
+
+      log.scriptGeneration.info(reqId, 'Script generation completed', {
+        slideCount: script.slides.length,
+        titleLength: script.title.length
+      });
+
+      return { script, tokenUsage };
+    } catch (error) {
+      log.scriptGeneration.error(reqId, 'Script generation failed', error as Error);
       throw error;
     }
   }

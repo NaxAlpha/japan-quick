@@ -43,6 +43,19 @@ frontendRoutes.get('/article/:id', (c) => {
   return c.html(html);
 });
 
+// Video detail page - uses video-page component with video ID parameter
+frontendRoutes.get('/video/:id', (c) => {
+  const videoId = c.req.param('id');
+  const html = renderPageTemplateWithProps({
+    title: 'Video Details - Japan Quick',
+    description: 'Video script and selection details',
+    componentName: 'video-page',
+    scriptPath: '/frontend/pages/video-page.js',
+    props: { videoId }
+  });
+  return c.html(html);
+});
+
 // Videos page - uses videos-page component
 frontendRoutes.get('/videos', (c) => {
   const html = renderPageTemplate({

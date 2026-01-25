@@ -150,6 +150,7 @@ export function createLogger(component: string): Logger {
 export const log = {
   // AI Services
   gemini: createLogger('GeminiService'),
+  scriptGeneration: createLogger('ScriptGeneration'),
 
   // Scrapers
   articleScraper: createLogger('ArticleScraper'),
