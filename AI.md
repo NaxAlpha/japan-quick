@@ -17,7 +17,8 @@ japan-quick/
 │   ├── 002_articles.sql        # Database migration for articles tables
 │   ├── 003_videos.sql          # Database migration for videos, models, cost_logs tables
 │   ├── 004_youtube_auth.sql    # Database migration for YouTube OAuth tokens
-│   └── 005_comment_reactions.sql # Database migration for comment reactions and replies
+│   ├── 005_comment_reactions.sql # Database migration for comment reactions and replies
+│   └── 006_video_scripts.sql   # Database migration for video script columns
 ├── src/
 │   ├── index.ts                # Cloudflare Workers backend with Hono + workflow exports
 │   ├── middleware/
@@ -36,12 +37,13 @@ japan-quick/
 │   │       ├── news-page.ts    # News page component (workflow trigger/poll/result pattern)
 │   │       ├── article-page.ts # Article detail page component
 │   │       ├── videos-page.ts  # Videos page component (video selection management)
+│   │       ├── video-page.ts   # Video detail page component (metadata, selection, script cards)
 │   │       └── settings-page.ts # Settings page component (YouTube OAuth connection)
 │   ├── services/
 │   │   ├── news-scraper.ts           # Yahoo News Japan scraper (filters pickup URLs only, with thorough logging)
 │   │   ├── article-scraper.ts        # Yahoo News article scraper (full content + comments)
 │   │   ├── article-scraper-core.ts   # Core article scraping logic (serial processing)
-│   │   ├── gemini.ts                 # Gemini AI service (article selection for videos)
+│   │   ├── gemini.ts                 # Gemini AI service (article selection and script generation)
 │   │   └── youtube-auth.ts           # YouTube OAuth 2.0 service (token management, channel operations)
 │   ├── types/
 │   │   ├── news.ts             # News type definitions + Env type (single source of truth)
@@ -53,7 +55,7 @@ japan-quick/
 │   │   ├── articles.ts         # API routes for article management
 │   │   ├── videos.ts           # API routes for video workflow management
 │   │   ├── youtube.ts          # API routes for YouTube OAuth (status, auth URL, callback, refresh, disconnect)
-│   │   └── frontend.ts         # Frontend route handlers (/, /news, /article/:id, /videos, /settings)
+│   │   └── frontend.ts         # Frontend route handlers (/, /news, /article/:id, /videos, /video/:id, /settings)
 │   ├── lib/
 │   │   ├── logger.ts           # Structured logging utility with request ID tracking
 │   │   └── html-template.ts    # HTML template utilities (with props support)
@@ -82,6 +84,7 @@ japan-quick/
   - `GET /news` - News page (public, renders news-page component)
   - `GET /article/:id` - Article detail page (public, renders article-page component)
   - `GET /videos` - Videos page (public, renders videos-page component)
+  - `GET /video/:id` - Video detail page (public, renders video-page component)
   - `GET /settings` - Settings page (public, renders settings-page component - YouTube OAuth)
   - `GET /api/status` - Service status endpoint (protected)
   - `GET /api/hello` - Health check/JSON API endpoint (protected)
@@ -103,6 +106,7 @@ japan-quick/
     - `GET /api/videos/:id` - Get single video with cost logs
     - `POST /api/videos/trigger` - Manual workflow trigger
     - `GET /api/videos/status/:workflowId` - Workflow status
+    - `POST /api/videos/:id/generate-script` - Generate video script using Gemini AI
     - `DELETE /api/videos/:id` - Delete video and its cost logs
   - **YouTube OAuth API Routes (protected):**
     - `GET /api/youtube/status` - Get current YouTube authentication status
@@ -120,6 +124,7 @@ japan-quick/
   - `<news-page>`: News scraping interface with article status badges (all article clicks navigate to article page)
   - `<article-page>`: Article detail view with version selector, workflow trigger for unscraped articles
   - `<videos-page>`: Video selection management interface with workflow trigger
+  - `<video-page>`: Video detail view with metadata, selection, and script cards
 - Build output: `public/frontend/` directory (from TypeScript compilation)
 - Styling: Scoped CSS within Lit components
 - Purpose: Provides interface for content generation, preview, and management
@@ -268,6 +273,21 @@ The application uses a structured logging utility (`src/lib/logger.ts`) for cons
 
 **Log format:** `[reqId] [timestamp] [level] [component] message | key=value`
 
+**Logger Components**:
+- `newsRoutes`: News API route handlers
+- `newsWorkflow`: News scraper workflow
+- `newsScraper`: News scraping service
+- `articleRoutes`: Article API route handlers
+- `articleWorkflow`: Article scraper workflow
+- `articleScraper`: Article scraping service
+- `videoRoutes`: Video API route handlers
+- `videoWorkflow`: Video selection workflow
+- `gemini`: Gemini AI service (selection and script generation)
+- `scriptGeneration`: Video script generation operations
+- `youtubeRoutes`: YouTube OAuth route handlers
+- `youtubeAuth`: YouTube OAuth service
+- `auth`: Authentication middleware
+
 **Usage:**
 ```typescript
 import { log, generateRequestId } from '../lib/logger.js';
@@ -280,6 +300,9 @@ log.newsRoutes.info(reqId, 'Request received', { method: 'POST', path: '/trigger
 async selectArticles(reqId: string, articles: Article[]) {
   log.gemini.info(reqId, 'Article selection started', { articleCount: articles.length });
 }
+
+// Script generation
+log.scriptGeneration.info(reqId, 'Script generation started', { videoId, videoType });
 
 // Middleware and utility - no reqId needed (auto-generated)
 log.auth.info('Auth attempt', { path: '/api/hello', hasUsername: 'present' });
@@ -460,6 +483,9 @@ CREATE TABLE videos (
   articles TEXT,                 -- JSON array of pick_id values
   video_type TEXT NOT NULL,      -- "short" | "long"
   selection_status TEXT NOT NULL DEFAULT 'todo',  -- "todo" | "doing" | "done"
+  script TEXT,                   -- JSON string of VideoScript (title, description, slides)
+  script_status TEXT DEFAULT 'pending',  -- "pending" | "generating" | "generated" | "error"
+  script_error TEXT,             -- Error message if script generation fails
   total_cost REAL DEFAULT 0,     -- Sum of all cost_logs for this video
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -487,7 +513,28 @@ CREATE TABLE cost_logs (
 - **videos.video_type**: short (60-120s, 1080x1920) | long (4-6min, 1920x1080)
 - **videos.selection_status**: todo | doing | done | error
 - **videos.articles**: JSON array of pick_id values selected by AI
+- **videos.script**: JSON string of VideoScript interface
+- **videos.script_status**: pending | generating | generated | error
 - **cost_logs.log_type**: Operation type (e.g., "video-selection", "script-generation")
+
+**VideoScript Interface**:
+```typescript
+interface VideoScript {
+  title: string;                // SEO-optimized Japanese title
+  description: string;          // SEO-optimized Japanese description
+  thumbnailDescription: string; // English description for thumbnail image
+  slides: Slide[];              // Array of slides
+}
+
+interface Slide {
+  headline: string;             // Japanese headline text
+  imageDescription: string;     // English description for AI image generation
+  audioNarration: string;       // Japanese narration text
+  estimatedDuration: number;    // Duration in seconds (10-20)
+}
+```
+
+**ScriptStatus Type**: `'pending' | 'generating' | 'generated' | 'error'`
 
 ## Yahoo News Japan Scraper
 
@@ -551,7 +598,7 @@ The comment scraper extracts detailed comment data from Yahoo News:
 
 ## Gemini AI Integration
 
-The application uses Google's Gemini AI to intelligently select articles for video generation.
+The application uses Google's Gemini AI for two main purposes: article selection and video script generation.
 
 ### Model Configuration
 
@@ -559,10 +606,13 @@ The application uses Google's Gemini AI to intelligently select articles for vid
 - **Pricing**:
   - Input: $0.50 per 1M tokens
   - Output: $3.00 per 1M tokens
-- **Purpose**: Analyze recently scraped articles and select the most important ones for video generation
 - **Package**: `@google/genai` (Google's official Gemini API client)
 
-### Selection Criteria
+### Article Selection
+
+**Purpose**: Analyze recently scraped articles and select the most important ones for video generation
+
+**Selection Criteria**:
 
 The AI evaluates articles based on five criteria:
 
@@ -613,6 +663,38 @@ Articles are formatted with 4-digit indices for efficient reference:
 - Includes examples for both short and long video types
 - Content preferences: useful, helpful, educational
 - Exclusions: celebrity gossip, death-related content, personal life stories
+
+### Video Script Generation
+
+**Purpose**: Generate structured video scripts from selected articles
+
+**Model**: `gemini-3-flash-preview` (same as selection)
+
+**Input Data**:
+- Video type (short or long)
+- Selected articles with:
+  - Article content (HTML and text)
+  - Comments with reactions and replies
+  - Images with URLs
+
+**Output Format**: VideoScript with:
+- SEO-optimized title and description (in article language)
+- Thumbnail description (English, for AI image generation)
+- Array of slides with:
+  - Headline (article language)
+  - Image description (English, for AI image generation)
+  - Audio narration (article language)
+  - Estimated duration (10-20 seconds per slide)
+
+**Slide Counts**:
+- Short videos: 6-8 slides
+- Long videos: 15-17 slides
+
+**Language Rules**:
+- Article text content (title, description, headlines, narration): Use article's language
+- Image descriptions (thumbnail, slides): Always English for AI image generation compatibility
+
+**Cost Tracking**: All operations logged to `cost_logs` with `log_type='script-generation'`
 
 ### Cost Tracking
 
