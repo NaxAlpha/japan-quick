@@ -3,6 +3,27 @@
 export type VideoType = 'short' | 'long';
 export type VideoSelectionStatus = 'todo' | 'doing' | 'done' | 'error';
 export type ScriptStatus = 'pending' | 'generating' | 'generated' | 'error';
+export type AssetStatus = 'pending' | 'generating' | 'generated' | 'error';
+
+// Model ID types
+export type ImageModelId = 'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview';
+export type TTSModelId = 'gemini-2.5-flash-preview-tts' | 'gemini-2.5-pro-preview-tts';
+
+// TTS voice type (30 voices)
+export type TTSVoice = 'Zephyr' | 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Leda' |
+  'Enceladus' | 'Aoede' | 'Autonoe' | 'Laomedeia' | 'Iapetus' | 'Erinome' |
+  'Alnilam' | 'Algieba' | 'Despina' | 'Umbriel' | 'Callirrhoe' | 'Achernar' |
+  'Sulafat' | 'Vindemiatrix' | 'Achird' | 'Orus' | 'Algenib' | 'Rasalgethi' |
+  'Gacrux' | 'Pulcherrima' | 'Zubenelgenubi' | 'Sadachbia' | 'Sadaltager';
+
+// TTS voices array for runtime
+export const TTS_VOICES: readonly TTSVoice[] = [
+  'Zephyr', 'Puck', 'Charon', 'Kore', 'Fenrir', 'Leda', 'Enceladus', 'Aoede',
+  'Autonoe', 'Laomedeia', 'Iapetus', 'Erinome', 'Alnilam', 'Algieba', 'Despina',
+  'Umbriel', 'Callirrhoe', 'Achernar', 'Sulafat', 'Vindemiatrix', 'Achird',
+  'Orus', 'Algenib', 'Rasalgethi', 'Gacrux', 'Pulcherrima', 'Zubenelgenubi',
+  'Sadachbia', 'Sadaltager'
+] as const;
 
 // Script-related interfaces
 export interface Slide {
@@ -19,6 +40,56 @@ export interface VideoScript {
   slides: Slide[];
 }
 
+// Asset metadata interfaces
+export interface GridImageMetadata {
+  gridIndex: number;              // 0 or 1
+  aspectRatio: '9:16' | '16:9';
+  width: number;                  // 1080 or 1920
+  height: number;                 // 1920 or 1080
+  cellWidth: number;              // 360 or 640
+  cellHeight: number;             // 640 or 360
+  positions: Array<{
+    cell: number;                 // 0-8
+    slideIndex: number | null;    // null for thumbnail or empty
+    isThumbnail: boolean;
+    isEmpty: boolean;
+    cropRect: { x: number; y: number; w: number; h: number };
+  }>;
+}
+
+export interface SlideAudioMetadata {
+  slideIndex: number;
+  voiceName: string;
+  durationMs: number;
+  sampleRate: number;             // 24000
+  channels: number;               // 1
+  bitDepth: number;               // 16
+}
+
+// Video asset interfaces
+export interface VideoAsset {
+  id: number;
+  video_id: number;
+  asset_type: 'grid_image' | 'slide_audio';
+  asset_index: number;
+  r2_key: string;
+  mime_type: string;
+  file_size: number | null;
+  metadata: string | null;
+  created_at: string;
+}
+
+// Parsed asset for frontend (with URL)
+export interface ParsedVideoAsset {
+  id: number;
+  assetType: 'grid_image' | 'slide_audio';
+  assetIndex: number;
+  url: string;                    // Served via API route
+  mimeType: string;
+  fileSize: number | null;
+  metadata: GridImageMetadata | SlideAudioMetadata | null;
+}
+
 // Database record interface (notes as string, total_cost field)
 export interface Video {
   id: number;
@@ -31,6 +102,11 @@ export interface Video {
   script: string | null;             // JSON-serialized VideoScript
   script_status: ScriptStatus;
   script_error: string | null;
+  asset_status: AssetStatus;
+  asset_error: string | null;
+  image_model: ImageModelId;
+  tts_model: TTSModelId;
+  tts_voice: TTSVoice | null;
   created_at: string;
   updated_at: string;
 }
@@ -40,6 +116,7 @@ export interface ParsedVideo extends Omit<Video, 'notes' | 'articles' | 'script'
   notes: string[];                   // Split by newline
   articles: string[];                // Parsed from JSON
   script: VideoScript | null;        // Parsed from JSON
+  assets: ParsedVideoAsset[];        // Video assets with URLs
 }
 
 // Model info interface
@@ -87,6 +164,7 @@ export function parseVideo(video: Video): ParsedVideo {
     ...video,
     notes: video.notes ? video.notes.split('\n') : [],
     articles: video.articles ? JSON.parse(video.articles) : [],
-    script: video.script ? JSON.parse(video.script) : null
+    script: video.script ? JSON.parse(video.script) : null,
+    assets: [] // Assets are populated separately in the route handler
   };
 }

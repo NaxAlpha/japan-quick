@@ -19,6 +19,10 @@ binding = "DB"
 database_name = "japan-quick-db"
 database_id = "f1417a4f-09de-4ae4-94fe-653ed953c0a6"
 
+[[r2_buckets]]
+binding = "ASSETS_BUCKET"
+bucket_name = "japan-quick-assets"
+
 [vars]
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "GvkP525fTX0ocMTw8XtAqM9ECvNIx50v"

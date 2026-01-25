@@ -50,6 +50,7 @@ export type Env = {
     BROWSER: BrowserBinding | null;
     NEWS_CACHE: KVNamespace;
     DB: D1Database;
+    ASSETS_BUCKET: R2Bucket;
     NEWS_SCRAPER_WORKFLOW: Workflow;
     SCHEDULED_REFRESH_WORKFLOW: Workflow;
     ARTICLE_SCRAPER_WORKFLOW: Workflow;
