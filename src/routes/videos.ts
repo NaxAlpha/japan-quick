@@ -1,20 +1,25 @@
 /**
  * Video API routes - Video selection workflow endpoints
  * GET /api/videos - List 10 most recent videos (supports ?page=N)
- * GET /api/videos/:id - Get single video
+ * GET /api/videos/:id - Get single video with assets
  * DELETE /api/videos/:id - Delete video and cost logs
+ * POST /api/videos/:id/generate-script - Generate video script
+ * POST /api/videos/:id/generate-assets - Generate video assets (images + audio)
+ * GET /api/videos/:id/assets/:assetId - Serve asset from R2
  * POST /api/videos/trigger - Manual workflow trigger
  * GET /api/videos/status/:workflowId - Workflow status
  */
 
 import { Hono } from 'hono';
 import type { Env } from '../types/news.js';
-import type { Video, ParsedVideo, CostLog } from '../types/video.js';
+import type { Video, ParsedVideo, CostLog, VideoAsset, ParsedVideoAsset, VideoScript, TTS_VOICES } from '../types/video.js';
 import type { VideoSelectionParams, VideoSelectionResult } from '../workflows/video-selection.workflow.js';
 import type { Article, ArticleVersion, ArticleComment } from '../types/article.js';
-import { parseVideo } from '../types/video.js';
+import { parseVideo, TTS_VOICES as TTSVoicesArray } from '../types/video.js';
 import { log, generateRequestId } from '../lib/logger.js';
 import { GeminiService } from '../services/gemini.js';
+import { AssetGeneratorService } from '../services/asset-generator.js';
+import { R2StorageService } from '../services/r2-storage.js';
 
 const videoRoutes = new Hono<{ Bindings: Env['Bindings'] }>();
 
@@ -69,7 +74,7 @@ videoRoutes.get('/', async (c) => {
   }
 });
 
-// GET /api/videos/:id - Get single video with cost logs
+// GET /api/videos/:id - Get single video with cost logs and assets
 videoRoutes.get('/:id', async (c) => {
   const reqId = generateRequestId();
   const startTime = Date.now();
@@ -97,9 +102,26 @@ videoRoutes.get('/:id', async (c) => {
 
     const costLogs = costLogsResult.results as CostLog[];
 
+    // Fetch video assets
+    const assetsResult = await c.env.DB.prepare(`
+      SELECT * FROM video_assets WHERE video_id = ? ORDER BY asset_type, asset_index
+    `).bind(id).all();
+
+    const assets: ParsedVideoAsset[] = (assetsResult.results as VideoAsset[]).map(asset => ({
+      id: asset.id,
+      assetType: asset.asset_type,
+      assetIndex: asset.asset_index,
+      url: `/api/videos/${id}/assets/${asset.id}`,
+      mimeType: asset.mime_type,
+      fileSize: asset.file_size,
+      metadata: asset.metadata ? JSON.parse(asset.metadata) : null
+    }));
+
+    const parsedVideo = parseVideo(video);
+
     return c.json({
       success: true,
-      video: parseVideo(video),
+      video: { ...parsedVideo, assets },
       costLogs
     });
   } catch (error) {
@@ -344,6 +366,189 @@ videoRoutes.post('/:id/generate-script', async (c) => {
   } finally {
     const durationMs = Date.now() - startTime;
     log.videoRoutes.info(reqId, 'Request completed', { durationMs });
+  }
+});
+
+// POST /api/videos/:id/generate-assets - Generate grid images and slide audio
+videoRoutes.post('/:id/generate-assets', async (c) => {
+  const reqId = generateRequestId();
+  const startTime = Date.now();
+  const id = parseInt(c.req.param('id'));
+  log.assetRoutes.info(reqId, 'Asset generation requested', { videoId: id });
+
+  try {
+    // 1. Fetch video and validate
+    const video = await c.env.DB.prepare('SELECT * FROM videos WHERE id = ?').bind(id).first<Video>();
+    if (!video) {
+      log.assetRoutes.warn(reqId, 'Video not found', { videoId: id });
+      return c.json({ success: false, error: 'Video not found' }, 404);
+    }
+    if (video.script_status !== 'generated') {
+      log.assetRoutes.warn(reqId, 'Script not generated yet', { videoId: id, scriptStatus: video.script_status });
+      return c.json({ success: false, error: 'Script not generated yet' }, 400);
+    }
+    if (video.asset_status === 'generating') {
+      log.assetRoutes.warn(reqId, 'Asset generation already in progress', { videoId: id });
+      return c.json({ success: false, error: 'Asset generation in progress' }, 409);
+    }
+
+    // 2. Select random voice if not already set
+    const ttsVoice = video.tts_voice || TTSVoicesArray[Math.floor(Math.random() * TTSVoicesArray.length)];
+
+    // 3. Update status to generating
+    await c.env.DB.prepare(`
+      UPDATE videos SET asset_status = 'generating', tts_voice = ?, updated_at = datetime('now')
+      WHERE id = ?
+    `).bind(ttsVoice, id).run();
+
+    log.assetRoutes.info(reqId, 'Asset status set to generating', { videoId: id, ttsVoice });
+
+    const script: VideoScript = JSON.parse(video.script!);
+    const isShort = video.video_type === 'short';
+
+    // 4. Fetch article reference images
+    const articleIds = JSON.parse(video.articles!);
+    const referenceImages: string[] = [];
+
+    for (const pickId of articleIds) {
+      const article = await c.env.DB.prepare(`
+        SELECT id FROM articles WHERE pick_id = ?
+      `).bind(pickId).first<{ id: number }>();
+
+      if (!article) continue;
+
+      const version = await c.env.DB.prepare(`
+        SELECT images FROM article_versions
+        WHERE article_id = ?
+        ORDER BY version DESC
+        LIMIT 1
+      `).bind(article.id).first<{ images: string | null }>();
+
+      if (version?.images) {
+        const images = JSON.parse(version.images) as Array<{ url: string }>;
+        // TODO: In production, fetch and convert images to base64
+        // For now, we'll skip this as it requires actual image fetching
+      }
+    }
+
+    // 5. Initialize services
+    const assetGen = new AssetGeneratorService(c.env.GOOGLE_API_KEY);
+    const r2 = new R2StorageService(c.env.ASSETS_BUCKET);
+
+    // 6. Generate grid images
+    log.assetRoutes.info(reqId, 'Generating grid images', { videoId: id, videoType: video.video_type });
+    const gridImages = await assetGen.generateGridImages(
+      reqId, script, video.video_type, video.image_model, referenceImages
+    );
+
+    // 7. Upload grid images and create records
+    for (let i = 0; i < gridImages.length; i++) {
+      const img = gridImages[i];
+      const data = Uint8Array.from(atob(img.base64), c => c.charCodeAt(0));
+      const { key, size } = await r2.uploadAsset(id, 'grid_image', i, data.buffer, img.mimeType);
+
+      await c.env.DB.prepare(`
+        INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, mime_type, file_size, metadata)
+        VALUES (?, 'grid_image', ?, ?, ?, ?, ?)
+      `).bind(id, i, key, img.mimeType, size, JSON.stringify(img.metadata)).run();
+
+      log.assetRoutes.info(reqId, `Grid ${i} uploaded`, { videoId: id, key, size });
+    }
+
+    // 8. Generate and upload slide audio
+    log.assetRoutes.info(reqId, 'Generating slide audio', { videoId: id, slideCount: script.slides.length });
+    for (let i = 0; i < script.slides.length; i++) {
+      const audio = await assetGen.generateSlideAudio(
+        reqId, script.slides[i].audioNarration, ttsVoice, video.tts_model
+      );
+
+      // Set the correct slideIndex in metadata
+      audio.metadata.slideIndex = i;
+
+      const data = Uint8Array.from(atob(audio.base64), c => c.charCodeAt(0));
+      const { key, size } = await r2.uploadAsset(id, 'slide_audio', i, data.buffer, audio.mimeType);
+
+      await c.env.DB.prepare(`
+        INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, mime_type, file_size, metadata)
+        VALUES (?, 'slide_audio', ?, ?, ?, ?, ?)
+      `).bind(id, i, key, audio.mimeType, size, JSON.stringify(audio.metadata)).run();
+
+      log.assetRoutes.info(reqId, `Slide audio ${i} uploaded`, { videoId: id, key, size, durationMs: audio.metadata.durationMs });
+    }
+
+    // 9. Log costs
+    const gridCount = gridImages.length;
+    const imageCost = gridCount * (video.image_model === 'gemini-2.5-flash-image' ? 0.039 : 0.134);
+    await c.env.DB.prepare(`
+      INSERT INTO cost_logs (video_id, log_type, model_id, input_tokens, output_tokens, cost)
+      VALUES (?, 'image-generation', ?, 0, 0, ?)
+    `).bind(id, video.image_model, imageCost).run();
+
+    // Note: TTS cost logging would require token counts from Gemini API response
+    // For now we're not logging TTS costs as the API doesn't return token usage
+
+    // 10. Update video status
+    const totalCostResult = await c.env.DB.prepare(`
+      SELECT SUM(cost) as total FROM cost_logs WHERE video_id = ?
+    `).bind(id).first<{ total: number }>();
+
+    const totalCost = totalCostResult?.total || 0;
+
+    await c.env.DB.prepare(`
+      UPDATE videos SET asset_status = 'generated', total_cost = ?, updated_at = datetime('now')
+      WHERE id = ?
+    `).bind(totalCost, id).run();
+
+    log.assetRoutes.info(reqId, 'Asset generation completed', {
+      videoId: id,
+      gridCount,
+      slideCount: script.slides.length,
+      totalCost,
+      durationMs: Date.now() - startTime
+    });
+
+    return c.json({ success: true });
+  } catch (error) {
+    log.assetRoutes.error(reqId, 'Asset generation failed', error as Error, { videoId: id });
+    await c.env.DB.prepare(`
+      UPDATE videos SET asset_status = 'error', asset_error = ?, updated_at = datetime('now')
+      WHERE id = ?
+    `).bind((error as Error).message, id).run();
+    return c.json({ success: false, error: (error as Error).message }, 500);
+  }
+});
+
+// GET /api/videos/:id/assets/:assetId - Serve asset from R2
+videoRoutes.get('/:id/assets/:assetId', async (c) => {
+  const videoId = c.req.param('id');
+  const assetId = c.req.param('assetId');
+
+  try {
+    const asset = await c.env.DB.prepare(`
+      SELECT * FROM video_assets WHERE id = ? AND video_id = ?
+    `).bind(assetId, videoId).first<VideoAsset>();
+
+    if (!asset) {
+      return c.json({ error: 'Asset not found' }, 404);
+    }
+
+    const r2 = new R2StorageService(c.env.ASSETS_BUCKET);
+    const object = await r2.getAsset(asset.r2_key);
+
+    if (!object) {
+      return c.json({ error: 'Asset file not found in storage' }, 404);
+    }
+
+    return new Response(object.body, {
+      headers: {
+        'Content-Type': asset.mime_type,
+        'Content-Length': String(asset.file_size || 0),
+        'Cache-Control': 'public, max-age=31536000'
+      }
+    });
+  } catch (error) {
+    log.assetRoutes.error('Asset retrieval failed', error as Error, { videoId, assetId });
+    return c.json({ error: 'Failed to retrieve asset' }, 500);
   }
 });
 

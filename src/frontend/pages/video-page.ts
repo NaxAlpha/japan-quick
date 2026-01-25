@@ -7,39 +7,13 @@
 
 import { LitElement, html, css } from 'lit';
 import { customElement, state, property } from 'lit/decorators.js';
-
-type VideoType = 'short' | 'long';
-type VideoSelectionStatus = 'todo' | 'doing' | 'done' | 'error';
-type ScriptStatus = 'pending' | 'generating' | 'generated' | 'error';
-
-interface Slide {
-  headline: string;
-  imageDescription: string;
-  audioNarration: string;
-  estimatedDuration: number;
-}
-
-interface VideoScript {
-  title: string;
-  description: string;
-  thumbnailDescription: string;
-  slides: Slide[];
-}
-
-interface ParsedVideo {
-  id: number;
-  notes: string[];
-  short_title: string | null;
-  articles: string[];
-  video_type: VideoType;
-  selection_status: VideoSelectionStatus;
-  total_cost: number;
-  script: VideoScript | null;
-  script_status: ScriptStatus;
-  script_error: string | null;
-  created_at: string;
-  updated_at: string;
-}
+import type {
+  ParsedVideo,
+  ImageModelId,
+  TTSModelId,
+  GridImageMetadata,
+  SlideAudioMetadata
+} from '../types/video.js';
 
 @customElement('video-page')
 export class VideoPage extends LitElement {
@@ -399,6 +373,155 @@ export class VideoPage extends LitElement {
       color: #6b7280;
       font-weight: 500;
     }
+
+    /* Video Assets Card Styles */
+    .assets-card {
+      background: white;
+      border-radius: 0.5rem;
+      padding: 1.5rem;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+
+    .model-selectors {
+      display: flex;
+      gap: 1rem;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .model-selector {
+      flex: 1;
+      min-width: 200px;
+    }
+
+    .model-selector label {
+      display: block;
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: #666;
+      text-transform: uppercase;
+      margin-bottom: 0.25rem;
+    }
+
+    .model-selector select {
+      width: 100%;
+      padding: 0.5rem;
+      border: 1px solid #e5e7eb;
+      border-radius: 0.375rem;
+      font-size: 0.875rem;
+      color: #1a1a1a;
+      background: white;
+    }
+
+    .asset-button {
+      padding: 0.75rem 1.5rem;
+      background: #10b981;
+      border: none;
+      border-radius: 0.5rem;
+      color: white;
+      font-size: 1rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+      margin-top: 1rem;
+    }
+
+    .asset-button:hover:not(:disabled) {
+      background: #059669;
+    }
+
+    .asset-button:disabled {
+      background: #9ca3af;
+      cursor: not-allowed;
+    }
+
+    .badge.asset-pending {
+      background: #e5e7eb;
+      color: #374151;
+    }
+
+    .badge.asset-generating {
+      background: #3b82f6;
+      color: white;
+    }
+
+    .badge.asset-generated {
+      background: #10b981;
+      color: white;
+    }
+
+    .badge.asset-error {
+      background: #ef4444;
+      color: white;
+    }
+
+    .grids-container {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-top: 1.5rem;
+    }
+
+    .grid-preview {
+      border: 1px solid #e5e7eb;
+      border-radius: 0.5rem;
+      overflow: hidden;
+    }
+
+    .grid-preview img {
+      display: block;
+      max-width: 300px;
+      height: auto;
+    }
+
+    .slides-audio-list {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+
+    .slide-audio-item {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 1rem;
+      background: #fafbfc;
+      border: 1px solid #e5e7eb;
+      border-radius: 0.5rem;
+    }
+
+    .slide-crop {
+      width: 60px;
+      height: 60px;
+      overflow: hidden;
+      position: relative;
+      border-radius: 0.375rem;
+      flex-shrink: 0;
+      background: #f3f4f6;
+    }
+
+    .slide-crop img {
+      width: 180px;
+      height: 180px;
+      position: absolute;
+    }
+
+    .slide-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .slide-audio-player {
+      width: 100%;
+    }
+
+    .slide-audio-player audio {
+      width: 100%;
+      height: 32px;
+    }
   `;
 
   @property({ type: String })
@@ -416,9 +539,26 @@ export class VideoPage extends LitElement {
   @state()
   private generatingScript = false;
 
+  @state()
+  private generatingAssets = false;
+
+  @state()
+  private selectedImageModel: ImageModelId = 'gemini-2.5-flash-image';
+
+  @state()
+  private selectedTTSModel: TTSModelId = 'gemini-2.5-flash-preview-tts';
+
   connectedCallback(): void {
     super.connectedCallback();
     this.loadVideo();
+  }
+
+  updated(changedProperties: Map<string, unknown>): void {
+    super.updated(changedProperties);
+    if (changedProperties.has('video') && this.video) {
+      this.selectedImageModel = this.video.image_model;
+      this.selectedTTSModel = this.video.tts_model;
+    }
   }
 
   private async loadVideo(): Promise<void> {
@@ -485,6 +625,46 @@ export class VideoPage extends LitElement {
       this.error = err instanceof Error ? err.message : 'Failed to generate script';
     } finally {
       this.generatingScript = false;
+    }
+  }
+
+  private async generateAssets(): Promise<void> {
+    if (!this.video) return;
+
+    this.generatingAssets = true;
+    this.error = '';
+
+    try {
+      const username = 'admin';
+      const password = 'GvkP525fTX0ocMTw8XtAqM9ECvNIx50v';
+      const credentials = btoa(`${username}:${password}`);
+
+      const response = await fetch(`/api/videos/${this.videoId}/generate-assets`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Basic ${credentials}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          image_model: this.selectedImageModel,
+          tts_model: this.selectedTTSModel
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to generate assets: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      if (data.success) {
+        this.video = data.video;
+      } else {
+        this.error = data.error || 'Failed to generate assets';
+      }
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : 'Failed to generate assets';
+    } finally {
+      this.generatingAssets = false;
     }
   }
 
@@ -636,6 +816,155 @@ export class VideoPage extends LitElement {
     `;
   }
 
+  private getCropStyle(cell: number): string {
+    const row = Math.floor(cell / 3);
+    const col = cell % 3;
+    const left = -(col * 60);
+    const top = -(row * 60);
+    return `left: ${left}px; top: ${top}px;`;
+  }
+
+  private renderAssetsCard(): unknown {
+    if (!this.video) return null;
+
+    const { asset_status, asset_error, assets, script, tts_voice } = this.video;
+    const hasAssets = assets && assets.length > 0;
+    const gridAssets = hasAssets ? assets.filter(a => a.assetType === 'grid_image') : [];
+    const audioAssets = hasAssets ? assets.filter(a => a.assetType === 'slide_audio') : [];
+
+    return html`
+      <div class="assets-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <h2 class="card-title" style="margin: 0;">Video Assets</h2>
+          <span class="badge asset-${asset_status}">${asset_status}</span>
+        </div>
+
+        ${asset_error && asset_status === 'error' ? html`
+          <div class="error-message">${asset_error}</div>
+        ` : ''}
+
+        <div class="model-selectors">
+          <div class="model-selector">
+            <label>Image Model</label>
+            <select
+              @change=${(e: Event) => {
+                this.selectedImageModel = (e.target as HTMLSelectElement).value as ImageModelId;
+              }}
+              .value=${this.selectedImageModel}
+              ?disabled=${asset_status === 'generating'}
+            >
+              <option value="gemini-2.5-flash-image">Flash ($0.039)</option>
+              <option value="gemini-3-pro-image-preview">Pro ($0.134)</option>
+            </select>
+          </div>
+
+          <div class="model-selector">
+            <label>TTS Model</label>
+            <select
+              @change=${(e: Event) => {
+                this.selectedTTSModel = (e.target as HTMLSelectElement).value as TTSModelId;
+              }}
+              .value=${this.selectedTTSModel}
+              ?disabled=${asset_status === 'generating'}
+            >
+              <option value="gemini-2.5-flash-preview-tts">Flash TTS</option>
+              <option value="gemini-2.5-pro-preview-tts">Pro TTS</option>
+            </select>
+          </div>
+        </div>
+
+        ${asset_status === 'pending' || asset_status === 'error' ? html`
+          <button
+            class="asset-button"
+            @click=${this.generateAssets}
+            ?disabled=${this.generatingAssets}
+          >
+            ${this.generatingAssets ? 'Generating...' : asset_status === 'error' ? 'Retry Generation' : 'Generate Assets'}
+          </button>
+        ` : ''}
+
+        ${asset_status === 'generating' ? html`
+          <div style="display: flex; align-items: center; gap: 1rem; margin-top: 1rem;">
+            <div class="loading-spinner"></div>
+            <span style="color: #666;">Generating assets, please wait...</span>
+          </div>
+        ` : ''}
+
+        ${asset_status === 'generated' && hasAssets ? html`
+          <button
+            class="asset-button"
+            @click=${this.generateAssets}
+            ?disabled=${this.generatingAssets}
+          >
+            ${this.generatingAssets ? 'Regenerating...' : 'Regenerate Assets'}
+          </button>
+
+          ${gridAssets.length > 0 ? html`
+            <div class="grids-container">
+              ${gridAssets.map((asset, idx) => html`
+                <div class="grid-preview">
+                  <img src="${asset.url}" alt="Grid ${idx}" />
+                </div>
+              `)}
+            </div>
+          ` : ''}
+
+          ${audioAssets.length > 0 && script ? html`
+            <div style="margin-top: 1.5rem;">
+              ${tts_voice ? html`
+                <div style="margin-bottom: 1rem;">
+                  <span class="badge" style="background: #8b5cf6; color: white;">Voice: ${tts_voice}</span>
+                </div>
+              ` : ''}
+
+              <div class="slides-audio-list">
+                ${audioAssets.map((asset) => {
+                  const metadata = asset.metadata as SlideAudioMetadata | null;
+                  const slideIndex = metadata?.slideIndex ?? asset.assetIndex;
+                  const slide = script.slides[slideIndex];
+                  if (!slide) return null;
+
+                  // Find grid image for this slide
+                  const gridAsset = gridAssets.find(g => {
+                    const gridMeta = g.metadata as GridImageMetadata | null;
+                    if (!gridMeta) return false;
+                    return gridMeta.positions.some(p => p.slideIndex === slideIndex);
+                  });
+
+                  const gridMeta = gridAsset?.metadata as GridImageMetadata | null;
+                  const position = gridMeta?.positions.find(p => p.slideIndex === slideIndex);
+                  const cell = position?.cell ?? 0;
+
+                  return html`
+                    <div class="slide-audio-item">
+                      ${gridAsset ? html`
+                        <div class="slide-crop">
+                          <img src="${gridAsset.url}" style="${this.getCropStyle(cell)}" alt="Slide ${slideIndex + 1}" />
+                        </div>
+                      ` : ''}
+
+                      <div class="slide-content">
+                        <div style="font-weight: 600; color: #1a1a1a;">${slide.headline}</div>
+                        <div class="slide-audio-player">
+                          <audio controls src="${asset.url}"></audio>
+                        </div>
+                        ${metadata?.durationMs ? html`
+                          <span class="badge" style="background: #f3f4f6; color: #6b7280; align-self: flex-start;">
+                            ${(metadata.durationMs / 1000).toFixed(1)}s
+                          </span>
+                        ` : ''}
+                      </div>
+                    </div>
+                  `;
+                })}
+              </div>
+            </div>
+          ` : ''}
+        ` : ''}
+      </div>
+    `;
+  }
+
   render() {
     if (this.loading) {
       return html`
@@ -662,6 +991,7 @@ export class VideoPage extends LitElement {
           ${this.renderMetadataCard()}
           ${this.renderSelectionCard()}
           ${this.renderScriptCard()}
+          ${this.video && this.video.script_status === 'generated' ? this.renderAssetsCard() : ''}
         </div>
       </div>
     `;

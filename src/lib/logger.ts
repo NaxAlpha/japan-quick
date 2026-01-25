@@ -151,6 +151,7 @@ export const log = {
   // AI Services
   gemini: createLogger('GeminiService'),
   scriptGeneration: createLogger('ScriptGeneration'),
+  assetGen: createLogger('AssetGenerator'),
 
   // Scrapers
   articleScraper: createLogger('ArticleScraper'),
@@ -161,8 +162,13 @@ export const log = {
   newsRoutes: createLogger('NewsRoutes'),
   articleRoutes: createLogger('ArticleRoutes'),
   videoRoutes: createLogger('VideoRoutes'),
+  assetRoutes: createLogger('AssetRoutes'),
+  youtubeRoutes: createLogger('YouTubeRoutes'),
   auth: createLogger('Auth'),
   app: createLogger('App'),
+
+  // Services
+  youtubeAuth: createLogger('YouTubeAuth'),
 
   // Workflows
   newsScraperWorkflow: createLogger('NewsScraperWorkflow'),

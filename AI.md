@@ -18,7 +18,8 @@ japan-quick/
 │   ├── 003_videos.sql          # Database migration for videos, models, cost_logs tables
 │   ├── 004_youtube_auth.sql    # Database migration for YouTube OAuth tokens
 │   ├── 005_comment_reactions.sql # Database migration for comment reactions and replies
-│   └── 006_video_scripts.sql   # Database migration for video script columns
+│   ├── 006_video_scripts.sql   # Database migration for video script columns
+│   └── 007_video_assets.sql    # Database migration for video assets (images, audio) and R2 storage
 ├── src/
 │   ├── index.ts                # Cloudflare Workers backend with Hono + workflow exports
 │   ├── middleware/
@@ -44,6 +45,8 @@ japan-quick/
 │   │   ├── article-scraper.ts        # Yahoo News article scraper (full content + comments)
 │   │   ├── article-scraper-core.ts   # Core article scraping logic (serial processing)
 │   │   ├── gemini.ts                 # Gemini AI service (article selection and script generation)
+│   │   ├── asset-generator.ts        # Asset generation service (grid images and TTS audio)
+│   │   ├── r2-storage.ts             # R2 storage service (upload, retrieve, delete assets)
 │   │   └── youtube-auth.ts           # YouTube OAuth 2.0 service (token management, channel operations)
 │   ├── types/
 │   │   ├── news.ts             # News type definitions + Env type (single source of truth)
@@ -103,10 +106,12 @@ japan-quick/
     - `GET /api/articles/status/:workflowId` - Workflow status
   - **Video API Routes (protected):**
     - `GET /api/videos` - List videos with pagination (page query param, returns pagination metadata)
-    - `GET /api/videos/:id` - Get single video with cost logs
+    - `GET /api/videos/:id` - Get single video with cost logs and assets
     - `POST /api/videos/trigger` - Manual workflow trigger
     - `GET /api/videos/status/:workflowId` - Workflow status
     - `POST /api/videos/:id/generate-script` - Generate video script using Gemini AI
+    - `POST /api/videos/:id/generate-assets` - Generate grid images and slide audio
+    - `GET /api/videos/:id/assets/:assetId` - Serve asset from R2 (public)
     - `DELETE /api/videos/:id` - Delete video and its cost logs
   - **YouTube OAuth API Routes (protected):**
     - `GET /api/youtube/status` - Get current YouTube authentication status
@@ -136,6 +141,7 @@ japan-quick/
 | `BROWSER` | Browser Binding | Puppeteer-based scraping in production |
 | `NEWS_CACHE` | KV Namespace | Cache scraped news for 35 minutes; OAuth state storage (5min TTL) |
 | `DB` | D1 Database | Store news snapshots, articles, videos, and YouTube auth tokens |
+| `ASSETS_BUCKET` | R2 Bucket | Store video assets (grid images and slide audio) |
 | `NEWS_SCRAPER_WORKFLOW` | Workflow | Durable news scraping workflow |
 | `SCHEDULED_REFRESH_WORKFLOW` | Workflow | Cron-triggered background refresh workflow |
 | `ARTICLE_SCRAPER_WORKFLOW` | Workflow | Article content scraping workflow |
@@ -220,11 +226,15 @@ export type Env = {
     BROWSER: BrowserBinding | null;  // Can be null in local dev
     NEWS_CACHE: KVNamespace;
     DB: D1Database;
+    ASSETS_BUCKET: R2Bucket;
     NEWS_SCRAPER_WORKFLOW: Workflow;
     SCHEDULED_REFRESH_WORKFLOW: Workflow;
     ARTICLE_SCRAPER_WORKFLOW: Workflow;
     ARTICLE_RESCRAPE_WORKFLOW: Workflow;
     VIDEO_SELECTION_WORKFLOW: Workflow;
+    YOUTUBE_CLIENT_ID: string;
+    YOUTUBE_CLIENT_SECRET: string;
+    YOUTUBE_REDIRECT_URI: string;
   }
 };
 ```
@@ -284,6 +294,8 @@ The application uses a structured logging utility (`src/lib/logger.ts`) for cons
 - `videoWorkflow`: Video selection workflow
 - `gemini`: Gemini AI service (selection and script generation)
 - `scriptGeneration`: Video script generation operations
+- `assetGen`: Asset generation service (grid images and TTS audio)
+- `assetRoutes`: Asset generation API route handlers
 - `youtubeRoutes`: YouTube OAuth route handlers
 - `youtubeAuth`: YouTube OAuth service
 - `auth`: Authentication middleware
@@ -494,7 +506,7 @@ CREATE TABLE videos (
 CREATE TABLE cost_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   video_id INTEGER NOT NULL,
-  log_type TEXT NOT NULL,        -- e.g., "video-selection", "script-generation"
+  log_type TEXT NOT NULL,        -- e.g., "video-selection", "script-generation", "image-generation"
   model_id TEXT NOT NULL,        -- FK to models.id
   attempt_id INTEGER DEFAULT 1,  -- Attempt number for retries
   input_tokens INTEGER,
@@ -504,18 +516,37 @@ CREATE TABLE cost_logs (
   FOREIGN KEY (video_id) REFERENCES videos(id),
   FOREIGN KEY (model_id) REFERENCES models(id)
 );
+
+CREATE TABLE video_assets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  video_id INTEGER NOT NULL,
+  asset_type TEXT NOT NULL,      -- 'grid_image' | 'slide_audio'
+  asset_index INTEGER DEFAULT 0, -- 0/1 for grids, 0-17 for audio
+  r2_key TEXT NOT NULL,          -- R2 object path
+  mime_type TEXT NOT NULL,       -- 'image/png' | 'audio/wav'
+  file_size INTEGER,             -- bytes
+  metadata TEXT,                 -- JSON (GridImageMetadata | SlideAudioMetadata)
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
+);
 ```
 
 - **news_snapshots.data**: JSON string containing the full YahooNewsResponse
 - **articles.status**: pending | not_available | retry_1 | retry_2 | error | scraped_v1 | scraped_v2
 - **article_versions.version**: 1 (first scrape) or 2 (rescrape after 1 hour)
-- **models.id**: Model identifier (e.g., "gemini-3-flash-preview")
+- **models.id**: Model identifier (e.g., "gemini-3-flash-preview", "gemini-2.5-flash-image")
 - **videos.video_type**: short (60-120s, 1080x1920) | long (4-6min, 1920x1080)
 - **videos.selection_status**: todo | doing | done | error
 - **videos.articles**: JSON array of pick_id values selected by AI
 - **videos.script**: JSON string of VideoScript interface
 - **videos.script_status**: pending | generating | generated | error
-- **cost_logs.log_type**: Operation type (e.g., "video-selection", "script-generation")
+- **videos.asset_status**: pending | generating | generated | error
+- **videos.image_model**: gemini-2.5-flash-image | gemini-3-pro-image-preview
+- **videos.tts_model**: gemini-2.5-flash-preview-tts | gemini-2.5-pro-preview-tts
+- **videos.tts_voice**: One of 30 available voices (randomly selected, stored for consistency)
+- **cost_logs.log_type**: Operation type (e.g., "video-selection", "script-generation", "image-generation")
+- **video_assets.asset_type**: grid_image | slide_audio
+- **video_assets.r2_key**: Path in R2 bucket (e.g., "videos/41/grid_00.png")
 
 **VideoScript Interface**:
 ```typescript
@@ -703,6 +734,123 @@ All AI operations are tracked in the `cost_logs` table:
 - Cost is calculated based on model pricing
 - Total cost per video is aggregated from all related operations
 - Costs are displayed in the videos UI ($0.0000 format)
+
+## Video Asset Generation
+
+### Overview
+
+After video script generation, the system can generate visual and audio assets using Gemini AI:
+- **Grid Images**: 3x3 grids containing slide images and thumbnail (using Gemini 2.5 Flash Image or Gemini 3 Pro Image)
+- **Slide Audio**: TTS narration for each slide (using Gemini 2.5 Flash TTS or Gemini 2.5 Pro TTS)
+
+Assets are stored in R2 (Cloudflare Object Storage) and tracked in the `video_assets` database table.
+
+### Image Generation Models
+
+| Model ID | Description | Cost per Image |
+|----------|-------------|----------------|
+| `gemini-2.5-flash-image` | Fast image generation (default) | $0.039 |
+| `gemini-3-pro-image-preview` | High-quality pro model | $0.134 |
+
+### TTS Models
+
+| Model ID | Description | Input Cost | Output Cost |
+|----------|-------------|------------|-------------|
+| `gemini-2.5-flash-preview-tts` | Fast TTS (default) | $0.50/1M tokens | $10.00/1M tokens |
+| `gemini-2.5-pro-preview-tts` | High-quality TTS | $1.00/1M tokens | $20.00/1M tokens |
+
+### TTS Voices
+
+30 available voices: Zephyr, Puck, Charon, Kore, Fenrir, Leda, Enceladus, Aoede, Autonoe, Laomedeia, Iapetus, Erinome, Alnilam, Algieba, Despina, Umbriel, Callirrhoe, Achernar, Sulafat, Vindemiatrix, Achird, Orus, Algenib, Rasalgethi, Gacrux, Pulcherrima, Zubenelgenubi, Sadachbia, Sadaltager.
+
+Voice is randomly selected at asset generation start and stored in `videos.tts_voice` for consistency across all slides.
+
+### Grid Image Strategy
+
+**Short Videos (9:16)**: 1 grid image
+- 1080×1920 pixels (3×3 of 360×640 cells)
+- Positions 0-7: Slides 1-8
+- Position 8: Thumbnail
+- Unused cells filled with black (#000000)
+
+**Long Videos (16:9)**: 2 grid images
+- Each 1920×1080 pixels (3×3 of 640×360 cells)
+- Grid 1: Slides 1-9 (positions 0-8)
+- Grid 2: Slides 10-17 (positions 0-7) + Thumbnail (position 8)
+- Grid 2 uses Grid 1 as style reference for visual consistency
+
+### R2 Storage
+
+Assets are stored in the `japan-quick-assets` R2 bucket:
+
+```
+videos/{videoId}/grid_00.png    # First grid image
+videos/{videoId}/grid_01.png    # Second grid (long videos only)
+videos/{videoId}/audio_00.wav   # Slide 0 audio
+videos/{videoId}/audio_01.wav   # Slide 1 audio
+...
+videos/{videoId}/audio_17.wav   # Up to slide 17
+```
+
+### Database Schema
+
+**video_assets table**:
+```sql
+CREATE TABLE video_assets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  video_id INTEGER NOT NULL,
+  asset_type TEXT NOT NULL,      -- 'grid_image' | 'slide_audio'
+  asset_index INTEGER DEFAULT 0,  -- 0/1 for grids, 0-17 for audio
+  r2_key TEXT NOT NULL,
+  mime_type TEXT NOT NULL,        -- 'image/png' | 'audio/wav'
+  file_size INTEGER,
+  metadata TEXT,                  -- JSON (GridImageMetadata | SlideAudioMetadata)
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
+);
+```
+
+**New videos table columns**:
+- `asset_status`: 'pending' | 'generating' | 'generated' | 'error'
+- `asset_error`: Error message if generation fails
+- `image_model`: Selected image generation model
+- `tts_model`: Selected TTS model
+- `tts_voice`: Selected voice name (consistent per video)
+
+### API Endpoints
+
+**POST /api/videos/:id/generate-assets**
+- Generates grid images and slide audio for a video
+- Requires script to be generated first
+- Returns immediately, assets generated and stored in R2
+- Updates `asset_status` to 'generating' then 'generated'
+
+**GET /api/videos/:id/assets/:assetId**
+- Serves asset from R2 storage
+- Returns image/png or audio/wav with appropriate caching headers
+- Public endpoint (no auth required for serving assets)
+
+### Frontend UI
+
+The video detail page (`/video/:id`) displays:
+- **Model Selectors**: Dropdowns for image and TTS model selection
+- **Generate Assets Button**: Triggers asset generation
+- **Grid Images Preview**: Displays generated grid images
+- **Slides with Audio**: Shows cropped slide images (60×60) with audio players
+
+Cropped images are extracted from grid by calculating cell position in 3×3 grid and applying negative CSS offsets.
+
+### Services
+
+**AssetGeneratorService** (`src/services/asset-generator.ts`):
+- `generateGridImages()`: Creates 3×3 grid images using Gemini
+- `generateSlideAudio()`: Generates TTS audio for a slide
+- `pcmToWav()`: Converts PCM audio to WAV format with header
+
+**R2StorageService** (`src/services/r2-storage.ts`):
+- `uploadAsset()`: Uploads asset to R2 bucket
+- `getAsset()`: Retrieves asset from R2
+- `deleteVideoAssets()`: Deletes all assets for a video
 
 ## YouTube OAuth 2.0 Integration
 
