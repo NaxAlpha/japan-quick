@@ -3,6 +3,8 @@
  * Displays video metadata, selection details, and script generation
  * GET /api/videos/:id to fetch video
  * POST /api/videos/:id/generate-script to generate script
+ *
+ * Tokyo Editorial Cyber-Industrial aesthetic
  */
 
 import { LitElement, html, css } from 'lit';
@@ -18,6 +20,9 @@ import type {
 @customElement('video-page')
 export class VideoPage extends LitElement {
   static styles = css`
+    @import url('https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Zen+Tokyo+Zoo&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=Inter:wght@400;500;600;700;800&display=swap');
+
     :host {
       display: block;
       width: 100%;
@@ -26,52 +31,224 @@ export class VideoPage extends LitElement {
 
     .container {
       padding: 2rem;
-      max-width: 1200px;
+      max-width: 1400px;
       margin: 0 auto;
+      background: #f5f3f0;
+      min-height: 100vh;
+      position: relative;
+    }
+
+    /* Background pattern */
+    .container::before {
+      content: '';
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-image: url("data:image/svg+xml,%3Csvg width='120' height='60' viewBox='0 0 120 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 30 Q 15 15, 30 30 T 60 30 T 90 30 T 120 30' stroke='%23e63946' stroke-width='0.5' fill='none' opacity='0.06'/%3E%3C/svg%3E");
+      background-size: 120px 60px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* Header */
+    .page-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 2rem;
+      position: relative;
+      z-index: 1;
+      flex-wrap: wrap;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
     }
 
     .back-link {
-      display: inline-block;
-      margin-bottom: 1.5rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
       padding: 0.5rem 1rem;
-      background: rgba(255, 255, 255, 0.2);
-      border: 1px solid rgba(255, 255, 255, 0.3);
-      border-radius: 0.5rem;
-      color: white;
-      font-size: 0.875rem;
-      font-weight: 500;
-      cursor: pointer;
-      transition: background 0.2s;
+      background: #0a0a0a;
+      color: #ffffff;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      font-weight: 400;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      border: 2px solid #0a0a0a;
       text-decoration: none;
+      transition: all 0.15s ease-out;
+      box-shadow: 2px 2px 0 #0a0a0a;
     }
 
     .back-link:hover {
-      background: rgba(255, 255, 255, 0.3);
+      background: #e63946;
+      border-color: #e63946;
+      transform: translate(-1px, -1px);
+      box-shadow: 3px 3px 0 #0a0a0a;
     }
 
+    h1 {
+      font-family: 'Zen Tokyo Zoo', sans-serif;
+      font-size: clamp(1.5rem, 4vw, 2.5rem);
+      font-weight: 400;
+      line-height: 1;
+      color: #0a0a0a;
+      margin: 0;
+      text-transform: uppercase;
+    }
+
+    h1 .accent {
+      color: #e63946;
+    }
+
+    /* Cards container */
     .cards-container {
-      display: flex;
-      flex-direction: column;
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
       gap: 1.5rem;
+      position: relative;
+      z-index: 1;
     }
 
     .card {
-      background: white;
-      border-radius: 0.5rem;
-      padding: 1.5rem;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      background: #ffffff;
+      border: 3px solid #0a0a0a;
+      box-shadow: 4px 4px 0 #0a0a0a;
+    }
+
+    .card.span-full {
+      grid-column: span 12;
+    }
+
+    .card.span-8 {
+      grid-column: span 8;
+    }
+
+    .card.span-6 {
+      grid-column: span 6;
+    }
+
+    .card.span-4 {
+      grid-column: span 4;
+    }
+
+    @media (max-width: 1024px) {
+      .card.span-8,
+      .card.span-6,
+      .card.span-4 {
+        grid-column: span 12;
+      }
+    }
+
+    .card-header {
+      padding: 1rem 1.25rem;
+      border-bottom: 2px solid #e8e6e1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
     }
 
     .card-title {
-      font-size: 1.125rem;
-      font-weight: 600;
-      color: #1a1a1a;
-      margin: 0 0 1rem 0;
+      font-family: 'Inter', sans-serif;
+      font-size: 0.875rem;
+      font-weight: 700;
+      color: #0a0a0a;
+      margin: 0;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
     }
 
+    .card-body {
+      padding: 1.25rem;
+    }
+
+    /* Badges */
+    .badges {
+      display: flex;
+      gap: 0.375rem;
+      flex-wrap: wrap;
+    }
+
+    .badge {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.625rem;
+      font-weight: 400;
+      padding: 0.25rem 0.5rem;
+      border: 1px solid #0a0a0a;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .badge.type-short {
+      background: #e63946;
+      color: #ffffff;
+      border-color: #e63946;
+    }
+
+    .badge.type-long {
+      background: #0a0a0a;
+      color: #ffffff;
+      border-color: #0a0a0a;
+    }
+
+    .badge.selection-todo {
+      background: #e9c46a;
+      color: #78350f;
+      border-color: #e9c46a;
+    }
+
+    .badge.selection-doing {
+      background: #0066cc;
+      color: #ffffff;
+      border-color: #0066cc;
+    }
+
+    .badge.selection-done {
+      background: #2d6a4f;
+      color: #ffffff;
+      border-color: #2d6a4f;
+    }
+
+    .badge.script-pending,
+    .badge.asset-pending {
+      background: #f5f3f0;
+      color: #58544c;
+    }
+
+    .badge.script-generating,
+    .badge.asset-generating {
+      background: #0066cc;
+      color: #ffffff;
+      border-color: #0066cc;
+    }
+
+    .badge.script-generated,
+    .badge.asset-generated {
+      background: #2d6a4f;
+      color: #ffffff;
+      border-color: #2d6a4f;
+    }
+
+    .badge.script-error,
+    .badge.asset-error {
+      background: #0a0a0a;
+      color: #e63946;
+      border-color: #e63946;
+    }
+
+    /* Meta grid */
     .meta-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
       gap: 1rem;
     }
 
@@ -82,94 +259,44 @@ export class VideoPage extends LitElement {
     }
 
     .meta-label {
-      font-size: 0.75rem;
-      font-weight: 500;
-      color: #666;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.625rem;
+      font-weight: 400;
+      color: #78746c;
       text-transform: uppercase;
+      letter-spacing: 0.1em;
     }
 
     .meta-value {
-      font-size: 1rem;
-      color: #1a1a1a;
+      font-family: 'Inter', sans-serif;
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: #0a0a0a;
     }
 
-    .badges {
-      display: flex;
-      gap: 0.5rem;
-      flex-wrap: wrap;
-    }
-
-    .badge {
-      display: inline-block;
-      padding: 0.25rem 0.75rem;
-      border-radius: 0.25rem;
-      font-size: 0.75rem;
-      font-weight: 500;
-      white-space: nowrap;
-    }
-
-    .badge.type-short {
-      background: #8b5cf6;
-      color: white;
-    }
-
-    .badge.type-long {
-      background: #ec4899;
-      color: white;
-    }
-
-    .badge.selection-todo {
-      background: #fbbf24;
-      color: #78350f;
-    }
-
-    .badge.selection-doing {
-      background: #3b82f6;
-      color: white;
-    }
-
-    .badge.selection-done {
-      background: #10b981;
-      color: white;
-    }
-
-    .badge.selection-error {
-      background: #ef4444;
-      color: white;
-    }
-
-    .badge.script-pending {
-      background: #e5e7eb;
-      color: #374151;
-    }
-
-    .badge.script-generating {
-      background: #3b82f6;
-      color: white;
-    }
-
-    .badge.script-generated {
-      background: #10b981;
-      color: white;
-    }
-
-    .badge.script-error {
-      background: #ef4444;
-      color: white;
-    }
-
+    /* Notes list */
     .notes-list {
-      list-style: disc;
-      padding-left: 1.5rem;
+      list-style: none;
+      padding: 0;
       margin: 0;
     }
 
     .notes-list li {
+      padding: 0.5rem 0.75rem;
       margin-bottom: 0.5rem;
-      color: #374151;
+      background: #f5f3f0;
+      border-left: 3px solid #e63946;
+      font-family: 'Inter', sans-serif;
+      font-size: 0.8125rem;
+      color: #282420;
       line-height: 1.6;
     }
 
+    .notes-list li:last-child {
+      margin-bottom: 0;
+    }
+
+    /* Articles list */
     .articles-list {
       display: flex;
       flex-direction: column;
@@ -177,333 +304,290 @@ export class VideoPage extends LitElement {
     }
 
     .article-link {
-      color: #3b82f6;
+      display: flex;
+      align-items: center;
+      padding: 0.625rem 0.875rem;
+      background: #ffffff;
+      border: 2px solid #e8e6e1;
+      color: #0a0a0a;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
       text-decoration: none;
-      font-size: 0.875rem;
-      padding: 0.5rem;
-      border: 1px solid #e5e7eb;
-      border-radius: 0.25rem;
-      transition: all 0.2s;
+      transition: all 0.15s ease-out;
     }
 
     .article-link:hover {
-      background: #f3f4f6;
-      border-color: #3b82f6;
+      border-color: #e63946;
+      background: #e63946;
+      color: #ffffff;
     }
 
-    .script-button {
-      padding: 0.75rem 1.5rem;
-      background: #3b82f6;
-      border: none;
-      border-radius: 0.5rem;
-      color: white;
-      font-size: 1rem;
-      font-weight: 500;
+    /* Buttons */
+    .btn {
+      padding: 0.75rem 1.25rem;
+      background: #0a0a0a;
+      color: #ffffff;
+      border: 3px solid #0a0a0a;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      font-weight: 400;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
       cursor: pointer;
-      transition: background 0.2s;
-      margin-top: 1rem;
+      transition: all 0.15s ease-out;
+      box-shadow: 3px 3px 0 #0a0a0a;
     }
 
-    .script-button:hover:not(:disabled) {
-      background: #2563eb;
+    .btn:hover:not(:disabled) {
+      background: #e63946;
+      border-color: #e63946;
+      transform: translate(-1px, -1px);
+      box-shadow: 4px 4px 0 #0a0a0a;
     }
 
-    .script-button:disabled {
-      background: #9ca3af;
+    .btn:focus-visible {
+      outline: 3px solid #e63946;
+      outline-offset: 3px;
+    }
+
+    .btn:disabled {
+      opacity: 0.6;
       cursor: not-allowed;
+      transform: none;
+      box-shadow: 3px 3px 0 #0a0a0a;
     }
 
-    .script-button.retry {
-      background: #f59e0b;
+    .btn-primary {
+      background: #e63946;
+      border-color: #e63946;
     }
 
-    .script-button.retry:hover:not(:disabled) {
-      background: #d97706;
+    .btn-primary:hover:not(:disabled) {
+      background: #0a0a0a;
+      border-color: #0a0a0a;
     }
 
-    .error-message {
-      padding: 1rem;
-      background: #fee2e2;
-      border: 1px solid #fecaca;
-      border-radius: 0.375rem;
-      color: #991b1b;
-      font-size: 0.875rem;
-      margin-bottom: 1rem;
+    .btn-success {
+      background: #2d6a4f;
+      border-color: #2d6a4f;
     }
 
-    .loading-spinner {
-      display: inline-block;
-      width: 1.5rem;
-      height: 1.5rem;
-      border: 3px solid #e5e7eb;
-      border-top-color: #3b82f6;
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
+    .btn-success:hover:not(:disabled) {
+      background: #0a0a0a;
+      border-color: #0a0a0a;
     }
 
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-
+    /* Script hero */
     .script-hero {
-      margin-bottom: 2rem;
-      padding-bottom: 2rem;
-      border-bottom: 2px solid #e5e7eb;
+      padding-bottom: 1.5rem;
+      border-bottom: 2px solid #e8e6e1;
+      margin-bottom: 1.5rem;
     }
 
     .script-title {
+      font-family: 'Zen Tokyo Zoo', sans-serif;
       font-size: 1.5rem;
-      font-weight: 700;
-      color: #1a1a1a;
-      line-height: 1.3;
+      font-weight: 400;
+      color: #0a0a0a;
+      line-height: 1.2;
       margin-bottom: 0.75rem;
     }
 
     .script-description {
+      font-family: 'Inter', sans-serif;
       font-size: 0.875rem;
-      color: #4b5563;
+      color: #58544c;
       line-height: 1.7;
       margin-bottom: 1rem;
     }
 
     .script-thumbnail {
-      background: #f9fafb;
-      border-left: 3px solid #3b82f6;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      color: #78746c;
+      background: #f5f3f0;
       padding: 0.75rem 1rem;
-      border-radius: 0.25rem;
-      font-size: 0.8125rem;
-      color: #374151;
+      border-left: 3px solid #e63946;
       font-style: italic;
       line-height: 1.6;
     }
 
+    /* Slides grid */
+    .slides-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+
+    .slides-count {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      color: #78746c;
+    }
+
     .slides-grid {
       display: grid;
-      grid-template-columns: 1fr;
-      gap: 1.25rem;
-      margin-top: 1.5rem;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 1rem;
     }
 
     .slide-card {
-      background: #fafbfc;
-      border-radius: 0.5rem;
-      padding: 1.25rem;
-      border: 1px solid #e5e7eb;
+      background: #fafafa;
+      border: 2px solid #e8e6e1;
+      padding: 1rem;
       position: relative;
-      transition: all 0.2s;
+      transition: all 0.15s ease-out;
     }
 
     .slide-card:hover {
-      border-color: #cbd5e1;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+      border-color: #e63946;
+      box-shadow: 2px 2px 0 #e63946;
     }
 
     .slide-number {
       position: absolute;
-      top: 0.75rem;
-      right: 0.75rem;
-      background: #3b82f6;
-      color: white;
-      width: 28px;
-      height: 28px;
-      border-radius: 50%;
+      top: 0.5rem;
+      right: 0.5rem;
+      background: #e63946;
+      color: #ffffff;
+      width: 24px;
+      height: 24px;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 0.75rem;
-      font-weight: 600;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.625rem;
+      font-weight: 700;
     }
 
     .slide-headline {
-      font-size: 1rem;
-      font-weight: 600;
-      color: #1a1a1a;
-      margin-bottom: 0.875rem;
-      padding-right: 2.5rem;
+      font-family: 'Inter', sans-serif;
+      font-size: 0.875rem;
+      font-weight: 700;
+      color: #0a0a0a;
+      margin-bottom: 0.75rem;
+      padding-right: 2rem;
       line-height: 1.4;
     }
 
-    .slide-section {
-      margin-bottom: 0.875rem;
-    }
-
-    .slide-section:last-child {
-      margin-bottom: 0;
-    }
-
     .slide-narration {
-      font-size: 0.8125rem;
-      color: #374151;
-      line-height: 1.7;
-      padding: 0.625rem 0.875rem;
-      background: white;
-      border-radius: 0.375rem;
-      border: 1px solid #e5e7eb;
+      font-family: 'Inter', sans-serif;
+      font-size: 0.75rem;
+      color: #282420;
+      line-height: 1.6;
+      padding: 0.5rem 0.75rem;
+      background: #ffffff;
+      border: 1px solid #e8e6e1;
+      margin-bottom: 0.5rem;
     }
 
     .slide-image-desc {
-      font-size: 0.75rem;
-      color: #6b7280;
-      line-height: 1.6;
-      padding-left: 0.875rem;
-      border-left: 2px solid #d1d5db;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      color: #78746c;
+      line-height: 1.5;
+      padding-left: 0.75rem;
+      border-left: 2px solid #d4d0c8;
       font-style: italic;
     }
 
     .slide-duration {
       display: inline-block;
-      font-size: 0.6875rem;
-      color: #6b7280;
-      background: #f3f4f6;
-      padding: 0.25rem 0.625rem;
-      border-radius: 0.25rem;
-      font-weight: 500;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.625rem;
+      color: #78746c;
+      background: #e8e6e1;
+      padding: 0.25rem 0.5rem;
       margin-top: 0.5rem;
     }
 
-    .slides-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 0.75rem;
-    }
-
-    .slides-count {
-      font-size: 0.8125rem;
-      color: #6b7280;
-      font-weight: 500;
-    }
-
-    /* Video Assets Card Styles */
-    .assets-card {
-      background: white;
-      border-radius: 0.5rem;
-      padding: 1.5rem;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-    }
-
+    /* Model selectors */
     .model-selectors {
-      display: flex;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
       gap: 1rem;
       margin-bottom: 1rem;
-      flex-wrap: wrap;
-    }
-
-    .model-selector {
-      flex: 1;
-      min-width: 200px;
     }
 
     .model-selector label {
       display: block;
-      font-size: 0.75rem;
-      font-weight: 500;
-      color: #666;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.625rem;
+      font-weight: 400;
+      color: #78746c;
       text-transform: uppercase;
-      margin-bottom: 0.25rem;
+      letter-spacing: 0.1em;
+      margin-bottom: 0.375rem;
     }
 
     .model-selector select {
       width: 100%;
-      padding: 0.5rem;
-      border: 1px solid #e5e7eb;
-      border-radius: 0.375rem;
-      font-size: 0.875rem;
-      color: #1a1a1a;
-      background: white;
+      padding: 0.5rem 0.625rem;
+      border: 2px solid #0a0a0a;
+      background: #ffffff;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      color: #0a0a0a;
+      cursor: pointer;
     }
 
-    .asset-button {
-      padding: 0.75rem 1.5rem;
-      background: #10b981;
-      border: none;
-      border-radius: 0.5rem;
-      color: white;
-      font-size: 1rem;
-      font-weight: 500;
-      cursor: pointer;
-      transition: background 0.2s;
+    /* Grid previews */
+    .grids-container {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
       margin-top: 1rem;
     }
 
-    .asset-button:hover:not(:disabled) {
-      background: #059669;
-    }
-
-    .asset-button:disabled {
-      background: #9ca3af;
-      cursor: not-allowed;
-    }
-
-    .badge.asset-pending {
-      background: #e5e7eb;
-      color: #374151;
-    }
-
-    .badge.asset-generating {
-      background: #3b82f6;
-      color: white;
-    }
-
-    .badge.asset-generated {
-      background: #10b981;
-      color: white;
-    }
-
-    .badge.asset-error {
-      background: #ef4444;
-      color: white;
-    }
-
-    .grids-container {
-      display: flex;
-      gap: 1rem;
-      flex-wrap: wrap;
-      margin-top: 1.5rem;
-    }
-
     .grid-preview {
-      border: 1px solid #e5e7eb;
-      border-radius: 0.5rem;
+      border: 3px solid #0a0a0a;
       overflow: hidden;
+      background: #f5f3f0;
+      aspect-ratio: 16 / 9;
+    }
+
+    .grid-preview.portrait {
+      aspect-ratio: 9 / 16;
     }
 
     .grid-preview img {
       display: block;
-      max-width: 300px;
-      height: auto;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
     }
 
+    /* Audio list */
     .slides-audio-list {
       display: flex;
       flex-direction: column;
-      gap: 1rem;
-      margin-top: 1.5rem;
+      gap: 0.75rem;
+      margin-top: 1rem;
     }
 
     .slide-audio-item {
       display: flex;
       align-items: center;
       gap: 1rem;
-      padding: 1rem;
-      background: #fafbfc;
-      border: 1px solid #e5e7eb;
-      border-radius: 0.5rem;
+      padding: 0.75rem;
+      background: #fafafa;
+      border: 2px solid #e8e6e1;
     }
 
     .slide-crop {
-      width: 60px;
-      height: 60px;
+      width: 50px;
+      height: 50px;
       overflow: hidden;
       position: relative;
-      border-radius: 0.375rem;
+      border: 2px solid #0a0a0a;
       flex-shrink: 0;
       background: #f3f4f6;
     }
 
     .slide-crop img {
-      width: 180px;
-      height: 180px;
+      width: 150px;
+      height: 150px;
       position: absolute;
     }
 
@@ -511,7 +595,18 @@ export class VideoPage extends LitElement {
       flex: 1;
       display: flex;
       flex-direction: column;
-      gap: 0.5rem;
+      gap: 0.375rem;
+      min-width: 0;
+    }
+
+    .slide-content-title {
+      font-family: 'Inter', sans-serif;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: #0a0a0a;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .slide-audio-player {
@@ -520,7 +615,54 @@ export class VideoPage extends LitElement {
 
     .slide-audio-player audio {
       width: 100%;
-      height: 32px;
+      height: 28px;
+    }
+
+    /* Status & error */
+    .error-message {
+      padding: 0.75rem 1rem;
+      background: #0a0a0a;
+      border: 3px solid #e63946;
+      color: #e63946;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      margin-bottom: 1rem;
+    }
+
+    .loading-spinner {
+      display: inline-block;
+      width: 1rem;
+      height: 1rem;
+      border: 2px solid #e8e6e1;
+      border-top-color: #e63946;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .loading-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.8125rem;
+      color: #58544c;
+    }
+
+    /* Voice badge */
+    .voice-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+      padding: 0.375rem 0.75rem;
+      background: #e63946;
+      color: #ffffff;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      border: 2px solid #e63946;
     }
   `;
 
@@ -668,35 +810,97 @@ export class VideoPage extends LitElement {
     }
   }
 
+  private getCropStyle(cell: number): string {
+    const row = Math.floor(cell / 3);
+    const col = cell % 3;
+    const left = -(col * 50);
+    const top = -(row * 50);
+    return `left: ${left}px; top: ${top}px;`;
+  }
+
+  private getStatusLabel(status: string): string {
+    const labels: Record<string, string> = {
+      'todo': 'READY',
+      'doing': 'ACTIVE',
+      'done': 'DONE',
+      'pending': 'WAIT',
+      'generating': 'GEN...',
+      'generated': 'DONE',
+      'error': 'FAIL'
+    };
+    return labels[status] || status;
+  }
+
+  render() {
+    if (this.loading) {
+      return html`
+        <div class="container">
+          <div class="loading-row">
+            <span class="loading-spinner"></span>
+            <span>Loading video data...</span>
+          </div>
+        </div>
+      `;
+    }
+
+    if (this.error && !this.video) {
+      return html`
+        <div class="container">
+          <div class="error-message">[ ERROR: ${this.error} ]</div>
+          <a href="/videos" class="back-link">← Back to Videos</a>
+        </div>
+      `;
+    }
+
+    return html`
+      <div class="container">
+        <div class="page-header">
+          <div class="header-left">
+            <a href="/videos" class="back-link">← Videos</a>
+            <h1>Video<span class="accent">#${this.video?.id || ''}</span></h1>
+          </div>
+        </div>
+
+        <div class="cards-container">
+          ${this.renderMetadataCard()}
+          ${this.renderSelectionCard()}
+          ${this.renderScriptCard()}
+          ${this.video && this.video.script_status === 'generated' ? this.renderAssetsCard() : ''}
+        </div>
+      </div>
+    `;
+  }
+
   private renderMetadataCard(): unknown {
     if (!this.video) return null;
 
     return html`
-      <div class="card">
-        <h2 class="card-title">Video Metadata</h2>
-        <div class="meta-grid">
-          <div class="meta-item">
-            <span class="meta-label">ID</span>
-            <span class="meta-value">${this.video.id}</span>
-          </div>
-          <div class="meta-item">
-            <span class="meta-label">Created</span>
-            <span class="meta-value">${new Date(this.video.created_at).toLocaleString()}</span>
-          </div>
-          <div class="meta-item">
-            <span class="meta-label">Title</span>
-            <span class="meta-value">${this.video.short_title || 'N/A'}</span>
-          </div>
-          <div class="meta-item">
-            <span class="meta-label">Total Cost</span>
-            <span class="meta-value">$${this.video.total_cost.toFixed(4)}</span>
-          </div>
+      <div class="card span-4">
+        <div class="card-header">
+          <h2 class="card-title">Metadata</h2>
         </div>
-        <div style="margin-top: 1rem;">
-          <div class="badges">
-            <span class="badge type-${this.video.video_type}">${this.video.video_type}</span>
-            <span class="badge selection-${this.video.selection_status}">${this.video.selection_status}</span>
-            <span class="badge script-${this.video.script_status}">${this.video.script_status}</span>
+        <div class="card-body">
+          <div class="meta-grid">
+            <div class="meta-item">
+              <span class="meta-label">ID</span>
+              <span class="meta-value">#${this.video.id}</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Created</span>
+              <span class="meta-value">${new Date(this.video.created_at).toLocaleDateString()}</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Cost</span>
+              <span class="meta-value">$${this.video.total_cost.toFixed(4)}</span>
+            </div>
+          </div>
+          <div style="margin-top: 1rem;">
+            <div class="badges">
+              <span class="badge type-${this.video.video_type}">${this.video.video_type.toUpperCase()}</span>
+              <span class="badge selection-${this.video.selection_status}">${this.getStatusLabel(this.video.selection_status)}</span>
+              <span class="badge script-${this.video.script_status}">SCR: ${this.getStatusLabel(this.video.script_status)}</span>
+              <span class="badge asset-${this.video.asset_status}">AST: ${this.getStatusLabel(this.video.asset_status)}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -707,28 +911,35 @@ export class VideoPage extends LitElement {
     if (!this.video) return null;
 
     return html`
-      <div class="card">
-        <h2 class="card-title">Selection Details</h2>
-
-        ${this.video.notes.length > 0 ? html`
-          <div style="margin-bottom: 1.5rem;">
-            <h3 style="font-size: 0.875rem; font-weight: 600; color: #374151; margin: 0 0 0.5rem 0;">Notes</h3>
-            <ul class="notes-list">
-              ${this.video.notes.map(note => html`<li>${note}</li>`)}
-            </ul>
+      <div class="card span-8">
+        <div class="card-header">
+          <h2 class="card-title">Selection</h2>
+        </div>
+        <div class="card-body">
+          <div style="margin-bottom: 1rem;">
+            <h3 style="font-family: 'Inter', sans-serif; font-size: 0.875rem; font-weight: 700; color: #0a0a0a; margin: 0 0 0.75rem 0;">${this.video.short_title || 'Untitled Video'}</h3>
           </div>
-        ` : ''}
 
-        ${this.video.articles.length > 0 ? html`
-          <div>
-            <h3 style="font-size: 0.875rem; font-weight: 600; color: #374151; margin: 0 0 0.5rem 0;">Articles</h3>
-            <div class="articles-list">
-              ${this.video.articles.map(pickId => html`
-                <a href="/article/pick:${pickId}" class="article-link">Article: pick:${pickId}</a>
-              `)}
+          ${this.video.notes.length > 0 ? html`
+            <div style="margin-bottom: 1rem;">
+              <h4 style="font-family: 'Space Mono', monospace; font-size: 0.6875rem; color: #78746c; margin: 0 0 0.5rem 0; text-transform: uppercase;">Notes</h4>
+              <ul class="notes-list">
+                ${this.video.notes.map(note => html`<li>${note}</li>`)}
+              </ul>
             </div>
-          </div>
-        ` : ''}
+          ` : ''}
+
+          ${this.video.articles.length > 0 ? html`
+            <div>
+              <h4 style="font-family: 'Space Mono', monospace; font-size: 0.6875rem; color: #78746c; margin: 0 0 0.5rem 0; text-transform: uppercase;">Articles</h4>
+              <div class="articles-list">
+                ${this.video.articles.map(pickId => html`
+                  <a href="/article/pick:${pickId}" class="article-link">pick:${pickId}</a>
+                `)}
+              </div>
+            </div>
+          ` : ''}
+        </div>
       </div>
     `;
   }
@@ -739,89 +950,80 @@ export class VideoPage extends LitElement {
     const { script_status, script, script_error } = this.video;
 
     return html`
-      <div class="card">
-        <h2 class="card-title">Video Script</h2>
+      <div class="card span-full">
+        <div class="card-header">
+          <h2 class="card-title">Script</h2>
+          <span class="badge script-${script_status}">${this.getStatusLabel(script_status)}</span>
+        </div>
+        <div class="card-body">
+          ${script_error && script_status === 'error' ? html`
+            <div class="error-message">[ ERROR: ${script_error} ]</div>
+          ` : ''}
 
-        ${script_error && script_status === 'error' ? html`
-          <div class="error-message">${script_error}</div>
-        ` : ''}
+          ${script_status === 'pending' ? html`
+            <p style="font-family: 'Inter', sans-serif; font-size: 0.875rem; color: #58544c; margin: 0 0 1rem 0;">No script generated yet.</p>
+            <button
+              class="btn btn-primary"
+              @click=${this.generateScript}
+              ?disabled=${this.generatingScript}
+            >
+              ${this.generatingScript ? html`<span class="loading-spinner"></span> Generating...` : '[ Generate Script ]'}
+            </button>
+          ` : ''}
 
-        ${script_status === 'pending' ? html`
-          <p style="color: #666; margin: 0 0 1rem 0;">No script generated yet.</p>
-          <button
-            class="script-button"
-            @click=${this.generateScript}
-            ?disabled=${this.generatingScript}
-          >
-            ${this.generatingScript ? 'Generating...' : 'Generate Script'}
-          </button>
-        ` : ''}
+          ${script_status === 'generating' ? html`
+            <div class="loading-row">
+              <span class="loading-spinner"></span>
+              <span>Generating script, please wait...</span>
+            </div>
+          ` : ''}
 
-        ${script_status === 'generating' ? html`
-          <div style="display: flex; align-items: center; gap: 1rem;">
-            <div class="loading-spinner"></div>
-            <span style="color: #666;">Generating script, please wait...</span>
-          </div>
-        ` : ''}
+          ${script_status === 'error' ? html`
+            <button
+              class="btn"
+              @click=${this.generateScript}
+              ?disabled=${this.generatingScript}
+            >
+              ${this.generatingScript ? html`<span class="loading-spinner"></span> Retrying...` : '[ Retry Generation ]'}
+            </button>
+          ` : ''}
 
-        ${script_status === 'error' ? html`
-          <button
-            class="script-button retry"
-            @click=${this.generateScript}
-            ?disabled=${this.generatingScript}
-          >
-            ${this.generatingScript ? 'Retrying...' : 'Retry Generation'}
-          </button>
-        ` : ''}
+          ${script_status === 'generated' && script ? html`
+            <div class="script-hero">
+              <div class="script-title">${script.title}</div>
+              <div class="script-description">${script.description}</div>
+              <div class="script-thumbnail">📷 ${script.thumbnailDescription}</div>
+            </div>
 
-        ${script_status === 'generated' && script ? html`
-          <div class="script-hero">
-            <div class="script-title">${script.title}</div>
-            <div class="script-description">${script.description}</div>
-            <div class="script-thumbnail">${script.thumbnailDescription}</div>
-          </div>
+            <div class="slides-header">
+              <span class="slides-count">${script.slides.length} SLIDES</span>
+            </div>
 
-          <div class="slides-header">
-            <span class="slides-count">${script.slides.length} Slides</span>
-          </div>
-
-          <div class="slides-grid">
-            ${script.slides.map((slide, idx) => html`
-              <div class="slide-card">
-                <div class="slide-number">${idx + 1}</div>
-                <div class="slide-headline">${slide.headline}</div>
-
-                <div class="slide-section">
+            <div class="slides-grid">
+              ${script.slides.map((slide, idx) => html`
+                <div class="slide-card">
+                  <div class="slide-number">${idx + 1}</div>
+                  <div class="slide-headline">${slide.headline}</div>
                   <div class="slide-narration">${slide.audioNarration}</div>
-                </div>
-
-                <div class="slide-section">
                   <div class="slide-image-desc">${slide.imageDescription}</div>
+                  <span class="slide-duration">${slide.estimatedDuration}s</span>
                 </div>
+              `)}
+            </div>
 
-                <span class="slide-duration">${slide.estimatedDuration}s</span>
-              </div>
-            `)}
-          </div>
-
-          <button
-            class="script-button"
-            @click=${this.generateScript}
-            ?disabled=${this.generatingScript}
-          >
-            ${this.generatingScript ? 'Regenerating...' : 'Regenerate Script'}
-          </button>
-        ` : ''}
+            <div style="margin-top: 1.5rem;">
+              <button
+                class="btn"
+                @click=${this.generateScript}
+                ?disabled=${this.generatingScript}
+              >
+                ${this.generatingScript ? html`<span class="loading-spinner"></span> Regenerating...` : '[ Regenerate Script ]'}
+              </button>
+            </div>
+          ` : ''}
+        </div>
       </div>
     `;
-  }
-
-  private getCropStyle(cell: number): string {
-    const row = Math.floor(cell / 3);
-    const col = cell % 3;
-    const left = -(col * 60);
-    const top = -(row * 60);
-    return `left: ${left}px; top: ${top}px;`;
   }
 
   private renderAssetsCard(): unknown {
@@ -833,165 +1035,139 @@ export class VideoPage extends LitElement {
     const audioAssets = hasAssets ? assets.filter(a => a.assetType === 'slide_audio') : [];
 
     return html`
-      <div class="assets-card">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-          <h2 class="card-title" style="margin: 0;">Video Assets</h2>
-          <span class="badge asset-${asset_status}">${asset_status}</span>
+      <div class="card span-full">
+        <div class="card-header">
+          <h2 class="card-title">Assets</h2>
+          <span class="badge asset-${asset_status}">${this.getStatusLabel(asset_status)}</span>
         </div>
+        <div class="card-body">
+          ${asset_error && asset_status === 'error' ? html`
+            <div class="error-message">[ ERROR: ${asset_error} ]</div>
+          ` : ''}
 
-        ${asset_error && asset_status === 'error' ? html`
-          <div class="error-message">${asset_error}</div>
-        ` : ''}
+          <div class="model-selectors">
+            <div class="model-selector">
+              <label>Image Model</label>
+              <select
+                @change=${(e: Event) => {
+                  this.selectedImageModel = (e.target as HTMLSelectElement).value as ImageModelId;
+                }}
+                .value=${this.selectedImageModel}
+                ?disabled=${asset_status === 'generating'}
+              >
+                <option value="gemini-2.5-flash-image">Flash ($0.039)</option>
+                <option value="gemini-3-pro-image-preview">Pro ($0.134)</option>
+              </select>
+            </div>
 
-        <div class="model-selectors">
-          <div class="model-selector">
-            <label>Image Model</label>
-            <select
-              @change=${(e: Event) => {
-                this.selectedImageModel = (e.target as HTMLSelectElement).value as ImageModelId;
-              }}
-              .value=${this.selectedImageModel}
-              ?disabled=${asset_status === 'generating'}
+            <div class="model-selector">
+              <label>TTS Model</label>
+              <select
+                @change=${(e: Event) => {
+                  this.selectedTTSModel = (e.target as HTMLSelectElement).value as TTSModelId;
+                }}
+                .value=${this.selectedTTSModel}
+                ?disabled=${asset_status === 'generating'}
+              >
+                <option value="gemini-2.5-flash-preview-tts">Flash TTS</option>
+                <option value="gemini-2.5-pro-preview-tts">Pro TTS</option>
+              </select>
+            </div>
+          </div>
+
+          ${asset_status === 'pending' || asset_status === 'error' ? html`
+            <button
+              class="btn btn-success"
+              @click=${this.generateAssets}
+              ?disabled=${this.generatingAssets}
             >
-              <option value="gemini-2.5-flash-image">Flash ($0.039)</option>
-              <option value="gemini-3-pro-image-preview">Pro ($0.134)</option>
-            </select>
-          </div>
+              ${this.generatingAssets ? html`<span class="loading-spinner"></span> Generating...` : '[ Generate Assets ]'}
+            </button>
+          ` : ''}
 
-          <div class="model-selector">
-            <label>TTS Model</label>
-            <select
-              @change=${(e: Event) => {
-                this.selectedTTSModel = (e.target as HTMLSelectElement).value as TTSModelId;
-              }}
-              .value=${this.selectedTTSModel}
-              ?disabled=${asset_status === 'generating'}
-            >
-              <option value="gemini-2.5-flash-preview-tts">Flash TTS</option>
-              <option value="gemini-2.5-pro-preview-tts">Pro TTS</option>
-            </select>
-          </div>
-        </div>
-
-        ${asset_status === 'pending' || asset_status === 'error' ? html`
-          <button
-            class="asset-button"
-            @click=${this.generateAssets}
-            ?disabled=${this.generatingAssets}
-          >
-            ${this.generatingAssets ? 'Generating...' : asset_status === 'error' ? 'Retry Generation' : 'Generate Assets'}
-          </button>
-        ` : ''}
-
-        ${asset_status === 'generating' ? html`
-          <div style="display: flex; align-items: center; gap: 1rem; margin-top: 1rem;">
-            <div class="loading-spinner"></div>
-            <span style="color: #666;">Generating assets, please wait...</span>
-          </div>
-        ` : ''}
-
-        ${asset_status === 'generated' && hasAssets ? html`
-          <button
-            class="asset-button"
-            @click=${this.generateAssets}
-            ?disabled=${this.generatingAssets}
-          >
-            ${this.generatingAssets ? 'Regenerating...' : 'Regenerate Assets'}
-          </button>
-
-          ${gridAssets.length > 0 ? html`
-            <div class="grids-container">
-              ${gridAssets.map((asset, idx) => html`
-                <div class="grid-preview">
-                  <img src="${asset.url}" alt="Grid ${idx}" />
-                </div>
-              `)}
+          ${asset_status === 'generating' ? html`
+            <div class="loading-row">
+              <span class="loading-spinner"></span>
+              <span>Generating assets, please wait...</span>
             </div>
           ` : ''}
 
-          ${audioAssets.length > 0 && script ? html`
+          ${asset_status === 'generated' && hasAssets ? html`
             <div style="margin-top: 1.5rem;">
+              <button
+                class="btn"
+                @click=${this.generateAssets}
+                ?disabled=${this.generatingAssets}
+              >
+                ${this.generatingAssets ? html`<span class="loading-spinner"></span> Regenerating...` : '[ Regenerate Assets ]'}
+              </button>
+
               ${tts_voice ? html`
-                <div style="margin-bottom: 1rem;">
-                  <span class="badge" style="background: #8b5cf6; color: white;">Voice: ${tts_voice}</span>
+                <div style="margin-top: 0.75rem;">
+                  <span class="voice-badge">🎙️ ${tts_voice}</span>
                 </div>
               ` : ''}
 
-              <div class="slides-audio-list">
-                ${audioAssets.map((asset) => {
-                  const metadata = asset.metadata as SlideAudioMetadata | null;
-                  const slideIndex = metadata?.slideIndex ?? asset.assetIndex;
-                  const slide = script.slides[slideIndex];
-                  if (!slide) return null;
-
-                  // Find grid image for this slide
-                  const gridAsset = gridAssets.find(g => {
-                    const gridMeta = g.metadata as GridImageMetadata | null;
-                    if (!gridMeta) return false;
-                    return gridMeta.positions.some(p => p.slideIndex === slideIndex);
-                  });
-
-                  const gridMeta = gridAsset?.metadata as GridImageMetadata | null;
-                  const position = gridMeta?.positions.find(p => p.slideIndex === slideIndex);
-                  const cell = position?.cell ?? 0;
-
-                  return html`
-                    <div class="slide-audio-item">
-                      ${gridAsset ? html`
-                        <div class="slide-crop">
-                          <img src="${gridAsset.url}" style="${this.getCropStyle(cell)}" alt="Slide ${slideIndex + 1}" />
-                        </div>
-                      ` : ''}
-
-                      <div class="slide-content">
-                        <div style="font-weight: 600; color: #1a1a1a;">${slide.headline}</div>
-                        <div class="slide-audio-player">
-                          <audio controls src="${asset.url}"></audio>
-                        </div>
-                        ${metadata?.durationMs ? html`
-                          <span class="badge" style="background: #f3f4f6; color: #6b7280; align-self: flex-start;">
-                            ${(metadata.durationMs / 1000).toFixed(1)}s
-                          </span>
-                        ` : ''}
+              ${gridAssets.length > 0 ? html`
+                <div style="margin-top: 1.5rem;">
+                  <h4 style="font-family: 'Space Mono', monospace; font-size: 0.6875rem; color: #78746c; margin: 0 0 0.75rem 0; text-transform: uppercase;">Grid Images</h4>
+                  <div class="grids-container">
+                    ${gridAssets.map((asset, idx) => html`
+                      <div class="grid-preview">
+                        <img src="${asset.url}" alt="Grid ${idx}" />
                       </div>
-                    </div>
-                  `;
-                })}
-              </div>
+                    `)}
+                  </div>
+                </div>
+              ` : ''}
+
+              ${audioAssets.length > 0 && script ? html`
+                <div style="margin-top: 1.5rem;">
+                  <h4 style="font-family: 'Space Mono', monospace; font-size: 0.6875rem; color: #78746c; margin: 0 0 0.75rem 0; text-transform: uppercase;">Audio Tracks</h4>
+                  <div class="slides-audio-list">
+                    ${audioAssets.map((asset) => {
+                      const metadata = asset.metadata as SlideAudioMetadata | null;
+                      const slideIndex = metadata?.slideIndex ?? asset.assetIndex;
+                      const slide = script.slides[slideIndex];
+                      if (!slide) return null;
+
+                      const gridAsset = gridAssets.find(g => {
+                        const gridMeta = g.metadata as GridImageMetadata | null;
+                        if (!gridMeta) return false;
+                        return gridMeta.positions.some(p => p.slideIndex === slideIndex);
+                      });
+
+                      const gridMeta = gridAsset?.metadata as GridImageMetadata | null;
+                      const position = gridMeta?.positions.find(p => p.slideIndex === slideIndex);
+                      const cell = position?.cell ?? 0;
+
+                      return html`
+                        <div class="slide-audio-item">
+                          ${gridAsset ? html`
+                            <div class="slide-crop">
+                              <img src="${gridAsset.url}" style="${this.getCropStyle(cell)}" alt="Slide ${slideIndex + 1}" />
+                            </div>
+                          ` : ''}
+
+                          <div class="slide-content">
+                            <div class="slide-content-title">${slide.headline}</div>
+                            <div class="slide-audio-player">
+                              <audio controls src="${asset.url}"></audio>
+                            </div>
+                            ${metadata?.durationMs ? html`
+                              <span style="font-family: 'Space Mono', monospace; font-size: 0.625rem; color: #78746c;">
+                                ${(metadata.durationMs / 1000).toFixed(1)}s
+                              </span>
+                            ` : ''}
+                          </div>
+                        </div>
+                      `;
+                    })}
+                  </div>
+                </div>
+              ` : ''}
             </div>
           ` : ''}
-        ` : ''}
-      </div>
-    `;
-  }
-
-  render() {
-    if (this.loading) {
-      return html`
-        <div class="container">
-          <div style="color: white; text-align: center; padding: 2rem;">Loading...</div>
-        </div>
-      `;
-    }
-
-    if (this.error && !this.video) {
-      return html`
-        <div class="container">
-          <div class="error-message">${this.error}</div>
-          <a href="/videos" class="back-link">← Back to Videos</a>
-        </div>
-      `;
-    }
-
-    return html`
-      <div class="container">
-        <a href="/videos" class="back-link">← Back to Videos</a>
-
-        <div class="cards-container">
-          ${this.renderMetadataCard()}
-          ${this.renderSelectionCard()}
-          ${this.renderScriptCard()}
-          ${this.video && this.video.script_status === 'generated' ? this.renderAssetsCard() : ''}
         </div>
       </div>
     `;

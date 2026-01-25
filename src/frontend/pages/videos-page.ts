@@ -3,6 +3,8 @@
  * Displays AI-selected videos for generation
  * GET /api/videos to list videos
  * POST /api/videos/trigger to manually trigger workflow
+ *
+ * Tokyo Editorial Cyber-Industrial aesthetic
  */
 
 import { LitElement, html, css } from 'lit';
@@ -18,6 +20,8 @@ interface ParsedVideo {
   articles: string[];
   video_type: VideoType;
   selection_status: VideoSelectionStatus;
+  script_status: 'pending' | 'generating' | 'generated' | 'error';
+  asset_status: 'pending' | 'generating' | 'generated' | 'error';
   total_cost: number;
   created_at: string;
   updated_at: string;
@@ -26,6 +30,9 @@ interface ParsedVideo {
 @customElement('videos-page')
 export class VideosPage extends LitElement {
   static styles = css`
+    @import url('https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Zen+Tokyo+Zoo&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=Inter:wght@400;500;600;700;800&display=swap');
+
     :host {
       display: block;
       width: 100%;
@@ -34,161 +41,330 @@ export class VideosPage extends LitElement {
 
     .container {
       padding: 2rem;
-      max-width: 1000px;
+      max-width: 1200px;
       margin: 0 auto;
+      background: #f5f3f0;
+      min-height: 100vh;
+      position: relative;
+    }
+
+    /* Background pattern */
+    .container::before {
+      content: '';
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-image: url("data:image/svg+xml,%3Csvg width='120' height='60' viewBox='0 0 120 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 30 Q 15 15, 30 30 T 60 30 T 90 30 T 120 30' stroke='%23e63946' stroke-width='0.5' fill='none' opacity='0.06'/%3E%3C/svg%3E");
+      background-size: 120px 60px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 2rem;
+      position: relative;
+      z-index: 1;
+      flex-wrap: wrap;
+    }
+
+    .header-left {
+      flex: 1;
+      min-width: 280px;
+    }
+
+    .home-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      background: #0a0a0a;
+      color: #ffffff;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      font-weight: 400;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      border: 2px solid #0a0a0a;
+      text-decoration: none;
+      transition: all 0.15s ease-out;
+      box-shadow: 2px 2px 0 #0a0a0a;
+      margin-bottom: 1.5rem;
+    }
+
+    .home-link:hover {
+      background: #e63946;
+      border-color: #e63946;
+      transform: translate(-1px, -1px);
+      box-shadow: 3px 3px 0 #0a0a0a;
     }
 
     h1 {
-      color: white;
-      font-size: 1.5rem;
-      font-weight: 700;
-      margin-bottom: 1.5rem;
+      font-family: 'Zen Tokyo Zoo', sans-serif;
+      font-size: clamp(2rem, 6vw, 3.5rem);
+      font-weight: 400;
+      line-height: 1;
+      color: #0a0a0a;
+      margin: 0;
+      text-transform: uppercase;
     }
 
+    h1 .accent {
+      color: #e63946;
+    }
+
+    .header-right {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 0.75rem;
+    }
+
+    /* Trigger button */
     .trigger-button {
-      padding: 0.75rem 1.5rem;
-      background: rgba(255, 255, 255, 0.2);
-      border: 1px solid rgba(255, 255, 255, 0.3);
-      border-radius: 0.5rem;
-      color: white;
-      font-size: 1rem;
-      font-weight: 500;
+      padding: 0.875rem 1.5rem;
+      background: #e63946;
+      color: #ffffff;
+      border: 3px solid #e63946;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      font-weight: 400;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
       cursor: pointer;
-      transition: background 0.2s;
-      margin-bottom: 1.5rem;
+      transition: all 0.15s ease-out;
+      box-shadow: 4px 4px 0 #0a0a0a;
     }
 
     .trigger-button:hover:not(:disabled) {
-      background: rgba(255, 255, 255, 0.3);
+      background: #0a0a0a;
+      border-color: #0a0a0a;
+      transform: translate(-2px, -2px);
+      box-shadow: 6px 6px 0 #0a0a0a;
+    }
+
+    .trigger-button:focus-visible {
+      outline: 3px solid #e63946;
+      outline-offset: 3px;
     }
 
     .trigger-button:disabled {
       opacity: 0.6;
       cursor: not-allowed;
+      transform: none;
+      box-shadow: 4px 4px 0 #0a0a0a;
     }
 
-    .videos-list {
+    .stats {
       display: flex;
-      flex-direction: column;
+      gap: 1rem;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      color: #58544c;
+    }
+
+    .stat-item {
+      display: flex;
+      align-items: center;
+      gap: 0.375rem;
+    }
+
+    .stat-value {
+      color: #e63946;
+      font-weight: 700;
+    }
+
+    /* Videos list */
+    .videos-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
       gap: 1.5rem;
+      position: relative;
+      z-index: 1;
+    }
+
+    @media (max-width: 768px) {
+      .videos-list {
+        grid-template-columns: 1fr;
+      }
     }
 
     .video-card {
-      background: white;
-      border-radius: 0.5rem;
-      padding: 1.5rem;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      background: #ffffff;
+      border: 3px solid #0a0a0a;
       cursor: pointer;
-      transition: box-shadow 0.2s;
+      transition: all 0.15s ease-out;
+      box-shadow: 4px 4px 0 #0a0a0a;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .video-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: #e63946;
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform 0.2s ease-out;
     }
 
     .video-card:hover {
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      transform: translate(-2px, -2px);
+      box-shadow: 6px 6px 0 #0a0a0a;
     }
 
-    .video-header {
+    .video-card:hover::before {
+      transform: scaleX(1);
+    }
+
+    .video-card:focus-visible {
+      outline: 3px solid #e63946;
+      outline-offset: 3px;
+    }
+
+    .video-card-header {
+      padding: 1.25rem 1.25rem 0.75rem;
       display: flex;
       align-items: flex-start;
       justify-content: space-between;
-      gap: 1rem;
-      margin-bottom: 1rem;
+      gap: 0.75rem;
     }
 
     .video-title {
-      font-size: 1.125rem;
-      font-weight: 600;
-      color: #1a1a1a;
+      font-family: 'Inter', sans-serif;
+      font-size: 1rem;
+      font-weight: 700;
+      color: #0a0a0a;
       margin: 0;
+      line-height: 1.4;
       flex: 1;
     }
 
     .badges {
       display: flex;
-      gap: 0.5rem;
+      gap: 0.375rem;
       flex-shrink: 0;
+      flex-wrap: wrap;
+      justify-content: flex-end;
     }
 
     .badge {
-      display: inline-block;
-      padding: 0.25rem 0.75rem;
-      border-radius: 0.25rem;
-      font-size: 0.75rem;
-      font-weight: 500;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.625rem;
+      font-weight: 400;
+      padding: 0.25rem 0.5rem;
+      border: 1px solid #0a0a0a;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
       white-space: nowrap;
     }
 
     .badge.type-short {
-      background: #8b5cf6;
-      color: white;
+      background: #e63946;
+      color: #ffffff;
+      border-color: #e63946;
     }
 
     .badge.type-long {
-      background: #ec4899;
-      color: white;
+      background: #0a0a0a;
+      color: #ffffff;
+      border-color: #0a0a0a;
+    }
+
+    .badge.script-pending,
+    .badge.asset-pending {
+      background: #f5f3f0;
+      color: #58544c;
+    }
+
+    .badge.script-generating,
+    .badge.asset-generating {
+      background: #0066cc;
+      color: #ffffff;
+      border-color: #0066cc;
+    }
+
+    .badge.script-generated,
+    .badge.asset-generated {
+      background: #2d6a4f;
+      color: #ffffff;
+      border-color: #2d6a4f;
+    }
+
+    .badge.script-error,
+    .badge.asset-error {
+      background: #0a0a0a;
+      color: #e63946;
+      border-color: #e63946;
     }
 
     .video-meta {
+      padding: 0 1.25rem 0.75rem;
       display: flex;
       gap: 1rem;
-      color: #666;
-      font-size: 0.875rem;
-      margin-bottom: 1rem;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      color: #78746c;
     }
 
     .video-cost {
-      font-weight: 600;
-      color: #059669;
-    }
-
-    .status-message {
-      text-align: center;
-      padding: 3rem 2rem;
-      color: rgba(255, 255, 255, 0.8);
-      font-size: 1.125rem;
-    }
-
-    .home-link {
-      display: inline-block;
-      margin-top: 2rem;
-      padding: 0.5rem 1rem;
-      background: rgba(255, 255, 255, 0.2);
-      border: 1px solid rgba(255, 255, 255, 0.3);
-      border-radius: 0.5rem;
-      color: white;
-      font-size: 0.875rem;
-      font-weight: 500;
-      cursor: pointer;
-      transition: background 0.2s;
-      text-decoration: none;
-    }
-
-    .home-link:hover {
-      background: rgba(255, 255, 255, 0.3);
+      color: #2d6a4f;
+      font-weight: 700;
     }
 
     .video-footer {
-      margin-top: 1rem;
-      padding-top: 1rem;
-      border-top: 1px solid #e5e7eb;
+      margin-top: auto;
+      padding: 0.75rem 1.25rem;
+      border-top: 2px solid #e8e6e1;
       display: flex;
-      justify-content: flex-end;
+      justify-content: space-between;
       align-items: center;
+      background: #fafafa;
+    }
+
+    .video-id {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.625rem;
+      color: #a8a49c;
     }
 
     .delete-button {
-      padding: 0.5rem 1rem;
-      background: #ef4444;
-      border: none;
-      border-radius: 0.25rem;
-      color: white;
-      font-size: 0.875rem;
-      font-weight: 500;
+      padding: 0.375rem 0.875rem;
+      background: #ffffff;
+      color: #e63946;
+      border: 2px solid #e63946;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      font-weight: 400;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
       cursor: pointer;
-      transition: background 0.2s;
+      transition: all 0.15s ease-out;
+      box-shadow: 2px 2px 0 #e63946;
     }
 
     .delete-button:hover:not(:disabled) {
-      background: #dc2626;
+      background: #e63946;
+      color: #ffffff;
+      transform: translate(-1px, -1px);
+      box-shadow: 3px 3px 0 #0a0a0a;
+    }
+
+    .delete-button:focus-visible {
+      outline: 2px solid #e63946;
+      outline-offset: 2px;
     }
 
     .delete-button:disabled {
@@ -196,26 +372,55 @@ export class VideosPage extends LitElement {
       cursor: not-allowed;
     }
 
+    /* Status messages */
+    .status-message {
+      text-align: center;
+      padding: 4rem 2rem;
+      font-family: 'Inter', sans-serif;
+      font-size: 1rem;
+      color: #58544c;
+      position: relative;
+      z-index: 1;
+    }
+
+    .status-message.error {
+      color: #e63946;
+    }
+
+    /* Load more */
     .load-more-container {
       display: flex;
       justify-content: center;
       margin-top: 2rem;
+      position: relative;
+      z-index: 1;
     }
 
     .load-more-button {
-      padding: 0.75rem 2rem;
-      background: rgba(255, 255, 255, 0.2);
-      border: 1px solid rgba(255, 255, 255, 0.3);
-      border-radius: 0.5rem;
-      color: white;
-      font-size: 1rem;
-      font-weight: 500;
+      padding: 0.875rem 2rem;
+      background: #0a0a0a;
+      color: #ffffff;
+      border: 3px solid #0a0a0a;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      font-weight: 400;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
       cursor: pointer;
-      transition: background 0.2s;
+      transition: all 0.15s ease-out;
+      box-shadow: 4px 4px 0 #0a0a0a;
     }
 
     .load-more-button:hover:not(:disabled) {
-      background: rgba(255, 255, 255, 0.3);
+      background: #e63946;
+      border-color: #e63946;
+      transform: translate(-2px, -2px);
+      box-shadow: 6px 6px 0 #0a0a0a;
+    }
+
+    .load-more-button:focus-visible {
+      outline: 3px solid #e63946;
+      outline-offset: 3px;
     }
 
     .load-more-button:disabled {
@@ -281,16 +486,13 @@ export class VideosPage extends LitElement {
       const data = await response.json();
       if (data.success) {
         if (page > 1) {
-          // Append videos for pagination
           this.videos = [...this.videos, ...data.videos];
         } else {
-          // Replace videos for initial load
           this.videos = data.videos;
         }
 
-        // Update pagination state
         if (data.pagination) {
-          this.currentPage = data.pagination.currentPage;
+          this.currentPage = data.pagination.page;
           this.hasMore = data.pagination.hasMore;
         }
       } else {
@@ -332,7 +534,6 @@ export class VideosPage extends LitElement {
 
       const data = await response.json();
       if (data.success) {
-        // Wait a few seconds then reload videos
         setTimeout(() => {
           this.loadVideos();
         }, 3000);
@@ -347,7 +548,7 @@ export class VideosPage extends LitElement {
   }
 
   private async deleteVideo(videoId: number) {
-    if (!confirm('Are you sure you want to delete this video? This action cannot be undone.')) {
+    if (!confirm('Delete this video? This action cannot be undone.')) {
       return;
     }
 
@@ -366,7 +567,6 @@ export class VideosPage extends LitElement {
 
       const data = await response.json();
       if (data.success) {
-        // Remove video from local state
         this.videos = this.videos.filter(v => v.id !== videoId);
         this.deleting.delete(videoId);
         this.requestUpdate();
@@ -382,36 +582,63 @@ export class VideosPage extends LitElement {
 
   private formatDate(dateString: string): string {
     const date = new Date(dateString);
-    return date.toLocaleString('en-US', {
+    return date.toLocaleDateString('en-US', {
       month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
+      day: 'numeric'
     });
   }
 
   private getTypeBadge(type: VideoType) {
     const classes = `badge type-${type}`;
-    const label = type === 'short' ? 'Short (60-120s)' : 'Long (4-6min)';
+    const label = type === 'short' ? 'SHORT' : 'LONG';
     return html`<span class="${classes}">${label}</span>`;
+  }
+
+  private getStatusLabel(status: string): string {
+    const labels: Record<string, string> = {
+      'todo': 'READY',
+      'doing': 'ACTIVE',
+      'done': 'DONE',
+      'pending': 'WAIT',
+      'generating': 'GEN...',
+      'generated': 'DONE',
+      'error': 'FAIL'
+    };
+    return labels[status] || status;
   }
 
   render() {
     return html`
       <div class="container">
-        <h1>Video Selections</h1>
-
-        <button
-          @click=${this.triggerWorkflow}
-          ?disabled=${this.triggering}
-          class="trigger-button"
-        >
-          ${this.triggering ? 'Triggering...' : 'Trigger Selection Workflow'}
-        </button>
+        <div class="header">
+          <div class="header-left">
+            <a href="/" class="home-link">← Home</a>
+            <h1>Video<span class="accent">Queue</span></h1>
+          </div>
+          <div class="header-right">
+            <button
+              @click=${this.triggerWorkflow}
+              ?disabled=${this.triggering}
+              class="trigger-button"
+            >
+              ${this.triggering ? '[ TRIGGERING... ]' : '[ Trigger Workflow ]'}
+            </button>
+            ${this.videos.length > 0 ? html`
+              <div class="stats">
+                <div class="stat-item">
+                  <span>TOTAL:</span>
+                  <span class="stat-value">${this.videos.length}</span>
+                </div>
+                <div class="stat-item">
+                  <span>SHORT:</span>
+                  <span class="stat-value">${this.videos.filter(v => v.video_type === 'short').length}</span>
+                </div>
+              </div>
+            ` : ''}
+          </div>
+        </div>
 
         ${this.renderContent()}
-
-        <a href="/" class="home-link">Back to Home</a>
       </div>
     `;
   }
@@ -421,12 +648,12 @@ export class VideosPage extends LitElement {
       return html`<div class="status-message">Loading videos...</div>`;
     }
 
-    if (this.error) {
-      return html`<div class="status-message" style="color: rgba(239, 68, 68, 0.9)">Error: ${this.error}</div>`;
+    if (this.error && this.videos.length === 0) {
+      return html`<div class="status-message error">[ ERROR: ${this.error} ]</div>`;
     }
 
     if (this.videos.length === 0) {
-      return html`<div class="status-message">No videos found. Click "Trigger Selection Workflow" to start.</div>`;
+      return html`<div class="status-message">No videos. Click "Trigger Workflow" to start.</div>`;
     }
 
     return html`
@@ -440,7 +667,7 @@ export class VideosPage extends LitElement {
             ?disabled=${this.loadingMore}
             @click=${this.loadMoreVideos}
           >
-            ${this.loadingMore ? 'Loading...' : 'Load More'}
+            ${this.loadingMore ? '[ LOADING... ]' : '[ Load More ]'}
           </button>
         </div>
       ` : ''}
@@ -456,10 +683,12 @@ export class VideosPage extends LitElement {
 
     return html`
       <div class="video-card" @click=${() => this.navigateToVideo(video.id)}>
-        <div class="video-header">
+        <div class="video-card-header">
           <h2 class="video-title">${video.short_title || 'Untitled Video'}</h2>
           <div class="badges">
             ${this.getTypeBadge(video.video_type)}
+            <span class="badge script-${video.script_status}">SCR: ${this.getStatusLabel(video.script_status)}</span>
+            <span class="badge asset-${video.asset_status}">AST: ${this.getStatusLabel(video.asset_status)}</span>
           </div>
         </div>
 
@@ -469,6 +698,7 @@ export class VideosPage extends LitElement {
         </div>
 
         <div class="video-footer">
+          <span class="video-id">#${video.id}</span>
           <button
             class="delete-button"
             ?disabled=${isDeleting}
@@ -477,7 +707,7 @@ export class VideosPage extends LitElement {
               this.deleteVideo(video.id);
             }}
           >
-            ${isDeleting ? 'Deleting...' : 'Delete'}
+            ${isDeleting ? '...' : 'DELETE'}
           </button>
         </div>
       </div>
