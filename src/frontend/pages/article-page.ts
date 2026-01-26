@@ -2,11 +2,22 @@
  * Article page component
  * Displays scraped article content with version selector
  * Load article from /api/articles/pick:{pickId} or /api/articles/{articleId}
+ *
+ * Tokyo Editorial Cyber-Industrial aesthetic
  */
 
-import { LitElement, html, css } from 'lit';
+import { LitElement, html, unsafeCSS } from 'lit';
 import { customElement, state, property } from 'lit/decorators.js';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
+import { getAuthHeaders } from '../lib/auth.js';
+import {
+  Colors,
+  Typography,
+  Spacing,
+  Borders,
+  Shadows,
+  fontImports,
+} from '../styles/design-system.js';
 
 type ArticleStatus = 'pending' | 'not_available' | 'scraped_v1' | 'scraped_v2';
 
@@ -48,7 +59,7 @@ interface ArticleComment {
 
 @customElement('article-page')
 export class ArticlePage extends LitElement {
-  static styles = css`
+  static styles = unsafeCSS(fontImports + `
     :host {
       display: block;
       width: 100%;
@@ -56,43 +67,75 @@ export class ArticlePage extends LitElement {
     }
 
     .container {
-      padding: 2rem;
+      padding: 1.5rem;
       max-width: 900px;
       margin: 0 auto;
+      background: #f5f3f0;
+      min-height: 100vh;
+      position: relative;
+    }
+
+    /* Background pattern */
+    .container::before {
+      content: '';
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-image: url("data:image/svg+xml,%3Csvg width='120' height='60' viewBox='0 0 120 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 30 Q 15 15, 30 30 T 60 30 T 90 30 T 120 30' stroke='%23e63946' stroke-width='0.5' fill='none' opacity='0.06'/%3E%3C/svg%3E");
+      background-size: 120px 60px;
+      pointer-events: none;
+      z-index: 0;
     }
 
     .back-link {
-      display: inline-block;
-      margin-bottom: 1.5rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 2rem;
       padding: 0.5rem 1rem;
-      background: rgba(255, 255, 255, 0.2);
-      border: 1px solid rgba(255, 255, 255, 0.3);
-      border-radius: 0.5rem;
-      color: white;
-      font-size: 0.875rem;
-      font-weight: 500;
-      cursor: pointer;
-      transition: background 0.2s;
+      background: #0a0a0a;
+      color: #ffffff;
+      font-family: "Space Mono", monospace;
+      font-size: 0.6875rem;
+      font-weight: 400;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      border: 2px solid #0a0a0a;
       text-decoration: none;
+      transition: all 0.15s ease-out;
+      box-shadow: 2px 2px 0 #0a0a0a;
+      position: relative;
+      z-index: 1;
     }
 
     .back-link:hover {
-      background: rgba(255, 255, 255, 0.3);
+      background: #e63946;
+      border-color: #e63946;
+      transform: translate(-1px, -1px);
+      box-shadow: 4px 4px 0 #0a0a0a;
     }
 
     .article-header {
-      background: white;
-      border-radius: 0.5rem;
-      padding: 1.5rem;
-      margin-bottom: 1.5rem;
+      background: #ffffff;
+      border: 3px solid #0a0a0a;
+      box-shadow: 4px 4px 0 #0a0a0a;
+      padding: 2rem;
+      margin-bottom: 2rem;
+      position: relative;
+      z-index: 1;
     }
 
     .article-title {
-      font-size: 1.5rem;
-      font-weight: 700;
-      color: #1a1a1a;
-      margin: 0 0 1rem 0;
-      line-height: 1.4;
+      font-family: "Zen Tokyo Zoo", system-ui, sans-serif;
+      font-size: clamp(1.75rem, 5vw, 2.5rem);
+      font-weight: 400;
+      line-height: 1.1;
+      color: #0a0a0a;
+      margin: 0 0 1.5rem 0;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
     }
 
     .article-meta {
@@ -104,42 +147,52 @@ export class ArticlePage extends LitElement {
     }
 
     .article-source {
-      font-size: 0.875rem;
-      color: #3b82f6;
-      font-weight: 500;
+      font-family: "Space Mono", monospace;
+      font-size: 0.6875rem;
+      color: #e63946;
+      font-weight: 400;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
     }
 
     .article-date {
-      font-size: 0.875rem;
-      color: #666;
+      font-family: "Space Mono", monospace;
+      font-size: 0.6875rem;
+      color: #78746c;
     }
 
     .status-badge {
-      display: inline-block;
-      padding: 0.25rem 0.75rem;
-      border-radius: 0.25rem;
-      font-size: 0.75rem;
-      font-weight: 500;
+      font-family: "Space Mono", monospace;
+      font-size: 0.6875rem;
+      font-weight: 400;
+      padding: 0.25rem 0.625rem;
+      border: 1px solid #0a0a0a;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
     }
 
     .status-badge.scraped-v1 {
-      background: #3b82f6;
-      color: white;
+      background: #0066cc;
+      color: #ffffff;
+      border-color: #0066cc;
     }
 
     .status-badge.scraped-v2 {
-      background: #10b981;
-      color: white;
+      background: #2d6a4f;
+      color: #ffffff;
+      border-color: #2d6a4f;
     }
 
     .status-badge.not-available {
-      background: #9ca3af;
-      color: white;
+      background: #78746c;
+      color: #ffffff;
+      border-color: #78746c;
     }
 
     .status-badge.pending {
-      background: #fbbf24;
+      background: #e9c46a;
       color: #78350f;
+      border-color: #e9c46a;
     }
 
     .version-selector {
@@ -150,42 +203,53 @@ export class ArticlePage extends LitElement {
 
     .version-button {
       padding: 0.5rem 1rem;
-      border: 1px solid #e5e7eb;
-      border-radius: 0.375rem;
-      background: white;
-      color: #374151;
+      border: 1px solid #0a0a0a;
+      background: #ffffff;
+      color: #403c34;
+      font-family: "Space Mono", monospace;
       font-size: 0.875rem;
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all 0.15s ease-out;
+      box-shadow: 2px 2px 0 #0a0a0a;
     }
 
     .version-button:hover {
-      background: #f3f4f6;
+      background: #e8e6e1;
+      transform: translate(-1px, -1px);
+      box-shadow: 4px 4px 0 #0a0a0a;
     }
 
     .version-button.active {
-      background: #3b82f6;
-      color: white;
-      border-color: #3b82f6;
+      background: #0066cc;
+      color: #ffffff;
+      border-color: #0066cc;
     }
 
     .article-content {
-      background: white;
-      border-radius: 0.5rem;
-      padding: 1.5rem;
-      margin-bottom: 1.5rem;
+      background: #ffffff;
+      border: 3px solid #0a0a0a;
+      box-shadow: 4px 4px 0 #0a0a0a;
+      padding: 2rem;
+      margin-bottom: 2rem;
+      position: relative;
+      z-index: 1;
     }
 
     .article-content h2 {
-      font-size: 1.25rem;
-      color: #1a1a1a;
-      margin: 0 0 1rem 0;
+      font-family: "Zen Tokyo Zoo", system-ui, sans-serif;
+      font-size: clamp(1.25rem, 3vw, 1.75rem);
+      font-weight: 400;
+      color: #0a0a0a;
+      margin: 0 0 1.5rem 0;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
     }
 
     .article-body {
+      font-family: "Inter", "Noto Sans JP", system-ui, sans-serif;
       font-size: 1rem;
-      line-height: 1.8;
-      color: #374151;
+      line-height: 1.75;
+      color: #58544c;
     }
 
     .article-body p {
@@ -195,25 +259,33 @@ export class ArticlePage extends LitElement {
     .article-body img {
       max-width: 100%;
       height: auto;
-      border-radius: 0.25rem;
+      border: 1px solid #0a0a0a;
+      box-shadow: 2px 2px 0 #0a0a0a;
       margin: 1rem 0;
     }
 
     .comments-section {
-      background: white;
-      border-radius: 0.5rem;
-      padding: 1.5rem;
+      background: #ffffff;
+      border: 3px solid #0a0a0a;
+      box-shadow: 4px 4px 0 #0a0a0a;
+      padding: 2rem;
+      position: relative;
+      z-index: 1;
     }
 
     .comments-title {
-      font-size: 1.25rem;
-      color: #1a1a1a;
-      margin: 0 0 1rem 0;
+      font-family: "Zen Tokyo Zoo", system-ui, sans-serif;
+      font-size: clamp(1.25rem, 3vw, 1.75rem);
+      font-weight: 400;
+      color: #0a0a0a;
+      margin: 0 0 1.5rem 0;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
     }
 
     .comment {
       padding: 1rem;
-      border-bottom: 1px solid #e5e7eb;
+      border-bottom: 1px solid #0a0a0a;
     }
 
     .comment:last-child {
@@ -228,53 +300,62 @@ export class ArticlePage extends LitElement {
     }
 
     .comment-author {
-      font-weight: 500;
-      color: #1a1a1a;
+      font-family: "Inter", "Noto Sans JP", system-ui, sans-serif;
+      font-weight: 700;
+      color: #0a0a0a;
     }
 
     .comment-date {
-      font-size: 0.75rem;
-      color: #9ca3af;
+      font-family: "Space Mono", monospace;
+      font-size: 0.6875rem;
+      color: #78746c;
     }
 
     .comment-content {
+      font-family: "Inter", "Noto Sans JP", system-ui, sans-serif;
       font-size: 0.875rem;
-      color: #374151;
-      line-height: 1.6;
+      color: #58544c;
+      line-height: 1.5;
     }
 
     .comment-footer {
       display: flex;
       gap: 1rem;
       margin-top: 0.5rem;
-      font-size: 0.75rem;
-      color: #9ca3af;
+      font-family: "Space Mono", monospace;
+      font-size: 0.6875rem;
+      color: #78746c;
+    }
+
+    .loading,
+    .error {
+      text-align: center;
+      padding: 4rem;
+      position: relative;
+      z-index: 1;
+      font-family: "Inter", "Noto Sans JP", system-ui, sans-serif;
+      font-size: 1.25rem;
     }
 
     .loading {
-      text-align: center;
-      padding: 3rem;
-      color: rgba(255, 255, 255, 0.8);
-      font-size: 1.125rem;
+      color: #78746c;
     }
 
     .error {
-      text-align: center;
-      padding: 3rem;
-      color: rgba(239, 68, 68, 0.9);
-      font-size: 1.125rem;
+      color: #e63946;
     }
 
     .no-content {
-      color: #9ca3af;
+      color: #78746c;
       font-style: italic;
     }
 
     .original-link {
       display: inline-block;
       margin-top: 1rem;
-      color: #3b82f6;
+      color: #0066cc;
       text-decoration: none;
+      font-family: "Space Mono", monospace;
       font-size: 0.875rem;
     }
 
@@ -283,10 +364,13 @@ export class ArticlePage extends LitElement {
     }
 
     .metadata-section {
-      background: #f3f4f6;
-      border-radius: 0.5rem;
-      padding: 1rem;
-      margin-bottom: 1.5rem;
+      background: #ffffff;
+      border: 3px solid #0a0a0a;
+      box-shadow: 2px 2px 0 #0a0a0a;
+      padding: 1.5rem;
+      margin-bottom: 2rem;
+      position: relative;
+      z-index: 1;
     }
 
     .metadata-row {
@@ -297,20 +381,24 @@ export class ArticlePage extends LitElement {
     }
 
     .metadata-label {
-      font-size: 0.75rem;
-      color: #6b7280;
-      font-weight: 500;
+      font-family: "Space Mono", monospace;
+      font-size: 0.6875rem;
+      color: #78746c;
+      font-weight: 400;
       min-width: 80px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
     }
 
     .metadata-value {
+      font-family: "Space Mono", monospace;
       font-size: 0.875rem;
-      color: #1f2937;
+      color: #282420;
       word-break: break-all;
     }
 
     .metadata-value a {
-      color: #3b82f6;
+      color: #0066cc;
       text-decoration: none;
     }
 
@@ -320,46 +408,55 @@ export class ArticlePage extends LitElement {
 
     .trigger-button {
       padding: 0.625rem 1.25rem;
-      background: #3b82f6;
-      border: none;
-      border-radius: 0.375rem;
-      color: white;
+      background: #0066cc;
+      border: 3px solid #0066cc;
+      color: #ffffff;
+      font-family: "Space Mono", monospace;
       font-size: 0.875rem;
-      font-weight: 500;
+      font-weight: 400;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
       cursor: pointer;
-      transition: background 0.2s;
+      transition: all 0.15s ease-out;
+      box-shadow: 2px 2px 0 #0a0a0a;
     }
 
     .trigger-button:hover:not(:disabled) {
-      background: #2563eb;
+      background: #0a0a0a;
+      border-color: #0a0a0a;
+      transform: translate(-2px, -2px);
+      box-shadow: 4px 4px 0 #0a0a0a;
     }
 
     .trigger-button:disabled {
       opacity: 0.6;
       cursor: not-allowed;
+      transform: none;
     }
 
     .polling-status {
-      padding: 0.75rem;
-      background: #eff6ff;
-      border: 1px solid #bfdbfe;
-      border-radius: 0.375rem;
+      padding: 1rem;
+      background: #e8e6e1;
+      border: 1px solid #0a0a0a;
+      font-family: "Space Mono", monospace;
       font-size: 0.875rem;
-      color: #1e40af;
+      color: #0066cc;
       margin-bottom: 1rem;
     }
 
     .status-badge.retry-1,
     .status-badge.retry-2 {
-      background: #f97316;
-      color: white;
+      background: #e63946;
+      color: #ffffff;
+      border-color: #e63946;
     }
 
     .status-badge.error {
-      background: #ef4444;
-      color: white;
+      background: #e63946;
+      color: #ffffff;
+      border-color: #e63946;
     }
-  `;
+  `);
 
   @property({ type: String })
   articleId: string = '';
@@ -396,15 +493,6 @@ export class ArticlePage extends LitElement {
 
   private pollingInterval: number | null = null;
 
-  private getAuthHeaders(): HeadersInit {
-    const username = 'admin';
-    const password = 'GvkP525fTX0ocMTw8XtAqM9ECvNIx50v';
-    const credentials = btoa(`${username}:${password}`);
-    return {
-      'Authorization': `Basic ${credentials}`
-    };
-  }
-
   connectedCallback() {
     super.connectedCallback();
     this.loadArticle();
@@ -419,7 +507,7 @@ export class ArticlePage extends LitElement {
 
     try {
       const response = await fetch(`/api/articles/${this.articleId}`, {
-        headers: this.getAuthHeaders()
+        headers: getAuthHeaders()
       });
 
       if (!response.ok) {
@@ -461,7 +549,7 @@ export class ArticlePage extends LitElement {
     try {
       const response = await fetch(
         `/api/articles/pick:${this.article.pickId}/version/${version}`,
-        { headers: this.getAuthHeaders() }
+        { headers: getAuthHeaders() }
       );
 
       if (response.ok) {
@@ -515,7 +603,7 @@ export class ArticlePage extends LitElement {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...this.getAuthHeaders()
+          ...getAuthHeaders()
         }
       });
 
@@ -542,7 +630,7 @@ export class ArticlePage extends LitElement {
 
       try {
         const response = await fetch(`/api/articles/status/${this.workflowId}`, {
-          headers: this.getAuthHeaders()
+          headers: getAuthHeaders()
         });
 
         const data = await response.json();
@@ -588,7 +676,7 @@ export class ArticlePage extends LitElement {
     if (this.loading) {
       return html`
         <div class="container">
-          <a href="/news" class="back-link">Back to News</a>
+          <a href="/news" class="back-link">← Back to News</a>
           <div class="loading">Loading article...</div>
         </div>
       `;
@@ -597,7 +685,7 @@ export class ArticlePage extends LitElement {
     if (this.error) {
       return html`
         <div class="container">
-          <a href="/news" class="back-link">Back to News</a>
+          <a href="/news" class="back-link">← Back to News</a>
           <div class="error">${this.error}</div>
         </div>
       `;
@@ -606,7 +694,7 @@ export class ArticlePage extends LitElement {
     if (!this.article) {
       return html`
         <div class="container">
-          <a href="/news" class="back-link">Back to News</a>
+          <a href="/news" class="back-link">← Back to News</a>
           <div class="error">Article not found</div>
         </div>
       `;
@@ -616,7 +704,7 @@ export class ArticlePage extends LitElement {
 
     return html`
       <div class="container">
-        <a href="/news" class="back-link">Back to News</a>
+        <a href="/news" class="back-link">← Back to News</a>
 
         <div class="article-header">
           <h1 class="article-title">${this.article.title || 'Untitled'}</h1>
@@ -679,7 +767,7 @@ export class ArticlePage extends LitElement {
               ${this.isPolling ? 'Scraping in progress...' : 'Trigger Scraping'}
             </button>
 
-            ${this.triggerError ? html`<div style="color: #ef4444; font-size: 0.875rem; margin-top: 0.5rem;">${this.triggerError}</div>` : ''}
+            ${this.triggerError ? html`<div style="color: #e63946; font-family: 'Space Mono', monospace; font-size: 0.875rem; margin-top: 0.5rem;">${this.triggerError}</div>` : ''}
           </div>
         ` : ''}
 

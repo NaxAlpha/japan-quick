@@ -1,10 +1,14 @@
 /**
  * Settings page component - Application settings
  * Displays YouTube authentication status and allows connection/disconnection
+ *
+ * Tokyo Editorial Cyber-Industrial aesthetic
  */
 
-import { LitElement, html, css } from 'lit';
+import { LitElement, html, unsafeCSS } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
+import { getAuthHeaders } from '../lib/auth.js';
+import { fontImports } from '../styles/design-system.js';
 
 interface YouTubeAuthStatus {
   isConnected: boolean;
@@ -19,7 +23,7 @@ interface YouTubeAuthStatus {
 
 @customElement('settings-page')
 export class SettingsPage extends LitElement {
-  static styles = css`
+  static styles = unsafeCSS(fontImports + `
     :host {
       display: block;
       width: 100%;
@@ -30,83 +34,123 @@ export class SettingsPage extends LitElement {
       padding: 2rem;
       max-width: 800px;
       margin: 0 auto;
+      background: #f5f3f0;
+      min-height: 100vh;
+      position: relative;
+    }
+
+    /* Background pattern */
+    .container::before {
+      content: '';
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-image: url("data:image/svg+xml,%3Csvg width='120' height='60' viewBox='0 0 120 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 30 Q 15 15, 30 30 T 60 30 T 90 30 T 120 30' stroke='%23e63946' stroke-width='0.5' fill='none' opacity='0.06'/%3E%3C/svg%3E");
+      background-size: 120px 60px;
+      pointer-events: none;
+      z-index: 0;
     }
 
     h1 {
-      color: white;
-      font-size: 1.5rem;
-      font-weight: 700;
-      margin-bottom: 1.5rem;
+      font-family: "Zen Tokyo Zoo", system-ui, sans-serif;
+      font-size: clamp(2.5rem, 8vw, 5rem);
+      font-weight: 400;
+      line-height: 1.1;
+      color: #0a0a0a;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+      margin: 0 0 2rem 0;
+      position: relative;
+      z-index: 1;
     }
 
     .settings-section {
-      background: white;
-      border-radius: 0.5rem;
-      padding: 1.5rem;
-      margin-bottom: 1.5rem;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      background: #ffffff;
+      border: 3px solid #0a0a0a;
+      box-shadow: 4px 4px 0 #0a0a0a;
+      padding: 2rem;
+      margin-bottom: 2rem;
+      position: relative;
+      z-index: 1;
     }
 
     .section-title {
-      font-size: 1.125rem;
-      font-weight: 600;
-      color: #1a1a1a;
-      margin: 0 0 1rem 0;
+      font-family: "Zen Tokyo Zoo", system-ui, sans-serif;
+      font-size: clamp(1.25rem, 3vw, 1.75rem);
+      font-weight: 400;
+      color: #0a0a0a;
+      margin: 0 0 1.5rem 0;
       display: flex;
       align-items: center;
-      gap: 0.5rem;
+      gap: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
     }
 
     .status-badge {
-      display: inline-block;
+      font-family: "Space Mono", monospace;
+      font-size: 0.6875rem;
+      font-weight: 400;
       padding: 0.25rem 0.75rem;
-      border-radius: 0.25rem;
-      font-size: 0.75rem;
-      font-weight: 500;
+      border: 1px solid #0a0a0a;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
       white-space: nowrap;
     }
 
     .status-badge.connected {
-      background: #10b981;
-      color: white;
+      background: #2d6a4f;
+      color: #ffffff;
+      border-color: #2d6a4f;
     }
 
     .status-badge.not-connected {
-      background: #6b7280;
-      color: white;
+      background: #78746c;
+      color: #ffffff;
+      border-color: #78746c;
     }
 
     .channel-info {
       margin: 1rem 0;
-      padding: 1rem;
-      background: #f9fafb;
-      border-radius: 0.375rem;
-      border: 1px solid #e5e7eb;
+      padding: 1.5rem;
+      background: #e8e6e1;
+      border: 2px solid #0a0a0a;
+      box-shadow: 2px 2px 0 #0a0a0a;
     }
 
     .channel-name {
-      font-size: 1rem;
-      font-weight: 600;
-      color: #1a1a1a;
+      font-family: "Inter", "Noto Sans JP", system-ui, sans-serif;
+      font-size: 1.125rem;
+      font-weight: 700;
+      color: #0a0a0a;
       margin: 0 0 0.25rem 0;
     }
 
     .channel-id {
-      font-size: 0.875rem;
-      color: #6b7280;
+      font-family: "Space Mono", monospace;
+      font-size: 0.75rem;
+      color: #58544c;
       margin: 0;
     }
 
     .token-info {
       margin: 1rem 0;
-      font-size: 0.875rem;
-      color: #6b7280;
+      font-family: "Space Mono", monospace;
+      font-size: 0.75rem;
+      color: #58544c;
     }
 
     .token-info-row {
       display: flex;
       justify-content: space-between;
-      padding: 0.25rem 0;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid #d4d0c8;
+    }
+
+    .token-info-row:last-child {
+      border-bottom: none;
     }
 
     .token-expires-soon {
@@ -115,132 +159,182 @@ export class SettingsPage extends LitElement {
     }
 
     .token-expired {
-      color: #ef4444;
+      color: #e63946;
       font-weight: 500;
     }
 
     .scopes-list {
       margin: 1rem 0;
+      font-family: "Inter", "Noto Sans JP", system-ui, sans-serif;
       font-size: 0.875rem;
     }
 
     .scopes-title {
-      font-weight: 600;
-      color: #1a1a1a;
-      margin-bottom: 0.5rem;
+      font-weight: 700;
+      color: #0a0a0a;
+      margin-bottom: 0.75rem;
+      font-family: "Space Mono", monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-size: 0.6875rem;
     }
 
     .scope-item {
-      padding: 0.25rem 0.5rem;
-      background: #f3f4f6;
-      border-radius: 0.25rem;
+      padding: 0.375rem 0.75rem;
+      background: #d4d0c8;
+      border: 1px solid #0a0a0a;
       display: inline-block;
       margin: 0.125rem;
-      font-size: 0.75rem;
-      color: #374151;
+      font-size: 0.6875rem;
+      color: #282420;
+      font-family: "Space Mono", monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
     }
 
     .button-group {
       display: flex;
-      gap: 0.75rem;
-      margin-top: 1rem;
+      gap: 1rem;
+      margin-top: 1.5rem;
+      flex-wrap: wrap;
     }
 
     .button {
-      padding: 0.625rem 1.25rem;
-      border-radius: 0.375rem;
-      font-size: 0.875rem;
-      font-weight: 500;
+      padding: 0.75rem 1.5rem;
+      font-family: "Space Mono", monospace;
+      font-size: 0.75rem;
+      font-weight: 400;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
       cursor: pointer;
-      transition: background 0.2s;
-      border: none;
+      transition: all 0.15s ease-out;
+      border: 2px solid #0a0a0a;
+      box-shadow: 2px 2px 0 #0a0a0a;
     }
 
     .button:disabled {
       opacity: 0.6;
       cursor: not-allowed;
+      transform: none;
+    }
+
+    .button:disabled:hover {
+      transform: none;
+      box-shadow: 2px 2px 0 #0a0a0a;
     }
 
     .button-primary {
-      background: #3b82f6;
-      color: white;
+      background: #0066cc;
+      color: #ffffff;
+      border-color: #0066cc;
     }
 
     .button-primary:hover:not(:disabled) {
-      background: #2563eb;
+      background: #0a0a0a;
+      border-color: #0a0a0a;
+      transform: translate(-2px, -2px);
+      box-shadow: 4px 4px 0 #0a0a0a;
     }
 
     .button-danger {
-      background: #ef4444;
-      color: white;
+      background: #e63946;
+      color: #ffffff;
+      border-color: #e63946;
     }
 
     .button-danger:hover:not(:disabled) {
-      background: #dc2626;
+      background: #0a0a0a;
+      border-color: #0a0a0a;
+      transform: translate(-2px, -2px);
+      box-shadow: 4px 4px 0 #0a0a0a;
     }
 
     .button-secondary {
-      background: #6b7280;
-      color: white;
+      background: #78746c;
+      color: #ffffff;
+      border-color: #78746c;
     }
 
     .button-secondary:hover:not(:disabled) {
-      background: #4b5563;
+      background: #0a0a0a;
+      border-color: #0a0a0a;
+      transform: translate(-2px, -2px);
+      box-shadow: 4px 4px 0 #0a0a0a;
     }
 
     .status-message {
       text-align: center;
-      padding: 2rem 1rem;
-      color: rgba(255, 255, 255, 0.8);
-      font-size: 1rem;
+      padding: 4rem 1rem;
+      color: #78746c;
+      font-size: 1.125rem;
+      font-family: "Inter", "Noto Sans JP", system-ui, sans-serif;
+      position: relative;
+      z-index: 1;
     }
 
     .error-message {
-      padding: 0.75rem 1rem;
-      background: #fef2f2;
-      border: 1px solid #fecaca;
-      border-radius: 0.375rem;
-      color: #991b1b;
+      padding: 1rem 1.5rem;
+      background: #e63946;
+      border: 2px solid #0a0a0a;
+      box-shadow: 2px 2px 0 #0a0a0a;
+      color: #ffffff;
       font-size: 0.875rem;
       margin: 1rem 0;
+      font-family: "Space Mono", monospace;
+      position: relative;
+      z-index: 1;
     }
 
     .success-message {
-      padding: 0.75rem 1rem;
-      background: #f0fdf4;
-      border: 1px solid #bbf7d0;
-      border-radius: 0.375rem;
-      color: #166534;
+      padding: 1rem 1.5rem;
+      background: #2d6a4f;
+      border: 2px solid #0a0a0a;
+      box-shadow: 2px 2px 0 #0a0a0a;
+      color: #ffffff;
       font-size: 0.875rem;
       margin: 1rem 0;
+      font-family: "Space Mono", monospace;
+      position: relative;
+      z-index: 1;
     }
 
     .home-link {
-      display: inline-block;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
       margin-top: 2rem;
       padding: 0.5rem 1rem;
-      background: rgba(255, 255, 255, 0.2);
-      border: 1px solid rgba(255, 255, 255, 0.3);
-      border-radius: 0.5rem;
-      color: white;
-      font-size: 0.875rem;
-      font-weight: 500;
+      background: #0a0a0a;
+      border: 2px solid #0a0a0a;
+      color: #ffffff;
+      font-size: 0.75rem;
+      font-weight: 400;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
       cursor: pointer;
-      transition: background 0.2s;
+      transition: all 0.15s ease-out;
       text-decoration: none;
+      font-family: "Space Mono", monospace;
+      box-shadow: 2px 2px 0 #0a0a0a;
+      position: relative;
+      z-index: 1;
     }
 
     .home-link:hover {
-      background: rgba(255, 255, 255, 0.3);
+      background: #e63946;
+      border-color: #e63946;
+      transform: translate(-1px, -1px);
+      box-shadow: 4px 4px 0 #0a0a0a;
     }
 
     .description {
+      font-family: "Inter", "Noto Sans JP", system-ui, sans-serif;
       font-size: 0.875rem;
-      color: #6b7280;
-      margin: 0.5rem 0 1rem 0;
-      line-height: 1.5;
+      color: #58544c;
+      margin: 0.5rem 0 1.5rem 0;
+      line-height: 1.6;
     }
-  `;
+  `);
 
   @state()
   private authStatus: YouTubeAuthStatus | null = null;
@@ -262,18 +356,6 @@ export class SettingsPage extends LitElement {
 
   @state()
   private message: string | null = null;
-
-  /**
-   * Generate Basic Auth headers for API requests
-   */
-  private getAuthHeaders(): HeadersInit {
-    const username = 'admin';
-    const password = 'GvkP525fTX0ocMTw8XtAqM9ECvNIx50v';
-    const credentials = btoa(`${username}:${password}`);
-    return {
-      'Authorization': `Basic ${credentials}`
-    };
-  }
 
   connectedCallback() {
     super.connectedCallback();
@@ -310,7 +392,7 @@ export class SettingsPage extends LitElement {
       this.message = null;
 
       const response = await fetch('/api/youtube/status', {
-        headers: this.getAuthHeaders()
+        headers: getAuthHeaders()
       });
 
       if (!response.ok) {
@@ -336,7 +418,7 @@ export class SettingsPage extends LitElement {
       this.error = null;
 
       const response = await fetch('/api/youtube/auth/url', {
-        headers: this.getAuthHeaders()
+        headers: getAuthHeaders()
       });
 
       if (!response.ok) {
@@ -367,7 +449,7 @@ export class SettingsPage extends LitElement {
 
       const response = await fetch('/api/youtube/auth', {
         method: 'DELETE',
-        headers: this.getAuthHeaders()
+        headers: getAuthHeaders()
       });
 
       if (!response.ok) {
@@ -395,7 +477,7 @@ export class SettingsPage extends LitElement {
 
       const response = await fetch('/api/youtube/refresh', {
         method: 'POST',
-        headers: this.getAuthHeaders()
+        headers: getAuthHeaders()
       });
 
       if (!response.ok) {
@@ -456,7 +538,7 @@ export class SettingsPage extends LitElement {
           ${this.renderYouTubeSection()}
         `}
 
-        <a href="/" class="home-link">Back to Home</a>
+        <a href="/" class="home-link">← Back to Home</a>
       </div>
     `;
   }
