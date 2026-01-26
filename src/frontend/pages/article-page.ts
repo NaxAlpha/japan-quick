@@ -3,21 +3,12 @@
  * Displays scraped article content with version selector
  * Load article from /api/articles/pick:{pickId} or /api/articles/{articleId}
  *
- * Tokyo Editorial Cyber-Industrial aesthetic
+ * Tokyo Cyber-Industrial aesthetic
  */
 
-import { LitElement, html, unsafeCSS } from 'lit';
+import { LitElement, html, css } from 'lit';
 import { customElement, state, property } from 'lit/decorators.js';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
-import { getAuthHeaders } from '../lib/auth.js';
-import {
-  Colors,
-  Typography,
-  Spacing,
-  Borders,
-  Shadows,
-  fontImports,
-} from '../styles/design-system.js';
 
 type ArticleStatus = 'pending' | 'not_available' | 'scraped_v1' | 'scraped_v2';
 
@@ -59,7 +50,10 @@ interface ArticleComment {
 
 @customElement('article-page')
 export class ArticlePage extends LitElement {
-  static styles = unsafeCSS(fontImports + `
+  static styles = css`
+    @import url('https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Zen+Tokyo+Zoo&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=Inter:wght@400;500;600;700;800&display=swap');
+
     :host {
       display: block;
       width: 100%;
@@ -67,7 +61,7 @@ export class ArticlePage extends LitElement {
     }
 
     .container {
-      padding: 1.5rem;
+      padding: 2rem;
       max-width: 900px;
       margin: 0 auto;
       background: #f5f3f0;
@@ -89,15 +83,39 @@ export class ArticlePage extends LitElement {
       z-index: 0;
     }
 
+    /* Japanese character decoration */
+    .japanese-deco {
+      position: fixed;
+      font-family: 'Zen Tokyo Zoo', sans-serif;
+      font-size: clamp(10rem, 25vw, 20rem);
+      color: rgba(230, 57, 70, 0.03);
+      line-height: 1;
+      pointer-events: none;
+      z-index: 0;
+      user-select: none;
+    }
+
+    .japanese-deco.top {
+      top: 10%;
+      right: -5%;
+      transform: rotate(5deg);
+    }
+
+    .japanese-deco.bottom {
+      bottom: 5%;
+      left: -5%;
+      transform: rotate(-5deg);
+    }
+
+    /* Back link */
     .back-link {
       display: inline-flex;
       align-items: center;
       gap: 0.5rem;
-      margin-bottom: 2rem;
       padding: 0.5rem 1rem;
       background: #0a0a0a;
       color: #ffffff;
-      font-family: "Space Mono", monospace;
+      font-family: 'Space Mono', monospace;
       font-size: 0.6875rem;
       font-weight: 400;
       text-transform: uppercase;
@@ -106,6 +124,7 @@ export class ArticlePage extends LitElement {
       text-decoration: none;
       transition: all 0.15s ease-out;
       box-shadow: 2px 2px 0 #0a0a0a;
+      margin-bottom: 2rem;
       position: relative;
       z-index: 1;
     }
@@ -114,21 +133,32 @@ export class ArticlePage extends LitElement {
       background: #e63946;
       border-color: #e63946;
       transform: translate(-1px, -1px);
-      box-shadow: 4px 4px 0 #0a0a0a;
+      box-shadow: 3px 3px 0 #0a0a0a;
     }
 
+    /* Article header card */
     .article-header {
       background: #ffffff;
       border: 3px solid #0a0a0a;
       box-shadow: 4px 4px 0 #0a0a0a;
       padding: 2rem;
-      margin-bottom: 2rem;
+      margin-bottom: 1.5rem;
       position: relative;
       z-index: 1;
     }
 
+    .article-header::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: #e63946;
+    }
+
     .article-title {
-      font-family: "Zen Tokyo Zoo", system-ui, sans-serif;
+      font-family: 'Zen Tokyo Zoo', sans-serif;
       font-size: clamp(1.75rem, 5vw, 2.5rem);
       font-weight: 400;
       line-height: 1.1;
@@ -147,28 +177,31 @@ export class ArticlePage extends LitElement {
     }
 
     .article-source {
-      font-family: "Space Mono", monospace;
-      font-size: 0.6875rem;
-      color: #e63946;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
       font-weight: 400;
+      color: #e63946;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.1em;
+      padding: 0.25rem 0.625rem;
+      border: 1px solid #e63946;
     }
 
     .article-date {
-      font-family: "Space Mono", monospace;
+      font-family: 'Space Mono', monospace;
       font-size: 0.6875rem;
       color: #78746c;
     }
 
     .status-badge {
-      font-family: "Space Mono", monospace;
-      font-size: 0.6875rem;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.625rem;
       font-weight: 400;
-      padding: 0.25rem 0.625rem;
+      padding: 0.25rem 0.5rem;
       border: 1px solid #0a0a0a;
       text-transform: uppercase;
       letter-spacing: 0.05em;
+      white-space: nowrap;
     }
 
     .status-badge.scraped-v1 {
@@ -195,75 +228,295 @@ export class ArticlePage extends LitElement {
       border-color: #e9c46a;
     }
 
+    .status-badge.retry-1,
+    .status-badge.retry-2 {
+      background: #f97316;
+      color: #ffffff;
+      border-color: #f97316;
+    }
+
+    .status-badge.error {
+      background: #ef4444;
+      color: #ffffff;
+      border-color: #ef4444;
+    }
+
+    /* Version selector */
     .version-selector {
       display: flex;
       gap: 0.5rem;
-      margin-bottom: 1rem;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
     }
 
     .version-button {
       padding: 0.5rem 1rem;
-      border: 1px solid #0a0a0a;
+      border: 2px solid #0a0a0a;
       background: #ffffff;
-      color: #403c34;
-      font-family: "Space Mono", monospace;
-      font-size: 0.875rem;
+      color: #0a0a0a;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      font-weight: 400;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
       cursor: pointer;
       transition: all 0.15s ease-out;
       box-shadow: 2px 2px 0 #0a0a0a;
     }
 
     .version-button:hover {
-      background: #e8e6e1;
       transform: translate(-1px, -1px);
-      box-shadow: 4px 4px 0 #0a0a0a;
+      box-shadow: 3px 3px 0 #0a0a0a;
     }
 
     .version-button.active {
-      background: #0066cc;
-      color: #ffffff;
-      border-color: #0066cc;
+      background: #0a0a0a;
+      color: #e63946;
+      border-color: #0a0a0a;
     }
 
+    /* Original link */
+    .original-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 1rem;
+      color: #0a0a0a;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      text-decoration: none;
+      padding: 0.5rem 0;
+      border-bottom: 2px solid #e63946;
+      transition: all 0.15s ease-out;
+    }
+
+    .original-link:hover {
+      color: #e63946;
+      padding-left: 0.25rem;
+    }
+
+    .original-link::before {
+      content: '↗';
+      font-size: 0.875rem;
+    }
+
+    /* Article content */
     .article-content {
       background: #ffffff;
       border: 3px solid #0a0a0a;
       box-shadow: 4px 4px 0 #0a0a0a;
       padding: 2rem;
-      margin-bottom: 2rem;
+      margin-bottom: 1.5rem;
       position: relative;
       z-index: 1;
     }
 
+    .article-content::before {
+      content: 'CONTENT';
+      position: absolute;
+      top: 0;
+      left: 0;
+      padding: 0.25rem 0.625rem;
+      background: #0a0a0a;
+      color: #e63946;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.625rem;
+      font-weight: 400;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
     .article-content h2 {
-      font-family: "Zen Tokyo Zoo", system-ui, sans-serif;
-      font-size: clamp(1.25rem, 3vw, 1.75rem);
+      font-family: 'Zen Tokyo Zoo', sans-serif;
+      font-size: clamp(1.25rem, 3vw, 1.5rem);
       font-weight: 400;
       color: #0a0a0a;
       margin: 0 0 1.5rem 0;
+      padding-top: 1rem;
       text-transform: uppercase;
-      letter-spacing: 0.02em;
     }
 
     .article-body {
-      font-family: "Inter", "Noto Sans JP", system-ui, sans-serif;
+      font-family: 'Inter', 'Noto Sans JP', sans-serif;
       font-size: 1rem;
-      line-height: 1.75;
-      color: #58544c;
+      line-height: 1.8;
+      color: #1a1a1a;
     }
 
     .article-body p {
-      margin-bottom: 1rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .article-body h2 {
+      font-family: 'Inter', sans-serif;
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #0a0a0a;
+      margin: 2rem 0 1rem;
+      text-transform: none;
+    }
+
+    .article-body h3 {
+      font-family: 'Inter', sans-serif;
+      font-size: 1.125rem;
+      font-weight: 600;
+      color: #0a0a0a;
+      margin: 1.5rem 0 0.75rem;
     }
 
     .article-body img {
       max-width: 100%;
       height: auto;
-      border: 1px solid #0a0a0a;
-      box-shadow: 2px 2px 0 #0a0a0a;
-      margin: 1rem 0;
+      border: 2px solid #0a0a0a;
+      margin: 1.5rem 0;
+      box-shadow: 3px 3px 0 rgba(10, 10, 10, 0.3);
     }
 
+    .article-body ul,
+    .article-body ol {
+      margin-bottom: 1.25rem;
+      padding-left: 1.5rem;
+    }
+
+    .article-body li {
+      margin-bottom: 0.5rem;
+    }
+
+    .no-content {
+      color: #78746c;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.875rem;
+      font-style: italic;
+    }
+
+    /* Metadata section */
+    .metadata-section {
+      background: #0a0a0a;
+      border: 3px solid #0a0a0a;
+      box-shadow: 4px 4px 0 #e63946;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      position: relative;
+      z-index: 1;
+    }
+
+    .metadata-section::before {
+      content: 'METADATA';
+      position: absolute;
+      top: 0;
+      left: 0;
+      padding: 0.25rem 0.625rem;
+      background: #e63946;
+      color: #ffffff;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.625rem;
+      font-weight: 400;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    .metadata-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+      padding-top: 0.5rem;
+    }
+
+    .metadata-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .metadata-label {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      font-weight: 400;
+      color: #e63946;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      min-width: 100px;
+      flex-shrink: 0;
+    }
+
+    .metadata-value {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      color: #f5f3f0;
+      word-break: break-all;
+    }
+
+    .metadata-value a {
+      color: #e63946;
+      text-decoration: none;
+      border-bottom: 1px dashed #e63946;
+    }
+
+    .metadata-value a:hover {
+      color: #ffffff;
+      border-bottom-style: solid;
+    }
+
+    /* Trigger button */
+    .trigger-button {
+      width: 100%;
+      padding: 0.875rem 1.5rem;
+      background: #e63946;
+      border: 3px solid #e63946;
+      color: #ffffff;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      font-weight: 400;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      cursor: pointer;
+      transition: all 0.15s ease-out;
+      box-shadow: 4px 4px 0 #0a0a0a;
+      margin-top: 1rem;
+    }
+
+    .trigger-button:hover:not(:disabled) {
+      background: #0a0a0a;
+      border-color: #0a0a0a;
+      transform: translate(-2px, -2px);
+      box-shadow: 6px 6px 0 #e63946;
+    }
+
+    .trigger-button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: 4px 4px 0 #0a0a0a;
+    }
+
+    /* Polling status */
+    .polling-status {
+      padding: 0.75rem;
+      background: rgba(230, 57, 70, 0.1);
+      border: 2px solid #e63946;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      color: #e63946;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .polling-status::before {
+      content: '';
+      width: 8px;
+      height: 8px;
+      background: #e63946;
+      border-radius: 50%;
+      animation: pulse 1s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.8); }
+    }
+
+    /* Comments section */
     .comments-section {
       background: #ffffff;
       border: 3px solid #0a0a0a;
@@ -273,19 +526,34 @@ export class ArticlePage extends LitElement {
       z-index: 1;
     }
 
+    .comments-section::before {
+      content: 'COMMENTS';
+      position: absolute;
+      top: 0;
+      left: 0;
+      padding: 0.25rem 0.625rem;
+      background: #0a0a0a;
+      color: #e63946;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.625rem;
+      font-weight: 400;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
     .comments-title {
-      font-family: "Zen Tokyo Zoo", system-ui, sans-serif;
-      font-size: clamp(1.25rem, 3vw, 1.75rem);
+      font-family: 'Zen Tokyo Zoo', sans-serif;
+      font-size: clamp(1.25rem, 3vw, 1.5rem);
       font-weight: 400;
       color: #0a0a0a;
       margin: 0 0 1.5rem 0;
+      padding-top: 1rem;
       text-transform: uppercase;
-      letter-spacing: 0.02em;
     }
 
     .comment {
-      padding: 1rem;
-      border-bottom: 1px solid #0a0a0a;
+      padding: 1rem 0;
+      border-bottom: 2px solid #e8e6e1;
     }
 
     .comment:last-child {
@@ -296,167 +564,111 @@ export class ArticlePage extends LitElement {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 0.5rem;
+      margin-bottom: 0.75rem;
+      flex-wrap: wrap;
+      gap: 0.5rem;
     }
 
     .comment-author {
-      font-family: "Inter", "Noto Sans JP", system-ui, sans-serif;
-      font-weight: 700;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      font-weight: 400;
       color: #0a0a0a;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 0.25rem 0.5rem;
+      background: #f5f3f0;
+      border: 1px solid #0a0a0a;
     }
 
     .comment-date {
-      font-family: "Space Mono", monospace;
+      font-family: 'Space Mono', monospace;
       font-size: 0.6875rem;
       color: #78746c;
     }
 
     .comment-content {
-      font-family: "Inter", "Noto Sans JP", system-ui, sans-serif;
-      font-size: 0.875rem;
-      color: #58544c;
-      line-height: 1.5;
+      font-family: 'Inter', 'Noto Sans JP', sans-serif;
+      font-size: 0.9375rem;
+      color: #1a1a1a;
+      line-height: 1.6;
     }
 
     .comment-footer {
       display: flex;
       gap: 1rem;
-      margin-top: 0.5rem;
-      font-family: "Space Mono", monospace;
+      margin-top: 0.75rem;
+      font-family: 'Space Mono', monospace;
       font-size: 0.6875rem;
       color: #78746c;
     }
 
+    .comment-footer span {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
+
+    /* Loading and error states */
     .loading,
     .error {
       text-align: center;
-      padding: 4rem;
+      padding: 3rem;
+      font-family: 'Space Mono', monospace;
       position: relative;
       z-index: 1;
-      font-family: "Inter", "Noto Sans JP", system-ui, sans-serif;
-      font-size: 1.25rem;
     }
 
     .loading {
       color: #78746c;
+      font-size: 0.875rem;
     }
 
     .error {
       color: #e63946;
+      font-size: 1rem;
     }
 
-    .no-content {
-      color: #78746c;
-      font-style: italic;
-    }
-
-    .original-link {
+    .loading-spinner {
       display: inline-block;
-      margin-top: 1rem;
-      color: #0066cc;
-      text-decoration: none;
-      font-family: "Space Mono", monospace;
-      font-size: 0.875rem;
-    }
-
-    .original-link:hover {
-      text-decoration: underline;
-    }
-
-    .metadata-section {
-      background: #ffffff;
-      border: 3px solid #0a0a0a;
-      box-shadow: 2px 2px 0 #0a0a0a;
-      padding: 1.5rem;
-      margin-bottom: 2rem;
-      position: relative;
-      z-index: 1;
-    }
-
-    .metadata-row {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      margin-bottom: 0.5rem;
-    }
-
-    .metadata-label {
-      font-family: "Space Mono", monospace;
-      font-size: 0.6875rem;
-      color: #78746c;
-      font-weight: 400;
-      min-width: 80px;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-
-    .metadata-value {
-      font-family: "Space Mono", monospace;
-      font-size: 0.875rem;
-      color: #282420;
-      word-break: break-all;
-    }
-
-    .metadata-value a {
-      color: #0066cc;
-      text-decoration: none;
-    }
-
-    .metadata-value a:hover {
-      text-decoration: underline;
-    }
-
-    .trigger-button {
-      padding: 0.625rem 1.25rem;
-      background: #0066cc;
-      border: 3px solid #0066cc;
-      color: #ffffff;
-      font-family: "Space Mono", monospace;
-      font-size: 0.875rem;
-      font-weight: 400;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      cursor: pointer;
-      transition: all 0.15s ease-out;
-      box-shadow: 2px 2px 0 #0a0a0a;
-    }
-
-    .trigger-button:hover:not(:disabled) {
-      background: #0a0a0a;
-      border-color: #0a0a0a;
-      transform: translate(-2px, -2px);
-      box-shadow: 4px 4px 0 #0a0a0a;
-    }
-
-    .trigger-button:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-      transform: none;
-    }
-
-    .polling-status {
-      padding: 1rem;
-      background: #e8e6e1;
-      border: 1px solid #0a0a0a;
-      font-family: "Space Mono", monospace;
-      font-size: 0.875rem;
-      color: #0066cc;
+      width: 2rem;
+      height: 2rem;
+      border: 3px solid #e8e6e1;
+      border-top-color: #e63946;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
       margin-bottom: 1rem;
     }
 
-    .status-badge.retry-1,
-    .status-badge.retry-2 {
-      background: #e63946;
-      color: #ffffff;
-      border-color: #e63946;
+    @keyframes spin {
+      to { transform: rotate(360deg); }
     }
 
-    .status-badge.error {
-      background: #e63946;
-      color: #ffffff;
-      border-color: #e63946;
+    @media (max-width: 640px) {
+      .container {
+        padding: 1rem;
+      }
+
+      .article-header,
+      .article-content,
+      .comments-section {
+        padding: 1.5rem;
+      }
+
+      .metadata-section {
+        padding: 1rem;
+      }
+
+      .version-selector {
+        flex-direction: column;
+      }
+
+      .version-button {
+        width: 100%;
+        text-align: center;
+      }
     }
-  `);
+  `;
 
   @property({ type: String })
   articleId: string = '';
@@ -493,6 +705,15 @@ export class ArticlePage extends LitElement {
 
   private pollingInterval: number | null = null;
 
+  private getAuthHeaders(): HeadersInit {
+    const username = 'admin';
+    const password = 'GvkP525fTX0ocMTw8XtAqM9ECvNIx50v';
+    const credentials = btoa(`${username}:${password}`);
+    return {
+      'Authorization': `Basic ${credentials}`
+    };
+  }
+
   connectedCallback() {
     super.connectedCallback();
     this.loadArticle();
@@ -507,7 +728,7 @@ export class ArticlePage extends LitElement {
 
     try {
       const response = await fetch(`/api/articles/${this.articleId}`, {
-        headers: getAuthHeaders()
+        headers: this.getAuthHeaders()
       });
 
       if (!response.ok) {
@@ -549,7 +770,7 @@ export class ArticlePage extends LitElement {
     try {
       const response = await fetch(
         `/api/articles/pick:${this.article.pickId}/version/${version}`,
-        { headers: getAuthHeaders() }
+        { headers: this.getAuthHeaders() }
       );
 
       if (response.ok) {
@@ -571,7 +792,7 @@ export class ArticlePage extends LitElement {
   private getStatusBadge(status: ArticleStatus) {
     switch (status) {
       case 'scraped_v1':
-        return html`<span class="status-badge scraped-v1">Scraped</span>`;
+        return html`<span class="status-badge scraped-v1">Scraped v1</span>`;
       case 'scraped_v2':
         return html`<span class="status-badge scraped-v2">Scraped v2</span>`;
       case 'not_available':
@@ -603,7 +824,7 @@ export class ArticlePage extends LitElement {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...getAuthHeaders()
+          ...this.getAuthHeaders()
         }
       });
 
@@ -630,7 +851,7 @@ export class ArticlePage extends LitElement {
 
       try {
         const response = await fetch(`/api/articles/status/${this.workflowId}`, {
-          headers: getAuthHeaders()
+          headers: this.getAuthHeaders()
         });
 
         const data = await response.json();
@@ -677,7 +898,10 @@ export class ArticlePage extends LitElement {
       return html`
         <div class="container">
           <a href="/news" class="back-link">← Back to News</a>
-          <div class="loading">Loading article...</div>
+          <div class="loading">
+            <div class="loading-spinner"></div>
+            <div>Loading article...</div>
+          </div>
         </div>
       `;
     }
@@ -686,7 +910,7 @@ export class ArticlePage extends LitElement {
       return html`
         <div class="container">
           <a href="/news" class="back-link">← Back to News</a>
-          <div class="error">${this.error}</div>
+          <div class="error">[ ERROR: ${this.error} ]</div>
         </div>
       `;
     }
@@ -704,6 +928,10 @@ export class ArticlePage extends LitElement {
 
     return html`
       <div class="container">
+        <!-- Japanese character decorations -->
+        <div class="japanese-deco top">読</div>
+        <div class="japanese-deco bottom">報</div>
+
         <a href="/news" class="back-link">← Back to News</a>
 
         <div class="article-header">
@@ -731,13 +959,19 @@ export class ArticlePage extends LitElement {
 
           ${this.article.articleUrl ? html`
             <a href="${this.article.articleUrl}" target="_blank" rel="noopener noreferrer" class="original-link">
-              View original article on Yahoo
+              View original on Yahoo
             </a>
           ` : ''}
         </div>
 
         ${this.isUnscraped() ? html`
           <div class="metadata-section">
+            <div class="metadata-row">
+              <span class="metadata-label">Pickup ID:</span>
+              <span class="metadata-value">
+                ${this.article?.pickId || '-'}
+              </span>
+            </div>
             <div class="metadata-row">
               <span class="metadata-label">Pickup URL:</span>
               <span class="metadata-value">
@@ -764,15 +998,15 @@ export class ArticlePage extends LitElement {
               ?disabled=${this.isPolling}
               @click=${this.triggerScraping}
             >
-              ${this.isPolling ? 'Scraping in progress...' : 'Trigger Scraping'}
+              ${this.isPolling ? '[ SCRAPING IN PROGRESS... ]' : '[ TRIGGER SCRAPING WORKFLOW ]'}
             </button>
 
-            ${this.triggerError ? html`<div style="color: #e63946; font-family: 'Space Mono', monospace; font-size: 0.875rem; margin-top: 0.5rem;">${this.triggerError}</div>` : ''}
+            ${this.triggerError ? html`<div style="color: #e63946; font-family: 'Space Mono', monospace; font-size: 0.875rem; margin-top: 0.5rem;">[ ERROR: ${this.triggerError} ]</div>` : ''}
           </div>
         ` : ''}
 
         <div class="article-content">
-          <h2>Article Content</h2>
+          <h2>Content</h2>
           ${currentVersion ? html`
             <div class="article-body">
               ${currentVersion.content ? unsafeHTML(currentVersion.content) : html`<p class="no-content">No content available</p>`}
@@ -793,8 +1027,8 @@ export class ArticlePage extends LitElement {
                 </div>
                 <div class="comment-content">${comment.content}</div>
                 <div class="comment-footer">
-                  <span>${comment.likes} likes</span>
-                  ${comment.repliesCount > 0 ? html`<span>${comment.repliesCount} replies</span>` : ''}
+                  <span>♥ ${comment.likes}</span>
+                  ${comment.repliesCount > 0 ? html`<span>💬 ${comment.repliesCount}</span>` : ''}
                 </div>
               </div>
             `)}

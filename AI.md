@@ -135,12 +135,20 @@ japan-quick/
 
 - Entry point: `public/index.html`
 - Framework: Lit (Web Components)
+- Design System: **Tokyo Cyber-Industrial** aesthetic
+  - **Colors**: Off-white background (#f5f3f0), charcoal (#0a0a0a), electric red accent (#e63946)
+  - **Typography**: Zen Tokyo Zoo (display), Space Mono (mono/labels), Inter/Noto Sans JP (body)
+  - **Styling**: Sharp brutalist borders (3px solid), hard shadows (4px 4px 0), Japanese wave pattern overlay
+  - **Fonts**: Google Fonts import for Space Mono, Zen Tokyo Zoo, Noto Sans JP, Inter
+  - **Patterns**: Subtle seigaiha (wave) pattern as background overlay
+  - **Animations**: Marquee ticker, slide-up hero, pulse effects, hover transforms
 - Components:
   - `<app-root>`: Home page with navigation and API test button
   - `<news-page>`: News scraping interface with article status badges (all article clicks navigate to article page)
   - `<article-page>`: Article detail view with version selector, workflow trigger for unscraped articles
   - `<videos-page>`: Video selection management interface with workflow trigger
   - `<video-page>`: Video detail view with metadata, selection, and script cards
+  - `<settings-page>`: Settings page with YouTube OAuth connection
 - Build output: `public/frontend/` directory (from TypeScript compilation)
 - Styling: Tokyo Cyber-Industrial aesthetic with design-system.ts tokens
 - Purpose: Provides interface for content generation, preview, and management
