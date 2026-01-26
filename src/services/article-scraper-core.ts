@@ -7,6 +7,13 @@
 import { ArticleScraper } from './article-scraper.js';
 import type { ArticleStatus } from '../types/article.js';
 import { log, generateRequestId } from '../lib/logger.js';
+import {
+  checkArticleForScraping,
+  upsertArticle,
+  upsertArticleVersion,
+  upsertArticleComments,
+  updateArticleStatus,
+} from '../lib/db-helpers.js';
 
 interface ScrapeArticleCoreParams {
   browser: any;
@@ -47,9 +54,7 @@ export async function scrapeArticleCore(params: ScrapeArticleCoreParams): Promis
 
   try {
     // Step 1: Check if article exists in DB
-    const existingArticle = await db.prepare(
-      'SELECT id, status FROM articles WHERE pick_id = ?'
-    ).bind(pickId).first() as { id: number; status: string } | null;
+    const existingArticle = await checkArticleForScraping(db, pickId);
 
     // If not rescrape and article already exists with scraped status, skip
     if (!isRescrape && existingArticle &&
@@ -81,26 +86,14 @@ export async function scrapeArticleCore(params: ScrapeArticleCoreParams): Promis
         // Update status based on attempt number
         if (attempt < maxRetries) {
           const retryStatus: ArticleStatus = attempt === 0 ? 'retry_1' : 'retry_2';
-          await db.prepare(`
-            INSERT INTO articles (pick_id, status, detected_at)
-            VALUES (?, ?, datetime('now'))
-            ON CONFLICT(pick_id) DO UPDATE SET
-              status = excluded.status,
-              updated_at = datetime('now')
-          `).bind(pickId, retryStatus).run();
+          await upsertArticle(db, { pickId, status: retryStatus });
           log.articleScraperCore.info('Retry attempt failed, status updated', { pickId, attemptNumber: attempt + 1, status: retryStatus });
 
           // Wait before next retry (exponential backoff)
           await sleep((attempt + 1) * 5 * 1000); // 5s, 10s
         } else {
           // Final attempt failed - mark as error
-          await db.prepare(`
-            INSERT INTO articles (pick_id, status, detected_at)
-            VALUES (?, 'error', datetime('now'))
-            ON CONFLICT(pick_id) DO UPDATE SET
-              status = 'error',
-              updated_at = datetime('now')
-          `).bind(pickId).run();
+          await upsertArticle(db, { pickId, status: 'error' });
 
           return {
             success: false,
@@ -115,13 +108,7 @@ export async function scrapeArticleCore(params: ScrapeArticleCoreParams): Promis
     // If external article, skip scraping
     if (pickupResult.isExternal || !pickupResult.articleUrl) {
       log.articleScraperCore.info('External article or no URL, marking as not available', { pickId, isExternal: pickupResult.isExternal, hasUrl: !!pickupResult.articleUrl });
-      await db.prepare(`
-        INSERT INTO articles (pick_id, status, detected_at)
-        VALUES (?, 'not_available', datetime('now'))
-        ON CONFLICT(pick_id) DO UPDATE SET
-          status = 'not_available',
-          updated_at = datetime('now')
-      `).bind(pickId).run();
+      await upsertArticle(db, { pickId, status: 'not_available' });
 
       return {
         success: true,
@@ -162,129 +149,47 @@ export async function scrapeArticleCore(params: ScrapeArticleCoreParams): Promis
     log.articleScraperCore.info('Preparing to save to database', { pickId, version });
 
     // Step 5: Save article record
-    let articleId: number;
     log.articleScraperCore.info('Saving article record', { pickId, exists: !!existingArticle });
-    if (existingArticle) {
-      // Update existing article
-      await db.prepare(`
-        UPDATE articles SET
-          article_id = ?,
-          article_url = ?,
-          title = ?,
-          source = ?,
-          thumbnail_url = ?,
-          published_at = ?,
-          modified_at = ?,
-          updated_at = datetime('now')
-        WHERE id = ?
-      `).bind(
-        article.articleId || null,
-        article.articleUrl,
-        article.title,
-        article.source || null,
-        article.thumbnailUrl || null,
-        article.publishedAt || null,
-        article.modifiedAt || null,
-        existingArticle.id
-      ).run();
-      articleId = existingArticle.id;
-    } else {
-      // Insert new article
-      const result = await db.prepare(`
-        INSERT INTO articles (
-          pick_id, article_id, article_url, status, title, source,
-          thumbnail_url, published_at, modified_at, detected_at
-        ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, datetime('now'))
-      `).bind(
-        pickId,
-        article.articleId || null,
-        article.articleUrl,
-        article.title,
-        article.source || null,
-        article.thumbnailUrl || null,
-        article.publishedAt || null,
-        article.modifiedAt || null
-      ).run();
-      articleId = result.meta.last_row_id as number;
-      log.articleScraperCore.info('Article record inserted', { pickId, articleId });
-    }
+    const articleId = await upsertArticle(db, {
+      pickId,
+      status: 'pending',
+      articleUrl: article.articleUrl,
+      articleId: article.articleId,
+      title: article.title,
+      source: article.source,
+      thumbnailUrl: article.thumbnailUrl,
+      publishedAt: article.publishedAt,
+      modifiedAt: article.modifiedAt,
+    });
+    log.articleScraperCore.info('Article record saved', { pickId, articleId });
 
     // Step 6: Save version
-    await db.prepare(`
-      INSERT INTO article_versions (
-        article_id, version, content, content_text, page_count, images, scraped_at
-      ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-      ON CONFLICT(article_id, version) DO UPDATE SET
-        content = excluded.content,
-        content_text = excluded.content_text,
-        page_count = excluded.page_count,
-        images = excluded.images,
-        scraped_at = excluded.scraped_at
-    `).bind(
+    await upsertArticleVersion(db, {
       articleId,
       version,
-      article.content,
-      article.contentText || null,
-      article.pageCount,
-      JSON.stringify(article.images)
-    ).run();
+      content: article.content,
+      contentText: article.contentText,
+      pageCount: article.pageCount,
+      images: article.images,
+    });
     log.articleScraperCore.info('Article version saved', { pickId, articleId, version, pageCount: article.pageCount });
 
     // Step 7: Save comments
-    // Delete old comments for this version
-    await db.prepare(
-      'DELETE FROM article_comments WHERE article_id = ? AND version = ?'
-    ).bind(articleId, version).run();
-    log.articleScraperCore.info('Old comments deleted', { pickId, articleId, version });
-
-    // Insert new comments with reaction breakdown and nested replies
-    for (const comment of commentsData) {
-      await db.prepare(`
-        INSERT INTO article_comments (
-          article_id, version, comment_id, author, content, posted_at,
-          likes, replies_count, reactions_empathized, reactions_understood,
-          reactions_questioning, replies, scraped_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-      `).bind(
-        articleId,
-        version,
-        comment.commentId || null,
-        comment.author || null,
-        comment.content,
-        comment.postedAt || null,
-        comment.likes,
-        comment.repliesCount,
-        comment.reactions.empathized,
-        comment.reactions.understood,
-        comment.reactions.questioning,
-        comment.replies.length > 0 ? JSON.stringify(comment.replies) : null
-      ).run();
-    }
+    await upsertArticleComments(db, {
+      articleId,
+      version,
+      comments: commentsData,
+    });
     log.articleScraperCore.info('Comments saved', { pickId, articleId, version, commentCount: commentsData.length });
 
     // Step 8: Update status and schedule rescrape
     const newStatus: ArticleStatus = isRescrape ? 'scraped_v2' : 'scraped_v1';
-    if (isRescrape) {
-      // Version 2 - update second scraped time, clear scheduled rescrape
-      await db.prepare(`
-        UPDATE articles SET
-          status = ?,
-          second_scraped_at = datetime('now'),
-          scheduled_rescrape_at = NULL,
-          updated_at = datetime('now')
-        WHERE id = ?
-      `).bind(newStatus, articleId).run();
-    } else {
-      // Version 1 - update first scraped time, schedule rescrape in 15 minutes
-      await db.prepare(`
-        UPDATE articles SET
-          status = ?,
-          first_scraped_at = datetime('now'),
-          scheduled_rescrape_at = datetime('now', '+15 minutes'),
-          updated_at = datetime('now')
-        WHERE id = ?
-      `).bind(newStatus, articleId).run();
-    }
+    await updateArticleStatus(db, articleId, newStatus, {
+      firstScrapedAt: !isRescrape,
+      secondScrapedAt: isRescrape,
+      scheduleRescrape: !isRescrape,
+      rescrapeMinutes: 15,
+    });
 
     const durationMs = Date.now() - startTime;
     log.articleScraperCore.info('Scraping completed', {

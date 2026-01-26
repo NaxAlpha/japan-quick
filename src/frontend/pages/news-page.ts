@@ -11,6 +11,7 @@
 
 import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
+import { getAuthHeaders } from '../lib/auth.js';
 
 type ArticleStatus = 'pending' | 'not_available' | 'scraped_v1' | 'scraped_v2';
 
@@ -444,18 +445,6 @@ export class NewsPage extends LitElement {
 
   private pollingInterval: number | null = null;
 
-  /**
-   * Generate Basic Auth headers for API requests
-   */
-  private getAuthHeaders(): HeadersInit {
-    const username = 'admin';
-    const password = 'GvkP525fTX0ocMTw8XtAqM9ECvNIx50v';
-    const credentials = btoa(`${username}:${password}`);
-    return {
-      'Authorization': `Basic ${credentials}`
-    };
-  }
-
   connectedCallback() {
     super.connectedCallback();
     this.loadLatestSnapshot();
@@ -469,7 +458,7 @@ export class NewsPage extends LitElement {
   private async loadLatestSnapshot() {
     try {
       const response = await fetch('/api/news/latest', {
-        headers: this.getAuthHeaders()
+        headers: getAuthHeaders()
       });
       if (response.ok) {
         const result = await response.json();
@@ -495,7 +484,7 @@ export class NewsPage extends LitElement {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...this.getAuthHeaders()
+          ...getAuthHeaders()
         },
         body: JSON.stringify({ skipCache: false })
       });
@@ -543,7 +532,7 @@ export class NewsPage extends LitElement {
 
     try {
       const response = await fetch(`/api/news/status/${this.workflowId}`, {
-        headers: this.getAuthHeaders()
+        headers: getAuthHeaders()
       });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -575,7 +564,7 @@ export class NewsPage extends LitElement {
 
     try {
       const response = await fetch(`/api/news/result/${this.workflowId}`, {
-        headers: this.getAuthHeaders()
+        headers: getAuthHeaders()
       });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);

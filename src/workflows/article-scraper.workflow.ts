@@ -14,6 +14,13 @@ import puppeteer from '@cloudflare/puppeteer';
 import type { ArticleScraperParams, ArticleScraperResult, ArticleStatus } from '../types/article.js';
 import { ArticleScraper } from '../services/article-scraper.js';
 import { log, generateRequestId } from '../lib/logger.js';
+import {
+  checkArticleForScraping,
+  upsertArticle,
+  upsertArticleVersion,
+  upsertArticleComments,
+  updateArticleStatus,
+} from '../lib/db-helpers.js';
 
 interface WorkflowEnv {
   BROWSER: any;
@@ -39,10 +46,7 @@ export class ArticleScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, Arti
           backoff: "constant"
         }
       }, async () => {
-        const result = await this.env.DB.prepare(
-          'SELECT id, status FROM articles WHERE pick_id = ?'
-        ).bind(pickId).first();
-        return result as { id: number; status: string } | null;
+        return checkArticleForScraping(this.env.DB, pickId);
       });
       log.articleScraperWorkflow.info(reqId, 'Step completed', { step: 'check-existing', durationMs: Date.now() - checkStart, exists: !!existingArticle });
 
@@ -88,14 +92,7 @@ export class ArticleScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, Arti
           if (attempt < maxRetries) {
             const retryStatus: ArticleStatus = attempt === 0 ? 'retry_1' : 'retry_2';
             await step.do(`update-retry-status-${attempt}`, async () => {
-              // Use UPSERT to handle both new and existing articles
-              await this.env.DB.prepare(`
-                INSERT INTO articles (pick_id, status, detected_at)
-                VALUES (?, ?, datetime('now'))
-                ON CONFLICT(pick_id) DO UPDATE SET
-                  status = excluded.status,
-                  updated_at = datetime('now')
-              `).bind(pickId, retryStatus).run();
+              await upsertArticle(this.env.DB, { pickId, status: retryStatus });
             });
             log.articleScraperWorkflow.info(reqId, 'Retry status updated', { attempt, status: retryStatus });
 
@@ -104,14 +101,7 @@ export class ArticleScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, Arti
           } else {
             // Final attempt failed - mark as error
             await step.do('mark-as-error', async () => {
-              // Use UPSERT to handle both new and existing articles
-              await this.env.DB.prepare(`
-                INSERT INTO articles (pick_id, status, detected_at)
-                VALUES (?, 'error', datetime('now'))
-                ON CONFLICT(pick_id) DO UPDATE SET
-                  status = 'error',
-                  updated_at = datetime('now')
-              `).bind(pickId).run();
+              await upsertArticle(this.env.DB, { pickId, status: 'error' });
             });
             log.articleScraperWorkflow.error(reqId, 'All retry attempts failed', { error: lastError });
 
@@ -135,14 +125,7 @@ export class ArticleScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, Arti
             backoff: "constant"
           }
         }, async () => {
-          // Use UPSERT to handle both new and existing articles
-          await this.env.DB.prepare(`
-            INSERT INTO articles (pick_id, status, detected_at)
-            VALUES (?, 'not_available', datetime('now'))
-            ON CONFLICT(pick_id) DO UPDATE SET
-              status = 'not_available',
-              updated_at = datetime('now')
-          `).bind(pickId).run();
+          await upsertArticle(this.env.DB, { pickId, status: 'not_available' });
         });
 
         log.articleScraperWorkflow.info(reqId, 'Workflow completed (not available)', { durationMs: Date.now() - startTime, pickId });
@@ -199,49 +182,17 @@ export class ArticleScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, Arti
           backoff: "constant"
         }
       }, async () => {
-        if (existingArticle) {
-          // Update existing article
-          await this.env.DB.prepare(`
-            UPDATE articles SET
-              article_id = ?,
-              article_url = ?,
-              title = ?,
-              source = ?,
-              thumbnail_url = ?,
-              published_at = ?,
-              modified_at = ?,
-              updated_at = datetime('now')
-            WHERE id = ?
-          `).bind(
-            article.articleId || null,
-            article.articleUrl,
-            article.title,
-            article.source || null,
-            article.thumbnailUrl || null,
-            article.publishedAt || null,
-            article.modifiedAt || null,
-            existingArticle.id
-          ).run();
-          return existingArticle.id;
-        } else {
-          // Insert new article
-          const result = await this.env.DB.prepare(`
-            INSERT INTO articles (
-              pick_id, article_id, article_url, status, title, source,
-              thumbnail_url, published_at, modified_at, detected_at
-            ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, datetime('now'))
-          `).bind(
-            pickId,
-            article.articleId || null,
-            article.articleUrl,
-            article.title,
-            article.source || null,
-            article.thumbnailUrl || null,
-            article.publishedAt || null,
-            article.modifiedAt || null
-          ).run();
-          return result.meta.last_row_id;
-        }
+        return upsertArticle(this.env.DB, {
+          pickId,
+          status: 'pending',
+          articleUrl: article.articleUrl,
+          articleId: article.articleId,
+          title: article.title,
+          source: article.source,
+          thumbnailUrl: article.thumbnailUrl,
+          publishedAt: article.publishedAt,
+          modifiedAt: article.modifiedAt,
+        });
       });
       log.articleScraperWorkflow.info(reqId, 'Step completed', { step: 'save-article', durationMs: Date.now() - saveArticleStart, articleId });
 
@@ -254,24 +205,14 @@ export class ArticleScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, Arti
           backoff: "constant"
         }
       }, async () => {
-        await this.env.DB.prepare(`
-          INSERT INTO article_versions (
-            article_id, version, content, content_text, page_count, images, scraped_at
-          ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-          ON CONFLICT(article_id, version) DO UPDATE SET
-            content = excluded.content,
-            content_text = excluded.content_text,
-            page_count = excluded.page_count,
-            images = excluded.images,
-            scraped_at = excluded.scraped_at
-        `).bind(
+        await upsertArticleVersion(this.env.DB, {
           articleId,
           version,
-          article.content,
-          article.contentText || null,
-          article.pageCount,
-          JSON.stringify(article.images)
-        ).run();
+          content: article.content,
+          contentText: article.contentText,
+          pageCount: article.pageCount,
+          images: article.images,
+        });
       });
       log.articleScraperWorkflow.info(reqId, 'Step completed', { step: 'save-version', durationMs: Date.now() - saveVersionStart, version });
 
@@ -284,34 +225,11 @@ export class ArticleScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, Arti
           backoff: "constant"
         }
       }, async () => {
-        // Delete old comments for this version
-        await this.env.DB.prepare(
-          'DELETE FROM article_comments WHERE article_id = ? AND version = ?'
-        ).bind(articleId, version).run();
-
-        // Insert new comments with reaction breakdown and nested replies
-        for (const comment of commentsData) {
-          await this.env.DB.prepare(`
-            INSERT INTO article_comments (
-              article_id, version, comment_id, author, content, posted_at,
-              likes, replies_count, reactions_empathized, reactions_understood,
-              reactions_questioning, replies, scraped_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-          `).bind(
-            articleId,
-            version,
-            comment.commentId || null,
-            comment.author || null,
-            comment.content,
-            comment.postedAt || null,
-            comment.likes,
-            comment.repliesCount,
-            comment.reactions.empathized,
-            comment.reactions.understood,
-            comment.reactions.questioning,
-            comment.replies.length > 0 ? JSON.stringify(comment.replies) : null
-          ).run();
-        }
+        await upsertArticleComments(this.env.DB, {
+          articleId,
+          version,
+          comments: commentsData,
+        });
       });
       log.articleScraperWorkflow.info(reqId, 'Step completed', { step: 'save-comments', durationMs: Date.now() - saveCommentsStart, commentCount: commentsData.length });
 
@@ -325,27 +243,12 @@ export class ArticleScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, Arti
           backoff: "constant"
         }
       }, async () => {
-        if (isRescrape) {
-          // Version 2 - update second scraped time, clear scheduled rescrape
-          await this.env.DB.prepare(`
-            UPDATE articles SET
-              status = ?,
-              second_scraped_at = datetime('now'),
-              scheduled_rescrape_at = NULL,
-              updated_at = datetime('now')
-            WHERE id = ?
-          `).bind(newStatus, articleId).run();
-        } else {
-          // Version 1 - update first scraped time, schedule rescrape in 1 hour
-          await this.env.DB.prepare(`
-            UPDATE articles SET
-              status = ?,
-              first_scraped_at = datetime('now'),
-              scheduled_rescrape_at = datetime('now', '+15 minutes'),
-              updated_at = datetime('now')
-            WHERE id = ?
-          `).bind(newStatus, articleId).run();
-        }
+        await updateArticleStatus(this.env.DB, articleId, newStatus, {
+          firstScrapedAt: !isRescrape,
+          secondScrapedAt: isRescrape,
+          scheduleRescrape: !isRescrape,
+          rescrapeMinutes: 15,
+        });
       });
       log.articleScraperWorkflow.info(reqId, 'Step completed', { step: 'update-status', durationMs: Date.now() - updateStatusStart, status: newStatus });
 

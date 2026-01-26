@@ -9,6 +9,7 @@
 
 import { LitElement, html, css } from 'lit';
 import { customElement, state, property } from 'lit/decorators.js';
+import { getAuthHeaders } from '../lib/auth.js';
 
 type VideoType = 'short' | 'long';
 type VideoSelectionStatus = 'todo' | 'doing' | 'done';
@@ -453,18 +454,6 @@ export class VideosPage extends LitElement {
   @property({ type: Object })
   deleting = new Set<number>();
 
-  /**
-   * Generate Basic Auth headers for API requests
-   */
-  private getAuthHeaders(): HeadersInit {
-    const username = 'admin';
-    const password = 'GvkP525fTX0ocMTw8XtAqM9ECvNIx50v';
-    const credentials = btoa(`${username}:${password}`);
-    return {
-      'Authorization': `Basic ${credentials}`
-    };
-  }
-
   connectedCallback() {
     super.connectedCallback();
     this.loadVideos();
@@ -476,7 +465,7 @@ export class VideosPage extends LitElement {
       this.error = null;
 
       const response = await fetch(`/api/videos?page=${page}`, {
-        headers: this.getAuthHeaders()
+        headers: getAuthHeaders()
       });
 
       if (!response.ok) {
@@ -524,7 +513,7 @@ export class VideosPage extends LitElement {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...this.getAuthHeaders()
+          ...getAuthHeaders()
         }
       });
 
@@ -558,7 +547,7 @@ export class VideosPage extends LitElement {
 
       const response = await fetch(`/api/videos/${videoId}`, {
         method: 'DELETE',
-        headers: this.getAuthHeaders()
+        headers: getAuthHeaders()
       });
 
       if (!response.ok) {

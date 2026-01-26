@@ -24,6 +24,28 @@ japan-quick/
 │   ├── index.ts                # Cloudflare Workers backend with Hono + workflow exports
 │   ├── middleware/
 │   │   └── auth.ts             # Basic HTTP authentication middleware
+│   ├── lib/
+│   │   ├── logger.ts           # Structured logging utility with request ID tracking
+│   │   ├── html-template.ts    # HTML template utilities (with props support)
+│   │   ├── db-helpers.ts       # Common SQL pattern helpers (upsertArticle, upsertArticleVersion, etc.)
+│   │   ├── retry-helper.ts     # Retry logic with exponential backoff (withRetry, sleep, getRetryStatus)
+│   │   ├── comment-parser.ts   # Comment extraction utilities (JSON/HTML parsing, nested replies)
+│   │   ├── workflow-helper.ts  # AI workflow utilities (index mapping, cost calculation, prompt building)
+│   │   ├── prompts.ts          # Centralized AI prompt templates (buildSelectionPrompt, buildScriptPrompt, buildGridImagePrompt)
+│   │   ├── audio-helper.ts     # Audio conversion utilities (pcmToWav, calculatePcmDuration)
+│   │   └── auth.ts             # Frontend Basic Auth header generator (getAuthHeaders)
+│   ├── frontend/
+│   │   ├── styles/
+│   │   │   └── design-system.ts # Tokyo Cyber-Industrial design tokens (Colors, Typography, Spacing, etc.)
+│   │   ├── lib/
+│   │   │   └── auth.ts         # Frontend Basic Auth headers (getAuthHeaders)
+│   │   ├── app.ts              # LitElement root component (AppRoot)
+│   │   └── pages/
+│   │       ├── news-page.ts    # News page component (workflow trigger/poll/result pattern)
+│   │       ├── article-page.ts # Article detail page component (Tokyo aesthetic)
+│   │       ├── videos-page.ts  # Videos page component (video selection management)
+│   │       ├── video-page.ts   # Video detail page component (metadata, selection, script cards)
+│   │       └── settings-page.ts # Settings page component (YouTube OAuth connection)
 │   ├── workflows/
 │   │   ├── index.ts            # Export all workflow classes
 │   │   ├── types.ts            # Workflow parameter and result types
@@ -32,22 +54,12 @@ japan-quick/
 │   │   ├── article-scraper.workflow.ts   # ArticleScraperWorkflow (article content scraping)
 │   │   ├── article-rescrape.workflow.ts  # ArticleRescrapeWorkflow (cron-triggered rescrape)
 │   │   └── video-selection.workflow.ts   # VideoSelectionWorkflow (AI video selection, cron-triggered)
-│   ├── frontend/
-│   │   ├── app.ts              # LitElement root component (AppRoot)
-│   │   ├── styles/
-│   │   │   └── design-system.ts # Tokyo Cyber-Industrial design system (fonts, colors, patterns, animations)
-│   │   └── pages/
-│   │       ├── news-page.ts    # News page component (workflow trigger/poll/result pattern)
-│   │       ├── article-page.ts # Article detail page component (Tokyo Cyber-Industrial aesthetic)
-│   │       ├── videos-page.ts  # Videos page component (video selection management)
-│   │       ├── video-page.ts   # Video detail page component (metadata, selection, script cards)
-│   │       └── settings-page.ts # Settings page component (YouTube OAuth connection)
 │   ├── services/
 │   │   ├── news-scraper.ts           # Yahoo News Japan scraper (filters pickup URLs only, with thorough logging)
 │   │   ├── article-scraper.ts        # Yahoo News article scraper (full content + comments)
 │   │   ├── article-scraper-core.ts   # Core article scraping logic (serial processing)
-│   │   ├── gemini.ts                 # Gemini AI service (article selection and script generation)
-│   │   ├── asset-generator.ts        # Asset generation service (grid images and TTS audio)
+│   │   ├── gemini.ts                 # Gemini AI service (uses prompts.ts for AI prompts)
+│   │   ├── asset-generator.ts        # Asset generation service (uses prompts.ts and audio-helper.ts)
 │   │   ├── r2-storage.ts             # R2 storage service (upload, retrieve, delete assets)
 │   │   └── youtube-auth.ts           # YouTube OAuth 2.0 service (token management, channel operations)
 │   ├── types/
@@ -61,9 +73,6 @@ japan-quick/
 │   │   ├── videos.ts           # API routes for video workflow management
 │   │   ├── youtube.ts          # API routes for YouTube OAuth (status, auth URL, callback, refresh, disconnect)
 │   │   └── frontend.ts         # Frontend route handlers (/, /news, /article/:id, /videos, /video/:id, /settings)
-│   ├── lib/
-│   │   ├── logger.ts           # Structured logging utility with request ID tracking
-│   │   └── html-template.ts    # HTML template utilities (with props support)
 │   └── tests/
 │       ├── unit/               # Unit tests for services, routes, lib
 │       └── integration/        # Integration tests (e.g., news-e2e.test.ts)
@@ -141,8 +150,76 @@ japan-quick/
   - `<video-page>`: Video detail view with metadata, selection, and script cards
   - `<settings-page>`: Settings page with YouTube OAuth connection
 - Build output: `public/frontend/` directory (from TypeScript compilation)
-- Styling: Scoped CSS within Lit components
+- Styling: Tokyo Cyber-Industrial aesthetic with design-system.ts tokens
 - Purpose: Provides interface for content generation, preview, and management
+
+### Design System
+
+The frontend uses a **Tokyo Cyber-Industrial** design aesthetic defined in `src/frontend/styles/design-system.ts`:
+
+- **Fonts**: Zen Tokyo Zoo (display), Inter + Noto Sans JP (body), Space Mono (mono/technical)
+- **Colors**: High contrast monochrome (charcoal, off-white) with electric red accent (#e63946)
+- **Borders**: Sharp edges, 3px thick borders, no rounded corners
+- **Shadows**: Brutalist offset shadows (2px 2px 0, 4px 4px 0)
+- **Patterns**: Subtle Japanese wave patterns (seigaiha) in backgrounds
+- **Buttons**: Monospace, uppercase, 0.1em letter-spacing, sharp borders, transform on hover
+
+### Database Helper Functions
+
+Backend uses `src/lib/db-helpers.ts` for common SQL patterns:
+
+- `upsertArticle()` - Insert or update article records
+- `updateArticleStatus()` - Update article status with timestamps
+- `upsertArticleVersion()` - Insert or update article versions
+- `upsertArticleComments()` - Delete and insert comments
+- `getArticleByPickId()` - Fetch article by pick_id
+- `getArticleWithVersions()` - Fetch article with versions and comments
+- `getArticlesByStatus()` - Fetch articles by status
+- `getEligibleArticlesForVideo()` - Fetch articles for video selection
+
+### Frontend Authentication
+
+Frontend uses `src/frontend/lib/auth.ts` for centralized auth headers:
+```typescript
+import { getAuthHeaders } from '../lib/auth.js';
+
+const response = await fetch('/api/news/latest', {
+  headers: getAuthHeaders()
+});
+```
+
+### Utility Modules (src/lib/)
+
+The codebase uses several utility modules for common patterns:
+
+**retry-helper.ts** - Retry logic with exponential backoff:
+- `withRetry<T>()` - Execute function with retry loop and exponential backoff
+- `sleep()` - Promise-based delay utility
+- `getRetryStatus()` - Map attempt number to status string
+
+**comment-parser.ts** - Comment extraction from Yahoo News:
+- `extractCommentsFromJSON()` - Extract from window.__PRELOADED_STATE__
+- `extractCommentsFromHTML()` - Fallback CSS selector parsing
+- `extractNestedReplies()` - Expand replies by clicking "返信" buttons
+- `extractAllComments()` - Main pipeline with multiple strategies
+
+**workflow-helper.ts** - AI workflow utilities:
+- `formatArticlesForAI()` - Create 4-digit indices with mapping
+- `mapIndicesToPickIds()` - Map AI indices back to original pick_ids
+- `calculateTokenCost()` - Calculate Gemini API costs
+- `parseAIResponse()` - Clean and parse JSON from AI
+- `logTokenUsage()` - Log token usage to database
+- `buildAISelectionPrompt()` - Build article selection prompt
+- `validateAIResponse()` - Validate AI response structure
+
+**prompts.ts** - Centralized AI prompt templates:
+- `buildSelectionPrompt()` - Article selection prompt template
+- `buildScriptPrompt()` - Script generation prompt template
+- `buildGridImagePrompt()` - Grid image generation prompt template
+
+**audio-helper.ts** - Audio conversion utilities:
+- `pcmToWav()` - Convert PCM to WAV with header
+- `calculatePcmDuration()` - Calculate audio duration from PCM data
 
 ### Cloudflare Bindings
 
