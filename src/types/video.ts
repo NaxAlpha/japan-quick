@@ -9,6 +9,9 @@ export type AssetStatus = 'pending' | 'generating' | 'generated' | 'error';
 export type ImageModelId = 'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview';
 export type TTSModelId = 'gemini-2.5-flash-preview-tts' | 'gemini-2.5-pro-preview-tts';
 
+// Image size types
+export type ImageSize = '1K' | '2K';
+
 // TTS voice type (30 voices)
 export type TTSVoice = 'Zephyr' | 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Leda' |
   'Enceladus' | 'Aoede' | 'Autonoe' | 'Laomedeia' | 'Iapetus' | 'Erinome' |
@@ -24,6 +27,16 @@ export const TTS_VOICES: readonly TTSVoice[] = [
   'Orus', 'Algenib', 'Rasalgethi', 'Gacrux', 'Pulcherrima', 'Zubenelgenubi',
   'Sadachbia', 'Sadaltager'
 ] as const;
+
+// Dimension-related interfaces
+export interface ImageDimensions {
+  gridSize: string;
+  cellSize: string;
+  width: number;
+  height: number;
+  cellWidth: number;
+  cellHeight: number;
+}
 
 // Script-related interfaces
 export interface Slide {
