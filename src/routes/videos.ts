@@ -410,6 +410,9 @@ videoRoutes.post('/:id/generate-assets', async (c) => {
     const articleIds = JSON.parse(video.articles!);
     const referenceImages: string[] = [];
 
+    // Import the image fetcher utility
+    const { fetchImagesAsBase64 } = await import('../lib/image-fetcher.js');
+
     for (const pickId of articleIds) {
       const article = await c.env.DB.prepare(`
         SELECT id FROM articles WHERE pick_id = ?
@@ -426,10 +429,27 @@ videoRoutes.post('/:id/generate-assets', async (c) => {
 
       if (version?.images) {
         const images = JSON.parse(version.images) as Array<{ url: string }>;
-        // TODO: In production, fetch and convert images to base64
-        // For now, we'll skip this as it requires actual image fetching
+        const imageUrls = images.map(img => img.url);
+
+        // Fetch images and convert to base64 (max 3 per article)
+        const fetchedImages = await fetchImagesAsBase64(imageUrls, 3);
+
+        // Store as JSON strings for the asset generator
+        for (const img of fetchedImages) {
+          referenceImages.push(JSON.stringify(img));
+        }
+
+        log.assetRoutes.info(reqId, 'Fetched reference images', {
+          pickId,
+          fetchedCount: fetchedImages.length,
+          totalCount: referenceImages.length
+        });
       }
     }
+
+    log.assetRoutes.info(reqId, 'Total reference images collected', {
+      totalCount: referenceImages.length
+    });
 
     // 5. Initialize services
     const assetGen = new AssetGeneratorService(c.env.GOOGLE_API_KEY);

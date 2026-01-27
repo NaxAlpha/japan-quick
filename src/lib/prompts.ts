@@ -206,7 +206,7 @@ GRID LAYOUT:
 - The output is ONE image divided into a 3x3 grid
 - Each cell is ${cellSize} pixels
 - Cells are numbered left-to-right, top-to-bottom: positions 0-8
-- Grid lines should NOT be visible - images should tile seamlessly
+- Grid lines, borders, gaps, or spaces MUST NOT be visible - images must tile seamlessly with ZERO pixels between cells
 
 STYLE REQUIREMENTS:
 - Consistent visual style across ALL cells
@@ -214,6 +214,8 @@ STYLE REQUIREMENTS:
 - High contrast, vibrant colors
 - Clear focal points in each cell
 - Modern, polished aesthetic
+
+CRITICAL: No borders, gaps, or spaces between grid cells - cells must merge perfectly with zero separation
 
 CELL CONTENTS:
 ${cellDescriptions}${thumbnailSection}${emptySection}

@@ -4,10 +4,11 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
-import type { VideoScript, ImageModelId, TTSModelId, TTSVoice, GridImageMetadata, SlideAudioMetadata } from '../types/video.js';
+import type { VideoScript, ImageModelId, TTSModelId, TTSVoice, GridImageMetadata, SlideAudioMetadata, ImageSize } from '../types/video.js';
 import { log } from '../lib/logger.js';
 import { buildGridImagePrompt } from '../lib/prompts.js';
 import { pcmToWav, calculatePcmDuration } from '../lib/audio-helper.js';
+import { calculateGridDimensions, getModelImageSize } from '../lib/dimensions.js';
 
 interface GridImageResult {
   base64: string;
@@ -55,12 +56,15 @@ export class AssetGeneratorService {
       const slideIndices = this.getSlideIndicesForGrid(gridIndex, script.slides.length, isShort);
       const includeThumbnail = this.shouldIncludeThumbnail(gridIndex, script.slides.length, isShort);
 
+      const imageSize = getModelImageSize(model);
+
       const prompt = this.buildGridImagePrompt(
         script,
         slideIndices,
         gridIndex,
         aspectRatio,
-        includeThumbnail
+        includeThumbnail,
+        imageSize
       );
 
       const previousGrid = gridIndex === 1 && results.length > 0 ? results[0].base64 : undefined;
@@ -68,7 +72,8 @@ export class AssetGeneratorService {
       log.assetGen.info(reqId, `Generating grid ${gridIndex}`, {
         slideIndices,
         includeThumbnail,
-        hasPreviousGrid: !!previousGrid
+        hasPreviousGrid: !!previousGrid,
+        imageSize
       });
 
       const startTime = Date.now();
@@ -76,6 +81,7 @@ export class AssetGeneratorService {
         prompt,
         aspectRatio,
         model,
+        imageSize,
         referenceImages,
         previousGrid
       );
@@ -86,7 +92,8 @@ export class AssetGeneratorService {
         aspectRatio,
         slideIndices,
         includeThumbnail,
-        isShort
+        isShort,
+        imageSize
       );
 
       results.push({
@@ -186,21 +193,76 @@ export class AssetGeneratorService {
     prompt: string,
     aspectRatio: '9:16' | '16:9',
     model: ImageModelId,
+    imageSize: ImageSize,
     referenceImages?: string[],
     previousGrid?: string
   ): Promise<{ base64: string; mimeType: string }> {
-    // For Gemini image generation models, just pass the text prompt
-    // The model automatically returns image data
-    // Note: aspect ratio control and reference images may require different approach
-    let fullPrompt = prompt;
+    // Build contents array with reference images and prompt
+    // Reference images come first, then text prompt
+    const contents: Array<{ inlineData: { mimeType: string; data: string } } | { text: string }> = [];
 
+    // Add reference images as inline data (parsed from JSON strings)
+    if (referenceImages && referenceImages.length > 0) {
+      for (const refImgStr of referenceImages) {
+        try {
+          const refImg = JSON.parse(refImgStr) as { mimeType: string; data: string };
+          contents.push({
+            inlineData: {
+              mimeType: refImg.mimeType,
+              data: refImg.data
+            }
+          });
+        } catch {
+          // Skip invalid reference image data
+          continue;
+        }
+      }
+    }
+
+    // Add previous grid as reference if available
     if (previousGrid) {
-      fullPrompt += '\n\nIMPORTANT: Match the visual style, color palette, and artistic approach from the previous grid.';
+      contents.push({
+        inlineData: {
+          mimeType: 'image/png',
+          data: previousGrid
+        }
+      });
+    }
+
+    // Add text prompt last
+    let textPrompt = prompt;
+    if (previousGrid) {
+      textPrompt += '\n\nIMPORTANT: Match the visual style, color palette, and artistic approach from the previous grid image.';
+    }
+    if (referenceImages && referenceImages.length > 0) {
+      textPrompt += '\n\nREFERENCE IMAGES: The images above show the actual subjects, people, locations, and visual elements from the news article. Use them as visual reference to accurately depict the story content.';
+    }
+    contents.push({ text: textPrompt });
+
+    // Build config - flash model doesn't support imageSize
+    const isProModel = model === 'gemini-3-pro-image-preview';
+    const config: {
+      responseModalities: string[];
+      imageConfig: {
+        aspectRatio: string;
+        imageSize?: string;
+      };
+    } = {
+      responseModalities: ['TEXT', 'IMAGE'],
+      imageConfig: {
+        aspectRatio
+      }
+    };
+
+    // Only add imageSize for pro model
+    if (isProModel) {
+      config.imageConfig.imageSize = imageSize;
     }
 
     const response = await this.genai.models.generateContent({
       model,
-      contents: fullPrompt
+      contents,  // Pass array with inline data + text
+      config
     });
 
     if (!response.candidates || !response.candidates[0]) {
@@ -231,15 +293,16 @@ export class AssetGeneratorService {
     slideIndices: number[],
     gridIndex: number,
     aspectRatio: '9:16' | '16:9',
-    includeThumbnail: boolean
+    includeThumbnail: boolean,
+    imageSize: ImageSize
   ): string {
     const isShort = aspectRatio === '9:16';
-    const gridSize = isShort ? '1080x1920' : '1920x1080';
-    const cellSize = isShort ? '360x640' : '640x360';
+    const dimensions = calculateGridDimensions(isShort ? 'short' : 'long', imageSize);
+    const { gridSize, cellSize } = dimensions;
 
     const cellDescriptions = slideIndices.map((slideIdx, cellPos) => {
       const slide = script.slides[slideIdx];
-      if (!slide) return `Position ${cellPos}: PURE BLACK (#000000) - empty cell`;
+      if (!slide) return `Position ${cellPos}: A plain solid black image with absolutely no visible elements - no gradients, no patterns, no text, no highlights or shadows, just pure uniform black color (#000000) filling the entire cell area`;
       return `Position ${cellPos} (Slide ${slideIdx + 1}): ${slide.imageDescription}`;
     }).join('\n');
 
@@ -248,7 +311,7 @@ export class AssetGeneratorService {
       : '';
 
     const emptySection = slideIndices.length < 9 && !includeThumbnail
-      ? `\nPositions ${slideIndices.length}-8: PURE BLACK (#000000) - fill unused cells completely black with no content`
+      ? `\nPositions ${slideIndices.length}-8: A plain solid black image with absolutely no visible elements - no gradients, no patterns, no text, no highlights or shadows, just pure uniform black color (#000000) filling the entire cell area`
       : '';
 
     return buildGridImagePrompt({
@@ -304,12 +367,11 @@ export class AssetGeneratorService {
     aspectRatio: '9:16' | '16:9',
     slideIndices: number[],
     includeThumbnail: boolean,
-    isShort: boolean
+    isShort: boolean,
+    imageSize: ImageSize
   ): GridImageMetadata {
-    const width = isShort ? 1080 : 1920;
-    const height = isShort ? 1920 : 1080;
-    const cellWidth = isShort ? 360 : 640;
-    const cellHeight = isShort ? 640 : 360;
+    const dimensions = calculateGridDimensions(isShort ? 'short' : 'long', imageSize);
+    const { width, height, cellWidth, cellHeight } = dimensions;
 
     const positions = [];
 

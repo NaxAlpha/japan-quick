@@ -32,6 +32,8 @@ japan-quick/
 │   │   ├── comment-parser.ts   # Comment extraction utilities (JSON/HTML parsing, nested replies)
 │   │   ├── workflow-helper.ts  # AI workflow utilities (index mapping, cost calculation, prompt building)
 │   │   ├── prompts.ts          # Centralized AI prompt templates (buildSelectionPrompt, buildScriptPrompt, buildGridImagePrompt)
+│   │   ├── dimensions.ts      # Grid dimension calculations for 1K/2K resolutions (NEW)
+│   │   ├── image-fetcher.ts   # Fetch images from URLs and convert to base64 (NEW)
 │   │   ├── audio-helper.ts     # Audio conversion utilities (pcmToWav, calculatePcmDuration)
 │   │   └── auth.ts             # Frontend Basic Auth header generator (getAuthHeaders)
 │   ├── frontend/
@@ -65,7 +67,7 @@ japan-quick/
 │   ├── types/
 │   │   ├── news.ts             # News type definitions + Env type (single source of truth)
 │   │   ├── article.ts          # Article type definitions
-│   │   ├── video.ts            # Video type definitions (Video, Model, CostLog interfaces)
+│   │   ├── video.ts            # Video type definitions (Video, Model, CostLog, ImageSize, ImageDimensions)
 │   │   └── youtube.ts          # YouTube OAuth type definitions
 │   ├── routes/
 │   │   ├── news.ts             # API routes for news workflow management
@@ -75,7 +77,11 @@ japan-quick/
 │   │   └── frontend.ts         # Frontend route handlers (/, /news, /article/:id, /videos, /video/:id, /settings)
 │   └── tests/
 │       ├── unit/               # Unit tests for services, routes, lib
+│       │   └── lib/
+│       │       └── dimensions.test.ts  # Tests for dimension utility (NEW)
 │       └── integration/        # Integration tests (e.g., news-e2e.test.ts)
+├── scripts/
+│   └── verify-asset-generation.ts  # Verification script for asset generation improvements (NEW)
 ├── tsconfig.json               # TypeScript config for backend (Cloudflare Workers)
 ├── tsconfig.frontend.json      # TypeScript config for frontend (browser)
 ├── vitest.config.ts            # Vitest config with Cloudflare Workers pool
@@ -220,6 +226,14 @@ The codebase uses several utility modules for common patterns:
 **audio-helper.ts** - Audio conversion utilities:
 - `pcmToWav()` - Convert PCM to WAV with header
 - `calculatePcmDuration()` - Calculate audio duration from PCM data
+
+**dimensions.ts** - Dimension calculations for asset generation:
+- `calculateGridDimensions(videoType, imageSize)` - Returns grid dimensions for 1K/2K resolutions
+- `getModelImageSize(model)` - Maps image model ID to '1K' or '2K'
+
+**image-fetcher.ts** - Image fetching utilities:
+- `fetchImageAsBase64(url)` - Fetches image from URL and converts to base64
+- `fetchImagesAsBase64(urls, maxImages)` - Fetches multiple images in parallel
 
 ### Cloudflare Bindings
 
@@ -854,17 +868,32 @@ Voice is randomly selected at asset generation start and stored in `videos.tts_v
 
 ### Grid Image Strategy
 
+The asset generator uses different resolutions based on the selected model:
+- **Flash model** (`gemini-2.5-flash-image`): Uses 1K resolution (1080p)
+- **Pro model** (`gemini-3-pro-image-preview`): Uses 2K resolution (2048p)
+
+The dimensions are calculated using `src/lib/dimensions.ts` which provides:
+- `calculateGridDimensions(videoType, imageSize)` - Returns grid and cell dimensions
+- `getModelImageSize(model)` - Maps model ID to '1K' or '2K'
+
 **Short Videos (9:16)**: 1 grid image
-- 1080×1920 pixels (3×3 of 360×640 cells)
+- 1K: 1080×1920 pixels (3×3 of 360×640 cells)
+- 2K: 2048×3658 pixels (3×3 of 683×1219 cells)
 - Positions 0-7: Slides 1-8
 - Position 8: Thumbnail
 - Unused cells filled with black (#000000)
 
 **Long Videos (16:9)**: 2 grid images
-- Each 1920×1080 pixels (3×3 of 640×360 cells)
+- 1K: Each 1920×1080 pixels (3×3 of 640×360 cells)
+- 2K: Each 3658×2048 pixels (3×3 of 1219×683 cells)
 - Grid 1: Slides 1-9 (positions 0-8)
 - Grid 2: Slides 10-17 (positions 0-7) + Thumbnail (position 8)
 - Grid 2 uses Grid 1 as style reference for visual consistency
+
+**Reference Images**:
+- Article images are fetched and converted to base64 using `src/lib/image-fetcher.ts`
+- Reference images are included as `inlineData` parts in the Gemini API `contents` array
+- This provides the AI with visual reference to accurately depict story content
 
 ### R2 Storage
 
@@ -931,8 +960,18 @@ Cropped images are extracted from grid by calculating cell position in 3×3 grid
 
 **AssetGeneratorService** (`src/services/asset-generator.ts`):
 - `generateGridImages()`: Creates 3×3 grid images using Gemini
+  - Uses `aspectRatio` and `imageSize` API config parameters
+  - Includes reference images as `inlineData` in contents array
+  - Supports style consistency via previous grid reference
 - `generateSlideAudio()`: Generates TTS audio for a slide
-- `pcmToWav()`: Converts PCM audio to WAV format with header
+
+**Dimension Utility** (`src/lib/dimensions.ts`):
+- `calculateGridDimensions(videoType, imageSize)`: Returns grid and cell dimensions
+- `getModelImageSize(model)`: Maps model ID to '1K' or '2K'
+
+**Image Fetcher Utility** (`src/lib/image-fetcher.ts`):
+- `fetchImageAsBase64(url)`: Fetches single image and converts to base64
+- `fetchImagesAsBase64(urls, maxImages)`: Fetches multiple images in parallel
 
 **R2StorageService** (`src/services/r2-storage.ts`):
 - `uploadAsset()`: Uploads asset to R2 bucket
