@@ -58,6 +58,8 @@ export type Env = {
     ARTICLE_RESCRAPE_WORKFLOW: Workflow;
     VIDEO_SELECTION_WORKFLOW: Workflow;
     VIDEO_RENDER_WORKFLOW: Workflow;
+    SCRIPT_GENERATION_WORKFLOW: Workflow;
+    ASSET_GENERATION_WORKFLOW: Workflow;
     Sandbox: DurableObjectNamespace<Sandbox>;
     GOOGLE_API_KEY: string;
     YOUTUBE_CLIENT_ID: string;

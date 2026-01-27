@@ -58,6 +58,16 @@ name = "video-render-workflow"
 binding = "VIDEO_RENDER_WORKFLOW"
 class_name = "VideoRenderWorkflow"
 
+[[workflows]]
+name = "script-generation-workflow"
+binding = "SCRIPT_GENERATION_WORKFLOW"
+class_name = "ScriptGenerationWorkflow"
+
+[[workflows]]
+name = "asset-generation-workflow"
+binding = "ASSET_GENERATION_WORKFLOW"
+class_name = "AssetGenerationWorkflow"
+
 # Durable Objects for sandbox container (SQLite DO required for containers)
 [[durable_objects.bindings]]
 class_name = "Sandbox"

@@ -178,6 +178,8 @@ export const log = {
   articleRescrapeWorkflow: createLogger('ArticleRescrapeWorkflow'),
   videoSelectionWorkflow: createLogger('VideoSelectionWorkflow'),
   videoRenderWorkflow: createLogger('VideoRenderWorkflow'),
+  scriptGenerationWorkflow: createLogger('ScriptGenerationWorkflow'),
+  assetGenerationWorkflow: createLogger('AssetGenerationWorkflow'),
 };
 
 export default log;
