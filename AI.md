@@ -1094,9 +1094,9 @@ Cloudflare Browser Rendering DOES work in Workflows when using @cloudflare/puppe
 
 ## Video Rendering Pipeline
 
-### Status: Fixed and Deployed ✅
+### Status: Fixed - Deployment In Progress 🚀
 
-A video rendering pipeline using Cloudflare Sandbox containers with ffmpeg has been successfully implemented and deployed.
+All critical bugs have been identified and fixed. The video rendering pipeline is ready and deployment is in progress (Docker layer push may take time due to large FFmpeg dependencies).
 
 ### Implementation
 
@@ -1107,19 +1107,23 @@ A video rendering pipeline using Cloudflare Sandbox containers with ffmpeg has b
    - WebM output (VP9/Opus, 25fps)
    - Uses single ExecutionSession for all operations
    - Asset fetching in worker, writing to container via session.writeFile
+   - Comprehensive logging at all stages
+   - Retry logic with exponential backoff (3 attempts, 2s/4s/8s delays)
 
 2. **Video Render Workflow** (`src/workflows/video-render.workflow.ts`)
    - Orchestrates video rendering from generated assets
    - Step-by-step process with retry policies
    - R2 upload for final video
    - Direct async call (not wrapped in step.do) to avoid serialization
+   - Extended timeouts: 2min for container provisioning, 3min for API ready
 
 3. **Database Migration** (`migrations/008_video_render.sql`)
    - Added render status tracking columns to videos table
    - Successfully applied to remote database
 
 4. **Dockerfile** (`Dockerfile.ffmpeg`)
-   - Based on `docker.io/cloudflare/sandbox:0.3.3`
+   - **CRITICAL**: Based on `docker.io/cloudflare/sandbox:0.7.0` (matches SDK version)
+   - **CRITICAL**: Must include `CMD ["bun", "/container-server/dist/index.js"]` to start control plane
    - Installs ffmpeg, curl, file utility, fonts-noto-cjk-extra
    - Using `instance_type = "basic"` (4GB disk vs 2GB for lite)
 
@@ -1127,25 +1131,34 @@ A video rendering pipeline using Cloudflare Sandbox containers with ffmpeg has b
    - Render card with status and metadata display
    - Trigger render endpoint
 
-### Previous Issue and Resolution
+### Critical Issues Found and Fixed
 
-**Original Problem**: Container appeared to crash with "Container crashed while checking for ports" error.
+**Issue 1: Missing Container Entrypoint**
+- **Problem**: Dockerfile didn't specify CMD to start Cloudflare Sandbox control plane
+- **Symptom**: "Container crashed while checking for ports" error after 8 seconds
+- **Fix**: Added `CMD ["bun", "/container-server/dist/index.js"]` to Dockerfile
+- **Reference**: [Dockerfile docs](https://developers.cloudflare.com/sandbox/configuration/dockerfile/)
 
-**Root Cause**: Implementation bugs, not container instability:
-- Function signature mismatches (wrong parameter counts)
-- Incorrect API usage (array commands vs string commands)
-- Wrong result property checks (exitCode vs success)
-- Mixed sandbox/session object usage
+**Issue 2: SDK/Container Version Mismatch**
+- **Problem**: Using SDK v0.7.0 but container base image was v0.3.3
+- **Symptom**: "Durable Object reset because its code was updated" errors, container version warnings
+- **Fix**: Updated Dockerfile FROM line to `docker.io/cloudflare/sandbox:0.7.0`
+- **Important**: Always match Docker image version to npm package version
 
-**Solution**: Refactored to properly use Cloudflare Sandbox SDK v0.7.0:
-- All operations use single ExecutionSession with working directory
-- Commands as strings: `session.exec('ffmpeg ...')` not `session.exec(['ffmpeg', ...])`
-- Check `result.success` not `result.exitCode`
-- Consistent session usage throughout
+**Issue 3: Container Provisioning Time**
+- **Problem**: Containers need 2-3 minutes to provision after deployment
+- **Fix**: Added increased timeouts and retry logic for session creation
+- **Note**: Wait 2-3 minutes after deployment before triggering renders
 
-**Deployment**: Version 3b0dc2b0-73ea-4afe-a559-595024864f29
+### Previous Debugging Steps
 
-See `VIDEO_RENDERER_FIX.md` for detailed analysis.
+1. Added comprehensive debug logging throughout video-renderer.ts
+2. Added error handling with detailed error context
+3. Added retry logic for session creation (3 attempts with exponential backoff)
+4. Added timeout parameters to fetch operations (30s timeout)
+5. Improved FFmpeg command escaping and error reporting
+6. Identified and fixed Dockerfile CMD requirement
+7. Fixed SDK/container version mismatch
 
 ### Configuration
 
@@ -1162,4 +1175,14 @@ instance_type = "basic"  # 4 GB disk
 max_instances = 3
 ```
 
-**Deployment Status**: Deployed (version: ee88cd74-0b1b-4a74-aada-3746b536a365)
+**Deployment Status**:
+- Latest code commit: `a360f58` (fix: Resolve Cloudflare Sandbox API usage bugs in video renderer)
+- Deployment in progress (Docker image push to Cloudflare registry may take 5-10 minutes for large FFmpeg layer)
+- Previous version: ee88cd74-0b1b-4a74-aada-3746b536a365
+
+**Post-Deployment Steps**:
+1. Wait 2-3 minutes after deployment completes for container provisioning
+2. Trigger render for video ID 70 (has generated assets) via: `POST /api/videos/70/render`
+3. Monitor logs: `wrangler tail japan-quick --format pretty`
+4. Check render status: `GET /api/videos/70/render/status`
+5. Verify rendered video appears in R2 storage
