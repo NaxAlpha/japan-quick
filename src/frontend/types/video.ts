@@ -5,6 +5,7 @@ export type VideoType = 'short' | 'long';
 export type VideoSelectionStatus = 'todo' | 'doing' | 'done' | 'error';
 export type ScriptStatus = 'pending' | 'generating' | 'generated' | 'error';
 export type AssetStatus = 'pending' | 'generating' | 'generated' | 'error';
+export type RenderStatus = 'pending' | 'rendering' | 'rendered' | 'error';
 
 // Model ID types
 export type ImageModelId = 'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview';
@@ -58,15 +59,25 @@ export interface SlideAudioMetadata {
   bitDepth: number;
 }
 
+export interface RenderedVideoMetadata {
+  width: number;
+  height: number;
+  durationMs: number;
+  fps: number;
+  videoCodec: string;
+  audioCodec: string;
+  format: string;
+}
+
 // Parsed asset for frontend (with URL)
 export interface ParsedVideoAsset {
   id: number;
-  assetType: 'grid_image' | 'slide_audio';
+  assetType: 'grid_image' | 'slide_audio' | 'rendered_video';
   assetIndex: number;
   url: string;
   mimeType: string;
   fileSize: number | null;
-  metadata: GridImageMetadata | SlideAudioMetadata | null;
+  metadata: GridImageMetadata | SlideAudioMetadata | RenderedVideoMetadata | null;
 }
 
 // Frontend-ready interface
@@ -86,7 +97,12 @@ export interface ParsedVideo {
   image_model: ImageModelId;
   tts_model: TTSModelId;
   tts_voice: TTSVoice | null;
+  render_status: RenderStatus;
+  render_error: string | null;
+  render_started_at: string | null;
+  render_completed_at: string | null;
   assets: ParsedVideoAsset[];
+  renderedVideo: ParsedVideoAsset | null;
   created_at: string;
   updated_at: string;
 }

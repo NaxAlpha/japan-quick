@@ -1091,3 +1091,75 @@ Cloudflare Browser Rendering DOES work in Workflows when using @cloudflare/puppe
 - The `useDefineForClassFields: false` setting is required for Lit to work correctly with TypeScript
 - The `Env` type is defined in `src/types/news.ts` as the single source of truth
 - The `BROWSER` binding can be `null` in local development (no browser binding available)
+
+## Video Rendering Pipeline
+
+### Status: Fixed and Deployed ✅
+
+A video rendering pipeline using Cloudflare Sandbox containers with ffmpeg has been successfully implemented and deployed.
+
+### Implementation
+
+1. **Video Renderer Service** (`src/services/video-renderer.ts`)
+   - FFmpeg-based video rendering with xfade transitions
+   - Ken Burns zoom effect (alternating in/out)
+   - Japanese date badge overlay using Noto Sans CJK fonts
+   - WebM output (VP9/Opus, 25fps)
+   - Uses single ExecutionSession for all operations
+   - Asset fetching in worker, writing to container via session.writeFile
+
+2. **Video Render Workflow** (`src/workflows/video-render.workflow.ts`)
+   - Orchestrates video rendering from generated assets
+   - Step-by-step process with retry policies
+   - R2 upload for final video
+   - Direct async call (not wrapped in step.do) to avoid serialization
+
+3. **Database Migration** (`migrations/008_video_render.sql`)
+   - Added render status tracking columns to videos table
+   - Successfully applied to remote database
+
+4. **Dockerfile** (`Dockerfile.ffmpeg`)
+   - Based on `docker.io/cloudflare/sandbox:0.3.3`
+   - Installs ffmpeg, curl, file utility, fonts-noto-cjk-extra
+   - Using `instance_type = "basic"` (4GB disk vs 2GB for lite)
+
+5. **Frontend UI** (`src/frontend/pages/video-page.ts`)
+   - Render card with status and metadata display
+   - Trigger render endpoint
+
+### Previous Issue and Resolution
+
+**Original Problem**: Container appeared to crash with "Container crashed while checking for ports" error.
+
+**Root Cause**: Implementation bugs, not container instability:
+- Function signature mismatches (wrong parameter counts)
+- Incorrect API usage (array commands vs string commands)
+- Wrong result property checks (exitCode vs success)
+- Mixed sandbox/session object usage
+
+**Solution**: Refactored to properly use Cloudflare Sandbox SDK v0.7.0:
+- All operations use single ExecutionSession with working directory
+- Commands as strings: `session.exec('ffmpeg ...')` not `session.exec(['ffmpeg', ...])`
+- Check `result.success` not `result.exitCode`
+- Consistent session usage throughout
+
+**Deployment**: Version 3b0dc2b0-73ea-4afe-a559-595024864f29
+
+See `VIDEO_RENDERER_FIX.md` for detailed analysis.
+
+### Configuration
+
+**wrangler.toml**:
+```toml
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["Sandbox"]
+
+[[containers]]
+class_name = "Sandbox"
+image = "./Dockerfile.ffmpeg"
+instance_type = "basic"  # 4 GB disk
+max_instances = 3
+```
+
+**Deployment Status**: Deployed (version: ee88cd74-0b1b-4a74-aada-3746b536a365)

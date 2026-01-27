@@ -4,6 +4,7 @@ export type VideoType = 'short' | 'long';
 export type VideoSelectionStatus = 'todo' | 'doing' | 'done' | 'error';
 export type ScriptStatus = 'pending' | 'generating' | 'generated' | 'error';
 export type AssetStatus = 'pending' | 'generating' | 'generated' | 'error';
+export type RenderStatus = 'pending' | 'rendering' | 'rendered' | 'error';
 
 // Model ID types
 export type ImageModelId = 'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview';
@@ -79,11 +80,21 @@ export interface SlideAudioMetadata {
   bitDepth: number;               // 16
 }
 
+export interface RenderedVideoMetadata {
+  width: number;
+  height: number;
+  durationMs: number;
+  fps: number;
+  videoCodec: string;
+  audioCodec: string;
+  format: string;
+}
+
 // Video asset interfaces
 export interface VideoAsset {
   id: number;
   video_id: number;
-  asset_type: 'grid_image' | 'slide_audio';
+  asset_type: 'grid_image' | 'slide_audio' | 'rendered_video';
   asset_index: number;
   r2_key: string;
   mime_type: string;
@@ -95,12 +106,12 @@ export interface VideoAsset {
 // Parsed asset for frontend (with URL)
 export interface ParsedVideoAsset {
   id: number;
-  assetType: 'grid_image' | 'slide_audio';
+  assetType: 'grid_image' | 'slide_audio' | 'rendered_video';
   assetIndex: number;
   url: string;                    // Served via API route
   mimeType: string;
   fileSize: number | null;
-  metadata: GridImageMetadata | SlideAudioMetadata | null;
+  metadata: GridImageMetadata | SlideAudioMetadata | RenderedVideoMetadata | null;
 }
 
 // Database record interface (notes as string, total_cost field)
@@ -120,6 +131,10 @@ export interface Video {
   image_model: ImageModelId;
   tts_model: TTSModelId;
   tts_voice: TTSVoice | null;
+  render_status: RenderStatus;
+  render_error: string | null;
+  render_started_at: string | null;
+  render_completed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -130,6 +145,7 @@ export interface ParsedVideo extends Omit<Video, 'notes' | 'articles' | 'script'
   articles: string[];                // Parsed from JSON
   script: VideoScript | null;        // Parsed from JSON
   assets: ParsedVideoAsset[];        // Video assets with URLs
+  renderedVideo: ParsedVideoAsset | null;  // Rendered video asset if present
 }
 
 // Model info interface

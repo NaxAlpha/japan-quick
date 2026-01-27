@@ -14,6 +14,7 @@ import { Hono } from 'hono';
 import type { Env } from '../types/news.js';
 import type { Video, ParsedVideo, CostLog, VideoAsset, ParsedVideoAsset, VideoScript, TTS_VOICES } from '../types/video.js';
 import type { VideoSelectionParams, VideoSelectionResult } from '../workflows/video-selection.workflow.js';
+import type { VideoRenderParams, VideoRenderResult } from '../workflows/video-render.workflow.js';
 import type { Article, ArticleVersion, ArticleComment } from '../types/article.js';
 import { parseVideo, TTS_VOICES as TTSVoicesArray } from '../types/video.js';
 import { log, generateRequestId } from '../lib/logger.js';
@@ -638,6 +639,112 @@ videoRoutes.get('/status/:workflowId', async (c) => {
   } finally {
     const durationMs = Date.now() - startTime;
     log.videoRoutes.info(reqId, 'Request completed', { status: 200, durationMs });
+  }
+});
+
+// POST /api/videos/:id/render - Trigger video render workflow
+videoRoutes.post('/:id/render', async (c) => {
+  const reqId = generateRequestId();
+  const startTime = Date.now();
+  const id = parseInt(c.req.param('id'));
+  log.videoRoutes.info(reqId, 'Request received', { method: 'POST', path: '/:id/render', videoId: id });
+
+  try {
+    // Validate video exists
+    const video = await c.env.DB.prepare('SELECT * FROM videos WHERE id = ?').bind(id).first<Video>();
+
+    if (!video) {
+      log.videoRoutes.warn(reqId, 'Video not found', { videoId: id });
+      return c.json({ success: false, error: 'Video not found' }, 404);
+    }
+
+    if (video.asset_status !== 'generated') {
+      log.videoRoutes.warn(reqId, 'Assets not generated yet', { videoId: id, assetStatus: video.asset_status });
+      return c.json({ success: false, error: 'Assets not generated yet' }, 400);
+    }
+
+    if (video.render_status === 'rendering') {
+      log.videoRoutes.warn(reqId, 'Render already in progress', { videoId: id });
+      return c.json({ success: false, error: 'Render already in progress' }, 409);
+    }
+
+    const params: VideoRenderParams = { videoId: id };
+
+    // Create workflow instance
+    const instance = await c.env.VIDEO_RENDER_WORKFLOW.create({
+      id: `render-${id}-${Date.now()}`,
+      params
+    });
+
+    log.videoRoutes.info(reqId, 'Render workflow created', { workflowId: instance.id, videoId: id });
+    return c.json({
+      success: true,
+      workflowId: instance.id
+    });
+  } catch (error) {
+    log.videoRoutes.error(reqId, 'Request failed', error as Error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to create render workflow'
+    }, 500);
+  } finally {
+    const durationMs = Date.now() - startTime;
+    log.videoRoutes.info(reqId, 'Request completed', { durationMs });
+  }
+});
+
+// GET /api/videos/:id/render/status - Poll render status
+videoRoutes.get('/:id/render/status', async (c) => {
+  const reqId = generateRequestId();
+  const startTime = Date.now();
+  const id = c.req.param('id');
+  log.videoRoutes.info(reqId, 'Request received', { method: 'GET', path: '/:id/render/status', videoId: id });
+
+  try {
+    const video = await c.env.DB.prepare(`
+      SELECT render_status, render_error, render_started_at, render_completed_at
+      FROM videos WHERE id = ?
+    `).bind(id).first<{
+      render_status: string;
+      render_error: string | null;
+      render_started_at: string | null;
+      render_completed_at: string | null;
+    }>();
+
+    if (!video) {
+      log.videoRoutes.warn(reqId, 'Video not found', { videoId: id });
+      return c.json({ success: false, error: 'Video not found' }, 404);
+    }
+
+    // Fetch rendered video asset if exists
+    const renderedAsset = await c.env.DB.prepare(`
+      SELECT * FROM video_assets
+      WHERE video_id = ? AND asset_type = 'rendered_video'
+    `).bind(id).first<VideoAsset>();
+
+    return c.json({
+      success: true,
+      renderStatus: video.render_status,
+      renderError: video.render_error,
+      renderStartedAt: video.render_started_at,
+      renderCompletedAt: video.render_completed_at,
+      renderedVideo: renderedAsset ? {
+        id: renderedAsset.id,
+        url: `/api/videos/${id}/assets/${renderedAsset.id}`,
+        mimeType: renderedAsset.mime_type,
+        fileSize: renderedAsset.file_size,
+        metadata: renderedAsset.metadata ? JSON.parse(renderedAsset.metadata) : null
+      } : null
+    });
+  } catch (error) {
+    log.videoRoutes.error(reqId, 'Request failed', error as Error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get render status'
+    }, 500);
+  } finally {
+    const durationMs = Date.now() - startTime;
+    log.videoRoutes.info(reqId, 'Request completed', { durationMs });
   }
 });
 

@@ -11,6 +11,7 @@
     "test:ui": "vitest --ui"
   },
   "dependencies": {
+    "@cloudflare/sandbox": "^0.7.0",
     "@google/genai": "^1.38.0",
     "hono": "^4.0.0",
     "lit": "^3.2.0"
