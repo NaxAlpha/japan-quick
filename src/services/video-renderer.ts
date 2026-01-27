@@ -65,6 +65,20 @@ async function writeAssets(
     });
   };
 
+  // Helper to convert ArrayBuffer to base64 in chunks to avoid stack overflow
+  const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
+    const bytes = new Uint8Array(buffer);
+    const chunkSize = 8192; // Process 8KB at a time
+    let binary = '';
+
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+      binary += String.fromCharCode(...chunk);
+    }
+
+    return btoa(binary);
+  };
+
   try {
     // Create directories
     log.videoRenderer.debug(reqId, 'Creating directories');
@@ -87,7 +101,8 @@ async function writeAssets(
       const arrayBuffer = await response.arrayBuffer();
       log.videoRenderer.debug(reqId, `Grid ${grid.gridIndex} fetched, size: ${arrayBuffer.byteLength} bytes`);
 
-      const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+      const base64 = arrayBufferToBase64(arrayBuffer);
+      log.videoRenderer.debug(reqId, `Grid ${grid.gridIndex} converted to base64, length: ${base64.length}`);
 
       await session.writeFile(gridPath, base64, { encoding: 'base64' });
       log.videoRenderer.debug(reqId, `Wrote grid ${grid.gridIndex} to ${gridPath}`);
@@ -106,7 +121,8 @@ async function writeAssets(
       const arrayBuffer = await response.arrayBuffer();
       log.videoRenderer.debug(reqId, `Audio ${aud.slideIndex} fetched, size: ${arrayBuffer.byteLength} bytes`);
 
-      const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+      const base64 = arrayBufferToBase64(arrayBuffer);
+      log.videoRenderer.debug(reqId, `Audio ${aud.slideIndex} converted to base64, length: ${base64.length}`);
 
       await session.writeFile(audioPath, base64, { encoding: 'base64' });
       log.videoRenderer.debug(reqId, `Wrote audio ${aud.slideIndex} to ${audioPath}`);
