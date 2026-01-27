@@ -14,7 +14,9 @@ import type {
   ImageModelId,
   TTSModelId,
   GridImageMetadata,
-  SlideAudioMetadata
+  SlideAudioMetadata,
+  RenderedVideoMetadata,
+  RenderStatus
 } from '../types/video.js';
 
 @customElement('video-page')
@@ -240,6 +242,29 @@ export class VideoPage extends LitElement {
 
     .badge.script-error,
     .badge.asset-error {
+      background: #0a0a0a;
+      color: #e63946;
+      border-color: #e63946;
+    }
+
+    .badge.render-pending {
+      background: #f5f3f0;
+      color: #58544c;
+    }
+
+    .badge.render-rendering {
+      background: #0066cc;
+      color: #ffffff;
+      border-color: #0066cc;
+    }
+
+    .badge.render-rendered {
+      background: #2d6a4f;
+      color: #ffffff;
+      border-color: #2d6a4f;
+    }
+
+    .badge.render-error {
       background: #0a0a0a;
       color: #e63946;
       border-color: #e63946;
@@ -664,6 +689,44 @@ export class VideoPage extends LitElement {
       font-size: 0.6875rem;
       border: 2px solid #e63946;
     }
+
+    /* Render video player */
+    .rendered-video-player {
+      width: 100%;
+      max-width: 600px;
+      border: 3px solid #0a0a0a;
+      background: #000;
+      box-shadow: 4px 4px 0 #0a0a0a;
+    }
+
+    .rendered-video-player video {
+      width: 100%;
+      display: block;
+    }
+
+    .download-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      background: #0a0a0a;
+      color: #ffffff;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      border: 2px solid #0a0a0a;
+      text-decoration: none;
+      transition: all 0.15s ease-out;
+      box-shadow: 2px 2px 0 #0a0a0a;
+    }
+
+    .download-link:hover {
+      background: #e63946;
+      border-color: #e63946;
+      transform: translate(-1px, -1px);
+      box-shadow: 3px 3px 0 #0a0a0a;
+    }
   `;
 
   @property({ type: String })
@@ -683,6 +746,15 @@ export class VideoPage extends LitElement {
 
   @state()
   private generatingAssets = false;
+
+  @state()
+  private renderingVideo = false;
+
+  @state()
+  private renderStatus: RenderStatus = 'pending';
+
+  @state()
+  private renderPollInterval: number | null = null;
 
   @state()
   private selectedImageModel: ImageModelId = 'gemini-2.5-flash-image';
@@ -810,6 +882,97 @@ export class VideoPage extends LitElement {
     }
   }
 
+  private async renderVideo(): Promise<void> {
+    if (!this.video) return;
+
+    this.renderingVideo = true;
+    this.error = '';
+
+    try {
+      const username = 'admin';
+      const password = 'GvkP525fTX0ocMTw8XtAqM9ECvNIx50v';
+      const credentials = btoa(`${username}:${password}`);
+
+      const response = await fetch(`/api/videos/${this.videoId}/render`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Basic ${credentials}`
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to start render: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      if (data.success) {
+        // Start polling for render status
+        this.startRenderPolling();
+      } else {
+        this.error = data.error || 'Failed to start render';
+      }
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : 'Failed to start render';
+      this.renderingVideo = false;
+    }
+  }
+
+  private startRenderPolling(): void {
+    if (this.renderPollInterval) {
+      clearInterval(this.renderPollInterval);
+    }
+
+    this.renderPollInterval = window.setInterval(() => {
+      this.checkRenderStatus();
+    }, 3000); // Poll every 3 seconds
+  }
+
+  private stopRenderPolling(): void {
+    if (this.renderPollInterval) {
+      clearInterval(this.renderPollInterval);
+      this.renderPollInterval = null;
+    }
+  }
+
+  private async checkRenderStatus(): Promise<void> {
+    try {
+      const username = 'admin';
+      const password = 'GvkP525fTX0ocMTw8XtAqM9ECvNIx50v';
+      const credentials = btoa(`${username}:${password}`);
+
+      const response = await fetch(`/api/videos/${this.videoId}/render/status`, {
+        headers: {
+          'Authorization': `Basic ${credentials}`
+        }
+      });
+
+      if (!response.ok) return;
+
+      const data = await response.json();
+      if (data.success) {
+        this.renderStatus = data.renderStatus;
+
+        if (data.renderStatus === 'rendered') {
+          this.stopRenderPolling();
+          this.renderingVideo = false;
+          // Reload video to get rendered video asset
+          await this.loadVideo();
+        } else if (data.renderStatus === 'error') {
+          this.stopRenderPolling();
+          this.renderingVideo = false;
+          this.error = data.renderError || 'Render failed';
+        }
+      }
+    } catch (err) {
+      console.error('Failed to check render status:', err);
+    }
+  }
+
+  disconnectedCallback(): void {
+    this.stopRenderPolling();
+    super.disconnectedCallback();
+  }
+
   private getCropStyle(cell: number): string {
     const row = Math.floor(cell / 3);
     const col = cell % 3;
@@ -829,6 +992,12 @@ export class VideoPage extends LitElement {
       'error': 'FAIL'
     };
     return labels[status] || status;
+  }
+
+  private getRenderMetadata(metadata: GridImageMetadata | SlideAudioMetadata | RenderedVideoMetadata | null): RenderedVideoMetadata | null {
+    if (!metadata) return null;
+    if ('fps' in metadata) return metadata as RenderedVideoMetadata;
+    return null;
   }
 
   render() {
@@ -866,6 +1035,7 @@ export class VideoPage extends LitElement {
           ${this.renderSelectionCard()}
           ${this.renderScriptCard()}
           ${this.video && this.video.script_status === 'generated' ? this.renderAssetsCard() : ''}
+          ${this.video && this.video.asset_status === 'generated' ? this.renderRenderCard() : ''}
         </div>
       </div>
     `;
@@ -900,11 +1070,22 @@ export class VideoPage extends LitElement {
               <span class="badge selection-${this.video.selection_status}">${this.getStatusLabel(this.video.selection_status)}</span>
               <span class="badge script-${this.video.script_status}">SCR: ${this.getStatusLabel(this.video.script_status)}</span>
               <span class="badge asset-${this.video.asset_status}">AST: ${this.getStatusLabel(this.video.asset_status)}</span>
+              <span class="badge render-${this.video.render_status}">RND: ${this.getRenderStatusLabel(this.video.render_status)}</span>
             </div>
           </div>
         </div>
       </div>
     `;
+  }
+
+  private getRenderStatusLabel(status: RenderStatus): string {
+    const labels: Record<RenderStatus, string> = {
+      'pending': 'WAIT',
+      'rendering': 'RENDER...',
+      'rendered': 'DONE',
+      'error': 'FAIL'
+    };
+    return labels[status] || status;
   }
 
   private renderSelectionCard(): unknown {
@@ -1166,6 +1347,90 @@ export class VideoPage extends LitElement {
                   </div>
                 </div>
               ` : ''}
+            </div>
+          ` : ''}
+        </div>
+      </div>
+    `;
+  }
+
+  private renderRenderCard(): unknown {
+    if (!this.video) return null;
+
+    const { render_status, render_error, renderedVideo } = this.video;
+
+    return html`
+      <div class="card span-full">
+        <div class="card-header">
+          <h2 class="card-title">Rendered Video</h2>
+          <span class="badge render-${render_status}">${this.getRenderStatusLabel(render_status)}</span>
+        </div>
+        <div class="card-body">
+          ${render_error && render_status === 'error' ? html`
+            <div class="error-message">[ ERROR: ${render_error} ]</div>
+          ` : ''}
+
+          ${render_status === 'pending' || render_status === 'error' ? html`
+            <p style="font-family: 'Inter', sans-serif; font-size: 0.875rem; color: #58544c; margin: 0 0 1rem 0;">
+              Render the final video with transitions, effects, and audio.
+            </p>
+            <button
+              class="btn btn-primary"
+              @click=${this.renderVideo}
+              ?disabled=${this.renderingVideo}
+            >
+              ${this.renderingVideo ? html`<span class="loading-spinner"></span> Starting render...` : '[ Render Video ]'}
+            </button>
+          ` : ''}
+
+          ${render_status === 'rendering' ? html`
+            <div class="loading-row">
+              <span class="loading-spinner"></span>
+              <span>Rendering video, please wait...</span>
+            </div>
+            <p style="font-family: 'Space Mono', monospace; font-size: 0.75rem; color: #78746c; margin: 0.5rem 0 0 0;">
+              This may take several minutes depending on video length.
+            </p>
+          ` : ''}
+
+          ${render_status === 'rendered' && renderedVideo ? html`
+            <div style="display: flex; flex-direction: column; gap: 1rem; align-items: center;">
+              <div class="rendered-video-player">
+                <video controls preload="metadata">
+                  <source src="${renderedVideo.url}" type="video/webm">
+                  Your browser does not support the video tag.
+                </video>
+              </div>
+              <a href="${renderedVideo.url}" download="video_${this.video.id}.webm" class="download-link">
+                ⬇ Download Video
+              </a>
+              ${renderedVideo.metadata ? html`
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.5rem; width: 100%; max-width: 600px;">
+                  <div class="meta-item">
+                    <span class="meta-label">Resolution</span>
+                    <span class="meta-value">${this.getRenderMetadata(renderedVideo.metadata)?.width || 0}x${this.getRenderMetadata(renderedVideo.metadata)?.height || 0}</span>
+                  </div>
+                  <div class="meta-item">
+                    <span class="meta-label">Duration</span>
+                    <span class="meta-value">${((this.getRenderMetadata(renderedVideo.metadata)?.durationMs || 0) / 1000).toFixed(1)}s</span>
+                  </div>
+                  <div class="meta-item">
+                    <span class="meta-label">FPS</span>
+                    <span class="meta-value">${this.getRenderMetadata(renderedVideo.metadata)?.fps || 0}</span>
+                  </div>
+                  <div class="meta-item">
+                    <span class="meta-label">Size</span>
+                    <span class="meta-value">${((renderedVideo.fileSize || 0) / 1024 / 1024).toFixed(2)} MB</span>
+                  </div>
+                </div>
+              ` : ''}
+              <button
+                class="btn"
+                @click=${this.renderVideo}
+                ?disabled=${this.renderingVideo}
+              >
+                ${this.renderingVideo ? html`<span class="loading-spinner"></span> Re-rendering...` : '[ Re-render Video ]'}
+              </button>
             </div>
           ` : ''}
         </div>

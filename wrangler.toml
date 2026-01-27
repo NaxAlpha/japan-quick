@@ -53,6 +53,35 @@ name = "video-selection-workflow"
 binding = "VIDEO_SELECTION_WORKFLOW"
 class_name = "VideoSelectionWorkflow"
 
+[[workflows]]
+name = "video-render-workflow"
+binding = "VIDEO_RENDER_WORKFLOW"
+class_name = "VideoRenderWorkflow"
+
+# Durable Objects for sandbox container (SQLite DO required for containers)
+[[durable_objects.bindings]]
+class_name = "Sandbox"
+name = "Sandbox"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["VideoSandbox"]
+
+[[migrations]]
+tag = "v2"
+deleted_classes = ["VideoSandbox"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["Sandbox"]
+
+# Containers configuration for ffmpeg video rendering
+[[containers]]
+class_name = "Sandbox"
+image = "./Dockerfile.ffmpeg"
+instance_type = "basic"
+max_instances = 3
+
 # Cron triggers for scheduled news refresh (hourly)
 [triggers]
 crons = ["0 * * * *"]

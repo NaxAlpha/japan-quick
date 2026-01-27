@@ -3,6 +3,7 @@
  */
 
 import type { ArticleStatus } from './article.js';
+import type { Sandbox } from '@cloudflare/sandbox';
 
 export interface YahooNewsTopPick {
   title: string;
@@ -56,6 +57,8 @@ export type Env = {
     ARTICLE_SCRAPER_WORKFLOW: Workflow;
     ARTICLE_RESCRAPE_WORKFLOW: Workflow;
     VIDEO_SELECTION_WORKFLOW: Workflow;
+    VIDEO_RENDER_WORKFLOW: Workflow;
+    Sandbox: DurableObjectNamespace<Sandbox>;
     GOOGLE_API_KEY: string;
     YOUTUBE_CLIENT_ID: string;
     YOUTUBE_CLIENT_SECRET: string;

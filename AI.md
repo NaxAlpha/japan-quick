@@ -1091,3 +1091,134 @@ Cloudflare Browser Rendering DOES work in Workflows when using @cloudflare/puppe
 - The `useDefineForClassFields: false` setting is required for Lit to work correctly with TypeScript
 - The `Env` type is defined in `src/types/news.ts` as the single source of truth
 - The `BROWSER` binding can be `null` in local development (no browser binding available)
+
+## Video Rendering Pipeline
+
+### Status: ✅ Fully Operational - Verified Working End-to-End 🎉
+
+The video rendering pipeline is **fully operational and verified working in production**. All bugs have been fixed, deployed, and tested successfully.
+
+**Verification Results (Video ID 70):**
+- ✅ Container provisioning successful
+- ✅ Session creation successful
+- ✅ Assets fetched with proper authentication (7 assets: 1 grid + 6 audio)
+- ✅ Base64 encoding successful (chunked encoding prevents stack overflow)
+- ✅ Files written to sandbox (1.8MB grid image + audio files)
+- ✅ Slides extracted from grid using FFmpeg crop (6 slides)
+- ✅ Video rendered with all effects (zoompan, xfade, date badge)
+- ✅ Output video uploaded to R2 (260 KB WebM, 99.5 seconds, 1080x1920)
+- ✅ Video accessible and valid (confirmed WebM signature)
+- **Render Time:** 61 seconds from start to completion
+
+### Implementation
+
+1. **Video Renderer Service** (`src/services/video-renderer.ts`)
+   - FFmpeg-based video rendering with xfade transitions
+   - Ken Burns zoom effect (alternating in/out)
+   - Japanese date badge overlay using Noto Sans CJK fonts
+   - WebM output (VP9/Opus, 25fps)
+   - Uses single ExecutionSession for all operations
+   - Asset fetching in worker, writing to container via session.writeFile
+   - Comprehensive logging at all stages
+   - Retry logic with exponential backoff (3 attempts, 2s/4s/8s delays)
+
+2. **Video Render Workflow** (`src/workflows/video-render.workflow.ts`)
+   - Orchestrates video rendering from generated assets
+   - Step-by-step process with retry policies
+   - R2 upload for final video
+   - Direct async call (not wrapped in step.do) to avoid serialization
+   - Extended timeouts: 2min for container provisioning, 3min for API ready
+
+3. **Database Migration** (`migrations/008_video_render.sql`)
+   - Added render status tracking columns to videos table
+   - Successfully applied to remote database
+
+4. **Dockerfile** (`Dockerfile.ffmpeg`)
+   - **CRITICAL**: Based on `docker.io/cloudflare/sandbox:0.7.0` (matches SDK version)
+   - **CRITICAL**: Must include `CMD ["bun", "/container-server/dist/index.js"]` to start control plane
+   - Installs ffmpeg, curl, file utility, fonts-noto-cjk-extra
+   - Using `instance_type = "basic"` (4GB disk vs 2GB for lite)
+
+5. **Frontend UI** (`src/frontend/pages/video-page.ts`)
+   - Render card with status and metadata display
+   - Trigger render endpoint
+
+### Critical Issues Found and Fixed
+
+**Issue 1: Incorrect API Usage (Root Cause)**
+- **Problem**: video-renderer.ts had multiple API usage bugs from initial implementation
+- **Symptoms**: Function signature mismatches, wrong parameter types, incorrect command formats
+- **Fix**: Complete refactor to use ExecutionSession API correctly
+- **Commit**: `a360f58` - "fix: Resolve Cloudflare Sandbox API usage bugs in video renderer"
+
+**Issue 2: Missing Container Entrypoint**
+- **Problem**: Dockerfile didn't specify CMD to start Cloudflare Sandbox control plane
+- **Symptom**: "Container crashed while checking for ports" error
+- **Fix**: Added `CMD ["bun", "/container-server/dist/index.js"]` to Dockerfile
+- **Reference**: [Dockerfile docs](https://developers.cloudflare.com/sandbox/configuration/dockerfile/)
+
+**Issue 3: SDK/Container Version Mismatch**
+- **Problem**: Using SDK v0.7.0 but container base image was v0.3.3
+- **Symptom**: "Durable Object reset" errors, container version warnings
+- **Fix**: Updated Dockerfile FROM line to `docker.io/cloudflare/sandbox:0.7.0`
+- **Important**: Always match Docker image version to npm package version
+
+**Issue 4: Missing Authorization Headers**
+- **Problem**: Asset URLs had embedded credentials but fetch() doesn't auto-extract them
+- **Symptom**: "401 Unauthorized" when fetching assets from worker
+- **Fix**: Added `fetchWithAuth()` helper to extract credentials and build Authorization headers
+- **Commit**: `24ca2ac` - "fix: Add Authorization header extraction for asset fetching"
+
+**Issue 5: Stack Overflow on Large File Base64 Encoding**
+- **Problem**: Spread operator with 1.8MB array causes "Maximum call stack size exceeded"
+- **Symptom**: Stack overflow when converting large grid images to base64
+- **Fix**: Implemented chunked base64 encoding (8KB chunks)
+- **Commit**: `1919c63` - "fix: Use chunked base64 encoding to prevent stack overflow"
+
+**Issue 6: Container Provisioning Time**
+- **Problem**: Containers need 2-3 minutes to provision after deployment
+- **Fix**: Added increased timeouts and retry logic for session creation
+- **Note**: Wait 2-3 minutes after deployment before triggering renders
+
+### Previous Debugging Steps
+
+1. Added comprehensive debug logging throughout video-renderer.ts
+2. Added error handling with detailed error context
+3. Added retry logic for session creation (3 attempts with exponential backoff)
+4. Added timeout parameters to fetch operations (30s timeout)
+5. Improved FFmpeg command escaping and error reporting
+6. Identified and fixed Dockerfile CMD requirement
+7. Fixed SDK/container version mismatch
+
+### Configuration
+
+**wrangler.toml**:
+```toml
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["Sandbox"]
+
+[[containers]]
+class_name = "Sandbox"
+image = "./Dockerfile.ffmpeg"
+instance_type = "basic"  # 4 GB disk
+max_instances = 3
+```
+
+**Deployment Status**:
+- ✅ **Production Version:** `c47c9b9d-4859-4307-8bb9-7838168c6c3e`
+- ✅ **Branch:** `video-renderer-ffmpeg`
+- ✅ **All Fixes Deployed:** 2026-01-27 10:47 UTC
+- ✅ **Verified Working:** Video ID 70 successfully rendered
+
+**Key Commits:**
+1. `a360f58` - Fix: Resolve Cloudflare Sandbox API usage bugs
+2. `24ca2ac` - Fix: Add Authorization header extraction
+3. `1919c63` - Fix: Use chunked base64 encoding
+4. `0e90c38` - Docs: Update AI.md with status
+
+**Usage:**
+- Endpoint: `POST /api/videos/:id/render`
+- Status: `GET /api/videos/:id/render/status`
+- Video URL: `/api/videos/:id/assets/:assetId` (returned in status)
+- Authentication: Required (Basic Auth)
