@@ -1,4 +1,4 @@
-FROM docker.io/cloudflare/sandbox:0.3.3
+FROM docker.io/cloudflare/sandbox:0.7.0
 
 # Install ffmpeg, curl, file utility, and Japanese fonts
 RUN apt-get update && \
@@ -12,4 +12,6 @@ RUN apt-get update && \
 
 WORKDIR /workspace
 
-# The sandbox binary should already be the entrypoint from base image
+# Start the Cloudflare Sandbox control plane
+# This is required for the container to listen on the control port
+CMD ["bun", "/container-server/dist/index.js"]

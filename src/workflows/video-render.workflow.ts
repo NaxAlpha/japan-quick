@@ -177,8 +177,25 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
       // 1. The Sandbox proxy cannot be serialized by the workflow framework
       // 2. The R2 bucket cannot be captured in the closure
       // We do rendering as a direct async call instead
+      log.videoRenderWorkflow.info(reqId, 'Starting video render', {
+        videoType: video.video_type,
+        slideCount: script.slides.length,
+        gridCount: grids.length,
+        audioCount: audio.length
+      });
+
       const sandboxId = `render-${reqId}`;
-      const sandbox = getSandbox(this.env.Sandbox, sandboxId);
+      log.videoRenderWorkflow.debug(reqId, 'Getting sandbox', { sandboxId });
+      const sandbox = getSandbox(this.env.Sandbox, sandboxId, {
+        containerTimeouts: {
+          instanceGetTimeoutMS: 120000, // 2 minutes for container provisioning
+          portReadyTimeoutMS: 180000    // 3 minutes for API to become ready
+        }
+      });
+
+      log.videoRenderWorkflow.info(reqId, 'Calling renderVideo service');
+      const renderStartTime = Date.now();
+
       const renderResult = await renderVideo(reqId, sandbox, {
         script,
         videoType: video.video_type,
@@ -186,7 +203,13 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
         audio,
         articleDate
       });
-      log.videoRenderWorkflow.info(reqId, 'Render completed', { durationMs: renderResult.metadata.durationMs });
+
+      const renderDuration = Date.now() - renderStartTime;
+      log.videoRenderWorkflow.info(reqId, 'Render completed', {
+        durationMs: renderDuration,
+        videoDurationMs: renderResult.metadata.durationMs,
+        videoSize: renderResult.videoBase64.length
+      });
 
       // Step 7: Upload video to R2
       const r2Key = `videos/${videoId}/rendered_${crypto.randomUUID()}.webm`;
