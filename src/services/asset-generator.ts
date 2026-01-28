@@ -1,9 +1,11 @@
 /**
  * Asset Generator Service
- * Handles generation of grid images and slide audio using Gemini AI
+ * Handles generation of grid images, individual slide images, and slide audio using Gemini AI
  */
 
 import { GoogleGenAI } from '@google/genai';
+import { Image, decodeBase64, encodeBase64 } from 'cross-image';
+import { ulid } from 'ulid';
 import type { VideoScript, ImageModelId, TTSModelId, TTSVoice, GridImageMetadata, SlideAudioMetadata, ImageSize } from '../types/video.js';
 import { log } from '../lib/logger.js';
 import { buildGridImagePrompt } from '../lib/prompts.js';
@@ -14,13 +16,23 @@ interface GridImageResult {
   base64: string;
   mimeType: string;
   metadata: GridImageMetadata;
+  ulid: string;
+}
+
+interface SlideImageResult {
+  base64: string;
+  mimeType: string;
+  metadata: { slideIndex: number };
+  ulid: string;
 }
 
 interface SlideAudioResult {
   base64: string;
   mimeType: string;
   metadata: SlideAudioMetadata;
+  ulid: string;
 }
+
 
 export class AssetGeneratorService {
   private genai: GoogleGenAI;
@@ -30,7 +42,8 @@ export class AssetGeneratorService {
   }
 
   /**
-   * Generate all grid images for a video
+   * Generate all grid images and individual slide images for a video
+   * Uses cross-image (pure JS) to split grids into individual slides
    */
   async generateGridImages(
     reqId: string,
@@ -38,11 +51,11 @@ export class AssetGeneratorService {
     videoType: 'short' | 'long',
     model: ImageModelId,
     referenceImages: string[] = []
-  ): Promise<GridImageResult[]> {
+  ): Promise<{ grids: GridImageResult[]; slides: SlideImageResult[] }> {
     const isShort = videoType === 'short';
     const aspectRatio = isShort ? '9:16' : '16:9';
     const gridCount = isShort ? 1 : 2;
-    const results: GridImageResult[] = [];
+    const grids: GridImageResult[] = [];
 
     log.assetGen.info(reqId, 'Starting grid image generation', {
       videoType,
@@ -67,7 +80,7 @@ export class AssetGeneratorService {
         imageSize
       );
 
-      const previousGrid = gridIndex === 1 && results.length > 0 ? results[0].base64 : undefined;
+      const previousGrid = gridIndex === 1 && grids.length > 0 ? grids[0].base64 : undefined;
 
       log.assetGen.info(reqId, `Generating grid ${gridIndex}`, {
         slideIndices,
@@ -96,16 +109,156 @@ export class AssetGeneratorService {
         imageSize
       );
 
-      results.push({
+      const gridUlid = ulid();
+
+      grids.push({
         base64: gridImage.base64,
         mimeType: gridImage.mimeType,
-        metadata
+        metadata,
+        ulid: gridUlid
       });
 
-      log.assetGen.info(reqId, `Grid ${gridIndex} generated`, { durationMs });
+      log.assetGen.info(reqId, `Grid ${gridIndex} generated`, { durationMs, ulid: gridUlid });
     }
 
-    return results;
+    // Split grids into individual slide images using ImageScript
+    const allSlides: SlideImageResult[] = await this.splitGridsIntoSlides(reqId, grids);
+
+    return { grids, slides: allSlides };
+  }
+
+  /**
+   * Split grid images into individual slide images using cross-image
+   * Pure JavaScript implementation - no native dependencies
+   */
+  private async splitGridsIntoSlides(
+    reqId: string,
+    grids: GridImageResult[]
+  ): Promise<SlideImageResult[]> {
+    const allSlides: SlideImageResult[] = [];
+
+    log.assetGen.info(reqId, 'Starting grid splitting with cross-image', { gridCount: grids.length });
+
+    for (const grid of grids) {
+      // Use cross-image's decodeBase64 to convert base64 to Uint8Array
+      // This ensures the data is in the format cross-image expects
+      let gridImage;
+      try {
+        const gridBytes = decodeBase64(grid.base64);
+        log.assetGen.debug(reqId, 'Decoding grid image', {
+          byteLength: gridBytes.length,
+          base64Length: grid.base64.length,
+          mimeType: grid.mimeType,
+          firstBytes: Array.from(gridBytes.slice(0, 8)) // First 8 bytes for format detection
+        });
+
+        // Decode PNG using cross-image
+        gridImage = await Image.decode(gridBytes);
+      } catch (decodeError) {
+        log.assetGen.error(reqId, 'Failed to decode image with cross-image', decodeError as Error, {
+          base64Length: grid.base64.length,
+          mimeType: grid.mimeType,
+          error: (decodeError as Error).message
+        });
+        throw new Error(`Failed to decode grid image: ${decodeError}`);
+      }
+
+      const { positions } = grid.metadata;
+
+      log.assetGen.info(reqId, `Splitting grid ${grid.metadata.gridIndex}`, {
+        ulid: grid.ulid,
+        positionCount: positions.length,
+        gridWidth: gridImage.width,
+        gridHeight: gridImage.height
+      });
+
+      // Extract each slide from the grid using crop()
+      for (const pos of positions) {
+        // Skip empty cells and thumbnail cells
+        if (pos.isEmpty || pos.isThumbnail) continue;
+        if (pos.slideIndex === null) continue;
+
+        const startTime = Date.now();
+
+        const cropWidth = pos.cropRect.w;
+        const cropHeight = pos.cropRect.h;
+        const sourceX = pos.cropRect.x;
+        const sourceY = pos.cropRect.y;
+
+        log.assetGen.debug(reqId, `Cropping slide ${pos.slideIndex}`, {
+          cropWidth,
+          cropHeight,
+          sourceX,
+          sourceY,
+          gridWidth: gridImage.width,
+          gridHeight: gridImage.height
+        });
+
+        // CRITICAL: Clone the grid image before cropping because crop() mutates in place!
+        // Each crop needs to start from the original grid, not a previously cropped version
+        const gridClone = gridImage.clone();
+
+        // Crop the cloned image
+        const cropped = gridClone.crop(sourceX, sourceY, cropWidth, cropHeight);
+
+        log.assetGen.debug(reqId, `Cropped slide ${pos.slideIndex}`, {
+          cropWidth,
+          cropHeight,
+          sourceX,
+          sourceY,
+          croppedWidth: cropped.width,
+          croppedHeight: cropped.height
+        });
+
+        // Encode back to PNG
+        let slideBuffer;
+        try {
+          slideBuffer = await cropped.encode('png');
+          log.assetGen.debug(reqId, `Encoded slide ${pos.slideIndex}`, {
+            bufferByteLength: slideBuffer.byteLength
+          });
+        } catch (encodeError) {
+          log.assetGen.error(reqId, `Failed to encode slide ${pos.slideIndex}`, encodeError as Error);
+          throw encodeError;
+        }
+
+        // Convert to base64 using cross-image's encodeBase64
+        let slideBase64;
+        try {
+          slideBase64 = encodeBase64(new Uint8Array(slideBuffer));
+        } catch (base64Error) {
+          log.assetGen.error(reqId, `Failed to encode base64 for slide ${pos.slideIndex}`, base64Error as Error, {
+            bufferByteLength: slideBuffer.byteLength
+          });
+          throw base64Error;
+        }
+
+        const slideUlid = ulid();
+        const durationMs = Date.now() - startTime;
+
+        allSlides.push({
+          base64: slideBase64,
+          mimeType: 'image/png',
+          metadata: { slideIndex: pos.slideIndex },
+          ulid: slideUlid
+        });
+
+        log.assetGen.info(reqId, `Slide ${pos.slideIndex} extracted`, {
+          slideIndex: pos.slideIndex,
+          ulid: slideUlid,
+          width: cropWidth,
+          height: cropHeight,
+          durationMs
+        });
+      }
+    }
+
+    log.assetGen.info(reqId, 'Grid splitting complete', { totalSlides: allSlides.length });
+
+    // Sort slides by slideIndex to ensure correct order
+    allSlides.sort((a, b) => a.metadata.slideIndex - b.metadata.slideIndex);
+
+    return allSlides;
   }
 
   /**
@@ -177,12 +330,15 @@ export class AssetGeneratorService {
     };
 
     const elapsed = Date.now() - startTime;
-    log.assetGen.info(reqId, 'Slide audio generated', { durationMs, elapsedMs: elapsed });
+    const audioUlid = ulid();
+
+    log.assetGen.info(reqId, 'Slide audio generated', { durationMs, elapsedMs: elapsed, ulid: audioUlid });
 
     return {
       base64: wavBase64,
       mimeType: 'audio/wav',
-      metadata
+      metadata,
+      ulid: audioUlid
     };
   }
 

@@ -72,12 +72,14 @@ export interface RenderedVideoMetadata {
 // Parsed asset for frontend (with URL)
 export interface ParsedVideoAsset {
   id: number;
-  assetType: 'grid_image' | 'slide_audio' | 'rendered_video';
+  assetType: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video';
   assetIndex: number;
   url: string;
   mimeType: string;
   fileSize: number | null;
   metadata: GridImageMetadata | SlideAudioMetadata | RenderedVideoMetadata | null;
+  publicUrl: string | null;
+  generationType: string;
 }
 
 // Frontend-ready interface
@@ -101,6 +103,8 @@ export interface ParsedVideo {
   render_error: string | null;
   render_started_at: string | null;
   render_completed_at: string | null;
+  slideImageAssetIds: string[];
+  slideAudioAssetIds: string[];
   assets: ParsedVideoAsset[];
   renderedVideo: ParsedVideoAsset | null;
   created_at: string;

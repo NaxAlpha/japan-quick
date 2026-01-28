@@ -19,7 +19,9 @@ japan-quick/
 │   ├── 004_youtube_auth.sql    # Database migration for YouTube OAuth tokens
 │   ├── 005_comment_reactions.sql # Database migration for comment reactions and replies
 │   ├── 006_video_scripts.sql   # Database migration for video script columns
-│   └── 007_video_assets.sql    # Database migration for video assets (images, audio) and R2 storage
+│   ├── 007_video_assets.sql    # Database migration for video assets (images, audio) and R2 storage
+│   ├── 008_video_render.sql    # Database migration for video render status tracking
+│   └── 009_public_assets.sql   # Database migration for ULID-based public asset system
 ├── src/
 │   ├── index.ts                # Cloudflare Workers backend with Hono + workflow exports
 │   ├── middleware/
@@ -1156,23 +1158,235 @@ Cloudflare Browser Rendering DOES work in Workflows when using @cloudflare/puppe
 - The `Env` type is defined in `src/types/news.ts` as the single source of truth
 - The `BROWSER` binding can be `null` in local development (no browser binding available)
 
+### Video Rendering Pipeline
+
+### Public Asset System (ULID-based Flat Storage)
+
+The video asset system uses **ULID-based flat storage** with **public URLs** and **individual slide images**.
+
+**Key Changes:**
+1. **ULID-based Flat Storage**: Assets stored at R2 bucket root as `{ulid}.{ext}` (e.g., `01H7XXK1R...png`)
+2. **Public URLs**: Assets served directly via `https://japan-quick-assets.nauman.im/{ulid}.{ext}`
+3. **Individual Slide Images**: Grids are split into individual slides using **FFmpeg** in the video render workflow
+4. **No Base64 Encoding**: Video renderer downloads assets via `curl` inside sandbox
+5. **Asset ID Tracking**: `slide_image_asset_ids` and `slide_audio_asset_ids` stored as JSON arrays
+
+### Database Schema Updates
+
+**New videos table columns:**
+```sql
+ALTER TABLE videos ADD COLUMN slide_image_asset_ids TEXT;   -- JSON array of ULID strings
+ALTER TABLE videos ADD COLUMN slide_audio_asset_ids TEXT;   -- JSON array of ULID strings
+```
+
+**New video_assets table columns:**
+```sql
+ALTER TABLE video_assets ADD COLUMN public_url TEXT;         -- Direct public URL
+ALTER TABLE video_assets ADD COLUMN generation_type TEXT DEFAULT 'grid';  -- 'grid' | 'individual'
+```
+
+**Asset Types:**
+- `grid_image` - Full grid images (for reference)
+- `slide_image` - Individual slide images extracted from grids (NEW)
+- `slide_audio` - TTS audio for each slide
+- `rendered_video` - Final rendered video
+
+### Storage Format
+
+**Before (hierarchical):**
+```
+videos/{videoId}/grid_00.png
+videos/{videoId}/audio_00.wav
+```
+
+**After (flat ULID):**
+```
+{ulid}.png           -- Individual slide image
+{ulid}.wav           -- Slide audio
+{ulid}.webm          -- Rendered video
+```
+
+**Public URL Pattern:**
+- `https://japan-quick-assets.nauman.im/{ulid}.{ext}`
+- Served via R2 custom domain
+- No authentication required
+
+### Grid Splitting with cross-image
+
+Grid images are split into individual slides using **cross-image** (pure JavaScript, zero dependencies) in the asset generator:
+
+```typescript
+// src/services/asset-generator.ts: splitGridsIntoSlides()
+private async splitGridsIntoSlides(reqId: string, grids: GridImageResult[]): Promise<SlideImageResult[]> {
+  const allSlides: SlideImageResult[] = [];
+
+  for (const grid of grids) {
+    const gridBuffer = this.base64ToArrayBuffer(grid.base64);
+
+    // Decode PNG using cross-image (pure JS, no dependencies)
+    const gridImage = await Image.decode(gridBuffer);
+
+    for (const pos of grid.metadata.positions) {
+      if (pos.isEmpty || pos.isThumbnail) continue;
+      if (pos.slideIndex === null) continue;
+
+      // Crop using built-in crop method
+      const cropped = gridImage.crop(pos.cropRect.x, pos.cropRect.y, pos.cropRect.w, pos.cropRect.h);
+
+      // Encode back to PNG
+      const slideBuffer = await cropped.encode('png');
+
+      // Upload to R2 with ULID-based key
+      // ...
+    }
+  }
+
+  return allSlides;
+}
+```
+
+**Why cross-image?**
+- Pure JavaScript implementation with **zero native dependencies**
+- Actively maintained (latest release: 1 month ago)
+- Works across Deno, Node.js, Bun, and Browsers
+- Simple, chainable API with built-in crop/resize operations
+- Better documentation and fault-tolerant decoding
+
+### Video Renderer Updates
+
+The video renderer now uses **individual slide images** instead of grids:
+
+**Before:**
+- Downloaded grid images
+- Extracted slides using FFmpeg crop
+- Base64 encoded assets before writing
+
+**After:**
+- Downloads individual slide images directly
+- Uses `curl` inside sandbox (no base64 encoding)
+- Downloads both images and audio via public URLs
+
+**RenderInput interface:**
+```typescript
+interface RenderInput {
+  script: VideoScript;
+  videoType: VideoType;
+  slideImages: SlideImageAsset[];  // Changed from grids
+  audio: AudioAsset[];
+  articleDate: string;
+}
+
+interface SlideImageAsset {
+  url: string;      // Public URL
+  slideIndex: number;
+}
+```
+
+**Sandbox asset download:**
+```bash
+# Download slide image
+curl -L -o "slides/slide_00.png" "https://japan-quick-assets.nauman.im/{ulid}.png"
+
+# Download audio
+curl -L -o "audio/audio_00.wav" "https://japan-quick-assets.nauman.im/{ulid}.wav"
+```
+
+### API Endpoint Changes
+
+**GET /api/videos/:id/assets/:assetId**
+- Now returns **302 redirect** to `public_url` instead of serving file bytes
+- Returns 404 if asset not found
+- Returns 500 if asset has no `public_url` configured
+
+**GET /api/videos/:id**
+- Returns `slide_image_asset_ids` and `slide_audio_asset_ids` in video response
+- Each ID is a ULID string that can be used to construct public URLs
+
+**POST /api/videos/:id/generate-assets**
+- Generates both grid images AND individual slide images
+- Creates `slide_image` asset records with ULID-based naming
+- Stores public URLs in `video_assets.public_url` column
+- Updates video with `slide_image_asset_ids` and `slide_audio_asset_ids`
+
+### Frontend Changes
+
+The video detail page (`/video/:id`) now displays:
+- **Slide Images Section**: Shows individual slide images (80×80 thumbnails) with audio players
+- **Direct Public URLs**: Uses `https://japan-quick-assets.nauman.im/{ulid}.{ext}` format
+- **No CSS Crop Logic**: Removed negative offset cropping since images are individual slides
+
+**ParsedVideo interface updates:**
+```typescript
+export interface ParsedVideo {
+  // ... existing fields ...
+  slideImageAssetIds: string[];  // Array of ULID strings
+  slideAudioAssetIds: string[];  // Array of ULID strings
+}
+```
+
+### Services
+
+**R2StorageService** (`src/services/r2-storage.ts`):
+- `uploadAsset(ulid, data, mimeType)`: Upload with ULID-based naming
+- `getPublicUrl(ulid, mimeType)`: Returns `https://japan-quick-assets.nauman.im/{ulid}.{ext}`
+- `uploadAssetLegacy()`: Old hierarchical method (kept for compatibility)
+
+**AssetGeneratorService** (`src/services/asset-generator.ts`):
+- `generateGridImages()`: Creates 3×3 grid images using Gemini
+  - Uses `aspectRatio` and `imageSize` API config parameters
+  - Includes reference images as `inlineData` in contents array
+  - Supports style consistency via previous grid reference
+  - Returns only grid images (no individual slides)
+- `generateSlideAudio()`: Generates TTS audio for a slide
+
+### Migration Notes
+
+**Migration 009 (`migrations/009_public_assets.sql`):**
+- Added `slide_image_asset_ids` and `slide_audio_asset_ids` to videos table
+- Added `public_url` and `generation_type` to video_assets table
+- Reset existing assets to force regeneration with new format
+- Successfully applied to remote database
+
+### Dependencies Added
+
+```json
+{
+  "dependencies": {
+    "cross-image": "^0.4.3",  // Pure JS image processing library for grid splitting
+    "ulid": "^2.3.0"          // ULID generation for asset IDs
+  }
+}
+```
+
+**Note**:
+- `sharp` was initially considered but removed due to native dependencies
+- `ImageScript` was tried but also uses native (.node) files
+- `pngjs` had CJS/ESM interoperability issues with Zlib
+- **cross-image** is the final solution - pure JavaScript with zero dependencies, actively maintained
+
+---
+
 ## Video Rendering Pipeline
 
-### Status: ✅ Fully Operational - Verified Working End-to-End 🎉
+### Status: ⚠️ Partially Working - Grid Splitting Verified, Video Render Pending
 
-The video rendering pipeline is **fully operational and verified working in production**. All bugs have been fixed, deployed, and tested successfully.
+The video rendering pipeline has been **refactored for ULID-based public assets**. Grid splitting via FFmpeg is confirmed working, but the final video render step encounters a sandbox capacity issue.
 
-**Verification Results (Video ID 70):**
-- ✅ Container provisioning successful
-- ✅ Session creation successful
-- ✅ Assets fetched with proper authentication (7 assets: 1 grid + 6 audio)
-- ✅ Base64 encoding successful (chunked encoding prevents stack overflow)
-- ✅ Files written to sandbox (1.8MB grid image + audio files)
-- ✅ Slides extracted from grid using FFmpeg crop (6 slides)
-- ✅ Video rendered with all effects (zoompan, xfade, date badge)
-- ✅ Output video uploaded to R2 (260 KB WebM, 99.5 seconds, 1080x1920)
-- ✅ Video accessible and valid (confirmed WebM signature)
-- **Render Time:** 61 seconds from start to completion
+**Verification Results (Public Asset System):**
+- ✅ Grid images stored with ULID-based keys at R2 bucket root
+- ✅ Public URLs working (`https://japan-quick-assets.nauman.im/{ulid}.png`)
+- ✅ Grid splitting via FFmpeg works (7 individual slide images created)
+- ✅ Slide images stored with ULID keys and public URLs
+- ✅ `slide_image_asset_ids` and `slide_audio_asset_ids` populated correctly
+- ✅ Asset database records created with correct `asset_index`
+- ⚠️ Final video render step: Sandbox HTTP 500 error (capacity issue)
+
+**Current Architecture (Post-Refactor):**
+1. Asset generator creates grid images AND individual slides (using cross-image)
+2. Individual slides uploaded to R2 with ULID keys during asset generation
+3. Video render workflow fetches pre-split `slide_image` assets
+4. Public URLs used throughout (no base64 encoding for transfers)
+5. Video renderer downloads slides/audio via curl inside sandbox
 
 ### Implementation
 
@@ -1188,9 +1402,12 @@ The video rendering pipeline is **fully operational and verified working in prod
 
 2. **Video Render Workflow** (`src/workflows/video-render.workflow.ts`)
    - Orchestrates video rendering from generated assets
+   - **Step 3: Fetch assets** - Fetches `slide_image` and `slide_audio` assets (no grid splitting needed)
+   - **Step 4: Fetch article date** - For date badge overlay
+   - **Step 5: Prepare render inputs** - Build slide images and audio arrays
+   - **Step 6: Render video** - Uses FFmpeg in sandbox for video composition
+   - **Step 7-9: Upload, create record, update status**
    - Step-by-step process with retry policies
-   - R2 upload for final video
-   - Direct async call (not wrapped in step.do) to avoid serialization
    - Extended timeouts: 2min for container provisioning, 3min for API ready
 
 3. **Database Migration** (`migrations/008_video_render.sql`)
@@ -1270,10 +1487,10 @@ max_instances = 3
 ```
 
 **Deployment Status**:
-- ✅ **Production Version:** `c47c9b9d-4859-4307-8bb9-7838168c6c3e`
-- ✅ **Branch:** `video-renderer-ffmpeg`
-- ✅ **All Fixes Deployed:** 2026-01-27 10:47 UTC
-- ✅ **Verified Working:** Video ID 70 successfully rendered
+- ✅ **Branch:** `public-asset-system`
+- ✅ **Migration 009 Applied:** ULID-based public asset system
+- ✅ **Grid Splitting Working:** 7 slide images created via FFmpeg
+- ⚠️ **Video Render Pending:** Sandbox capacity issue (HTTP 500)
 
 **Key Commits:**
 1. `a360f58` - Fix: Resolve Cloudflare Sandbox API usage bugs

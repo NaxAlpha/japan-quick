@@ -1,23 +1,19 @@
 /**
  * Video Renderer Service
- * Uses Cloudflare Sandbox with ffmpeg to render videos from grid images and audio
+ * Uses Cloudflare Sandbox with ffmpeg to render videos from individual slide images and audio
  */
 
 import type { VideoScript, VideoType, RenderedVideoMetadata } from '../types/video.js';
 import { log } from '../lib/logger.js';
 import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
 
-interface GridAsset {
-  url: string;  // Public URL to download from
-  gridIndex: number;
-  width: number;
-  height: number;
-  cellWidth: number;
-  cellHeight: number;
+interface SlideImageAsset {
+  url: string;      // Public URL to download from
+  slideIndex: number;
 }
 
 interface AudioAsset {
-  url: string;  // Public URL to download from
+  url: string;      // Public URL to download from
   slideIndex: number;
   durationMs: number;
 }
@@ -25,7 +21,7 @@ interface AudioAsset {
 interface RenderInput {
   script: VideoScript;
   videoType: VideoType;
-  grids: GridAsset[];
+  slideImages: SlideImageAsset[];
   audio: AudioAsset[];
   articleDate: string; // ISO date string for date badge
 }
@@ -39,155 +35,70 @@ async function writeAssets(
   reqId: string,
   session: any,
   input: RenderInput
-): Promise<void> {
+): Promise<{ slidePaths: string[]; audioPaths: string[] }> {
   log.videoRenderer.debug(reqId, 'Writing assets to sandbox', {
-    gridCount: input.grids.length,
+    slideImageCount: input.slideImages.length,
     audioCount: input.audio.length
   });
 
-  // Helper to extract auth from URL and build headers
-  const fetchWithAuth = async (url: string) => {
-    const urlObj = new URL(url);
-    const headers: HeadersInit = {};
-
-    // Extract credentials if present in URL
-    if (urlObj.username && urlObj.password) {
-      const credentials = btoa(`${urlObj.username}:${urlObj.password}`);
-      headers['Authorization'] = `Basic ${credentials}`;
-      // Remove credentials from URL
-      urlObj.username = '';
-      urlObj.password = '';
-    }
-
-    return fetch(urlObj.toString(), {
-      headers,
-      signal: AbortSignal.timeout(30000)
-    });
-  };
-
-  // Helper to convert ArrayBuffer to base64 in chunks to avoid stack overflow
-  const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
-    const bytes = new Uint8Array(buffer);
-    const chunkSize = 8192; // Process 8KB at a time
-    let binary = '';
-
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
-      binary += String.fromCharCode(...chunk);
-    }
-
-    return btoa(binary);
-  };
+  const slidePaths: string[] = [];
+  const audioPaths: string[] = [];
 
   try {
     // Create directories
     log.videoRenderer.debug(reqId, 'Creating directories');
-    const mkdirResult = await session.exec('mkdir -p grids audio slides');
+    const mkdirResult = await session.exec('mkdir -p slides audio');
     if (!mkdirResult.success) {
       throw new Error(`Failed to create directories: ${mkdirResult.stderr}`);
     }
     log.videoRenderer.debug(reqId, 'Directories created');
 
-    // Write grid images
-    for (const grid of input.grids) {
-      const gridPath = `grids/grid_${grid.gridIndex.toString().padStart(2, '0')}.png`;
-      log.videoRenderer.debug(reqId, `Fetching grid ${grid.gridIndex} from ${grid.url}`);
+    // Download slide images using curl inside sandbox
+    for (const slide of input.slideImages) {
+      const slidePath = `slides/slide_${slide.slideIndex.toString().padStart(2, '0')}.png`;
+      log.videoRenderer.debug(reqId, `Downloading slide ${slide.slideIndex} from ${slide.url}`);
 
-      const response = await fetchWithAuth(grid.url);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch grid ${grid.gridIndex}: ${response.status} ${response.statusText}`);
-      }
-
-      const arrayBuffer = await response.arrayBuffer();
-      log.videoRenderer.debug(reqId, `Grid ${grid.gridIndex} fetched, size: ${arrayBuffer.byteLength} bytes`);
-
-      const base64 = arrayBufferToBase64(arrayBuffer);
-      log.videoRenderer.debug(reqId, `Grid ${grid.gridIndex} converted to base64, length: ${base64.length}`);
-
-      await session.writeFile(gridPath, base64, { encoding: 'base64' });
-      log.videoRenderer.debug(reqId, `Wrote grid ${grid.gridIndex} to ${gridPath}`);
-    }
-
-    // Write audio files
-    for (const aud of input.audio) {
-      const audioPath = `audio/audio_${aud.slideIndex.toString().padStart(2, '0')}.wav`;
-      log.videoRenderer.debug(reqId, `Fetching audio ${aud.slideIndex} from ${aud.url}`);
-
-      const response = await fetchWithAuth(aud.url);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch audio ${aud.slideIndex}: ${response.status} ${response.statusText}`);
-      }
-
-      const arrayBuffer = await response.arrayBuffer();
-      log.videoRenderer.debug(reqId, `Audio ${aud.slideIndex} fetched, size: ${arrayBuffer.byteLength} bytes`);
-
-      const base64 = arrayBufferToBase64(arrayBuffer);
-      log.videoRenderer.debug(reqId, `Audio ${aud.slideIndex} converted to base64, length: ${base64.length}`);
-
-      await session.writeFile(audioPath, base64, { encoding: 'base64' });
-      log.videoRenderer.debug(reqId, `Wrote audio ${aud.slideIndex} to ${audioPath}`);
-    }
-
-    log.videoRenderer.debug(reqId, 'All assets written successfully');
-  } catch (error) {
-    log.videoRenderer.error(reqId, 'Failed to write assets', error as Error);
-    throw error;
-  }
-}
-
-async function extractSlides(
-  reqId: string,
-  session: any,
-  input: RenderInput
-): Promise<string[]> {
-  log.videoRenderer.debug(reqId, 'Extracting slides from grids', {
-    slideCount: input.script.slides.length
-  });
-
-  const slidePaths: string[] = [];
-  const slidesPerGrid = 9;
-
-  try {
-    for (let i = 0; i < input.script.slides.length; i++) {
-      const gridIndex = Math.floor(i / slidesPerGrid);
-      const cellIndex = i % slidesPerGrid;
-
-      const grid = input.grids[gridIndex];
-      if (!grid) {
-        throw new Error(`Grid ${gridIndex} not found for slide ${i}`);
-      }
-
-      const row = Math.floor(cellIndex / 3);
-      const col = cellIndex % 3;
-      const x = col * grid.cellWidth;
-      const y = row * grid.cellHeight;
-
-      const inputPath = `grids/grid_${gridIndex.toString().padStart(2, '0')}.png`;
-      const outputPath = `slides/slide_${i.toString().padStart(2, '0')}.png`;
-
-      log.videoRenderer.debug(reqId, `Extracting slide ${i} from grid ${gridIndex}`, {
-        cellIndex,
-        crop: `${grid.cellWidth}:${grid.cellHeight}:${x}:${y}`
-      });
-
-      const result = await session.exec(
-        `ffmpeg -y -i ${inputPath} -vf crop=${grid.cellWidth}:${grid.cellHeight}:${x}:${y} ${outputPath}`,
-        { timeoutMs: 30000 }
+      // Use curl to download directly inside the sandbox
+      const curlResult = await session.exec(
+        `curl -L -o "${slidePath}" "${slide.url}"`,
+        { timeoutMs: 60000 }
       );
 
-      if (!result.success) {
-        log.videoRenderer.error(reqId, `Failed to extract slide ${i}`, new Error(result.stderr || 'Unknown error'));
-        throw new Error(`Failed to extract slide ${i}: ${result.stderr}`);
+      if (!curlResult.success) {
+        throw new Error(`Failed to download slide ${slide.slideIndex}: ${curlResult.stderr}`);
       }
 
-      slidePaths.push(outputPath);
-      log.videoRenderer.debug(reqId, `Slide ${i} extracted successfully`);
+      slidePaths.push(slidePath);
+      log.videoRenderer.debug(reqId, `Downloaded slide ${slide.slideIndex} to ${slidePath}`);
     }
 
-    log.videoRenderer.debug(reqId, 'All slides extracted', { count: slidePaths.length });
-    return slidePaths;
+    // Download audio files using curl inside sandbox
+    for (const aud of input.audio) {
+      const audioPath = `audio/audio_${aud.slideIndex.toString().padStart(2, '0')}.wav`;
+      log.videoRenderer.debug(reqId, `Downloading audio ${aud.slideIndex} from ${aud.url}`);
+
+      // Use curl to download directly inside the sandbox
+      const curlResult = await session.exec(
+        `curl -L -o "${audioPath}" "${aud.url}"`,
+        { timeoutMs: 60000 }
+      );
+
+      if (!curlResult.success) {
+        throw new Error(`Failed to download audio ${aud.slideIndex}: ${curlResult.stderr}`);
+      }
+
+      audioPaths.push(audioPath);
+      log.videoRenderer.debug(reqId, `Downloaded audio ${aud.slideIndex} to ${audioPath}`);
+    }
+
+    log.videoRenderer.debug(reqId, 'All assets downloaded successfully', {
+      slideCount: slidePaths.length,
+      audioCount: audioPaths.length
+    });
+
+    return { slidePaths, audioPaths };
   } catch (error) {
-    log.videoRenderer.error(reqId, 'Failed to extract slides', error as Error);
+    log.videoRenderer.error(reqId, 'Failed to write assets', error as Error);
     throw error;
   }
 }
@@ -196,10 +107,12 @@ async function executeFfmpeg(
   reqId: string,
   session: any,
   slidePaths: string[],
+  audioPaths: string[],
   input: RenderInput
 ): Promise<string> {
   log.videoRenderer.info(reqId, 'Starting ffmpeg execution', {
     slideCount: slidePaths.length,
+    audioCount: audioPaths.length,
     videoType: input.videoType
   });
 
@@ -252,6 +165,15 @@ async function executeFfmpeg(
       filters.push(`[${prevOutput}][v${i}]xfade=transition=fade:duration=1:offset=${offset}[xf${i}]`);
     }
 
+    // Build audio concat filter
+    const audioInputs = audioPaths.map((_, i) => `[${i}:a]`).join('');
+    filters.push(`${audioInputs}concat=n=${audioPaths.length}:v=0:a=1[outaudio]`);
+
+    // Add audio inputs to command
+    for (const audioPath of audioPaths) {
+      inputs.push('-i', audioPath);
+    }
+
     // Date badge filter (Japanese format)
     const date = new Date(input.articleDate);
     const dateText = `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
@@ -276,9 +198,12 @@ async function executeFfmpeg(
       ...inputs,
       '-filter_complex', `"${filterComplex}"`,
       '-map', '[vdated]',
+      '-map', '[outaudio]',
       '-c:v', 'libvpx-vp9',
       '-crf', '30',
       '-b:v', '2M',
+      '-c:a', 'libopus',
+      '-b:a', '128K',
       '-f', 'webm',
       outputPath
     ].join(' ');
@@ -320,7 +245,7 @@ async function executeFfmpeg(
   }
 }
 
-function getMetadata(workspaceId: string, outputPath: string, input: RenderInput): RenderedVideoMetadata {
+function getMetadata(outputPath: string, input: RenderInput): RenderedVideoMetadata {
   // Calculate total duration from audio + padding
   const totalAudioDuration = input.audio.reduce((sum, a) => sum + a.durationMs, 0) / 1000;
   const totalDuration = totalAudioDuration + (input.audio.length * 1.0); // 1s padding per slide
@@ -344,7 +269,7 @@ export async function renderVideo(
   log.videoRenderer.info(reqId, 'Video render started', {
     slideCount: input.script.slides.length,
     videoType: input.videoType,
-    gridCount: input.grids.length,
+    slideImageCount: input.slideImages.length,
     audioCount: input.audio.length
   });
 
@@ -393,20 +318,16 @@ export async function renderVideo(
       throw new Error('Failed to create sandbox session');
     }
 
-    // Write assets using the session
-    log.videoRenderer.info(reqId, 'Step 1/4: Writing assets to sandbox');
-    await writeAssets(reqId, session, input);
-
-    // Extract slides using the session
-    log.videoRenderer.info(reqId, 'Step 2/4: Extracting slides from grids');
-    const slidePaths = await extractSlides(reqId, session, input);
+    // Write assets using the session (downloads via curl)
+    log.videoRenderer.info(reqId, 'Step 1/3: Downloading assets to sandbox');
+    const { slidePaths, audioPaths } = await writeAssets(reqId, session, input);
 
     // Build and execute ffmpeg command using the session
-    log.videoRenderer.info(reqId, 'Step 3/4: Rendering video with ffmpeg');
-    const outputPath = await executeFfmpeg(reqId, session, slidePaths, input);
+    log.videoRenderer.info(reqId, 'Step 2/3: Rendering video with ffmpeg');
+    const outputPath = await executeFfmpeg(reqId, session, slidePaths, audioPaths, input);
 
     // Read output video using session
-    log.videoRenderer.info(reqId, 'Step 4/4: Reading output video');
+    log.videoRenderer.info(reqId, 'Step 3/3: Reading output video');
     const readResult = await session.readFile('output.webm', { encoding: 'base64' });
     const videoData = typeof readResult === 'string' ? readResult : readResult.content;
     log.videoRenderer.debug(reqId, 'Output video read', {
@@ -415,7 +336,7 @@ export async function renderVideo(
     });
 
     // Get video metadata
-    const metadata = getMetadata('', 'output.webm', input);
+    const metadata = getMetadata(outputPath, input);
 
     log.videoRenderer.info(reqId, 'Video render completed successfully', {
       outputBase64Length: videoData.length,

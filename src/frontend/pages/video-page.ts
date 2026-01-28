@@ -600,20 +600,13 @@ export class VideoPage extends LitElement {
       border: 2px solid #e8e6e1;
     }
 
-    .slide-crop {
-      width: 50px;
-      height: 50px;
-      overflow: hidden;
-      position: relative;
+    .slide-image {
+      width: 80px;
+      height: 80px;
+      object-fit: cover;
       border: 2px solid #0a0a0a;
       flex-shrink: 0;
       background: #f3f4f6;
-    }
-
-    .slide-crop img {
-      width: 150px;
-      height: 150px;
-      position: absolute;
     }
 
     .slide-content {
@@ -1318,10 +1311,8 @@ export class VideoPage extends LitElement {
   private renderAssetsCard(): unknown {
     if (!this.video) return null;
 
-    const { asset_status, asset_error, assets, script, tts_voice } = this.video;
+    const { asset_status, asset_error, assets, script, tts_voice, slideImageAssetIds, slideAudioAssetIds } = this.video;
     const hasAssets = assets && assets.length > 0;
-    const gridAssets = hasAssets ? assets.filter(a => a.assetType === 'grid_image') : [];
-    const audioAssets = hasAssets ? assets.filter(a => a.assetType === 'slide_audio') : [];
 
     return html`
       <div class="card span-full">
@@ -1397,61 +1388,41 @@ export class VideoPage extends LitElement {
                 </div>
               ` : ''}
 
-              ${gridAssets.length > 0 ? html`
+              ${script && slideImageAssetIds && slideImageAssetIds.length > 0 ? html`
                 <div style="margin-top: 1.5rem;">
-                  <h4 style="font-family: 'Space Mono', monospace; font-size: 0.6875rem; color: #78746c; margin: 0 0 0.75rem 0; text-transform: uppercase;">Grid Images</h4>
-                  <div class="grids-container">
-                    ${gridAssets.map((asset, idx) => html`
-                      <div class="grid-preview">
-                        <img src="${asset.url}" alt="Grid ${idx}" />
+                  <h4 style="font-family: 'Space Mono', monospace; font-size: 0.6875rem; color: #78746c; margin: 0 0 0.75rem 0; text-transform: uppercase;">Slide Images</h4>
+                  <div class="slides-audio-list">
+                    ${slideImageAssetIds.map((assetId: string, idx: number) => html`
+                      <div class="slide-audio-item">
+                        <img
+                          class="slide-image"
+                          src="https://japan-quick-assets.nauman.im/${assetId}.png"
+                          alt="Slide ${idx + 1}"
+                        />
+
+                        <div class="slide-content">
+                          <div class="slide-content-title">${script.slides[idx]?.headline || 'Slide ' + (idx + 1)}</div>
+                          ${slideAudioAssetIds && slideAudioAssetIds[idx] ? html`
+                            <div class="slide-audio-player">
+                              <audio controls src="https://japan-quick-assets.nauman.im/${slideAudioAssetIds[idx]}.wav"></audio>
+                            </div>
+                          ` : ''}
+                        </div>
                       </div>
                     `)}
                   </div>
                 </div>
               ` : ''}
 
-              ${audioAssets.length > 0 && script ? html`
+              ${assets && assets.filter(a => a.assetType === 'grid_image').length > 0 ? html`
                 <div style="margin-top: 1.5rem;">
-                  <h4 style="font-family: 'Space Mono', monospace; font-size: 0.6875rem; color: #78746c; margin: 0 0 0.75rem 0; text-transform: uppercase;">Audio Tracks</h4>
-                  <div class="slides-audio-list">
-                    ${audioAssets.map((asset) => {
-                      const metadata = asset.metadata as SlideAudioMetadata | null;
-                      const slideIndex = metadata?.slideIndex ?? asset.assetIndex;
-                      const slide = script.slides[slideIndex];
-                      if (!slide) return null;
-
-                      const gridAsset = gridAssets.find(g => {
-                        const gridMeta = g.metadata as GridImageMetadata | null;
-                        if (!gridMeta) return false;
-                        return gridMeta.positions.some(p => p.slideIndex === slideIndex);
-                      });
-
-                      const gridMeta = gridAsset?.metadata as GridImageMetadata | null;
-                      const position = gridMeta?.positions.find(p => p.slideIndex === slideIndex);
-                      const cell = position?.cell ?? 0;
-
-                      return html`
-                        <div class="slide-audio-item">
-                          ${gridAsset ? html`
-                            <div class="slide-crop">
-                              <img src="${gridAsset.url}" style="${this.getCropStyle(cell)}" alt="Slide ${slideIndex + 1}" />
-                            </div>
-                          ` : ''}
-
-                          <div class="slide-content">
-                            <div class="slide-content-title">${slide.headline}</div>
-                            <div class="slide-audio-player">
-                              <audio controls src="${asset.url}"></audio>
-                            </div>
-                            ${metadata?.durationMs ? html`
-                              <span style="font-family: 'Space Mono', monospace; font-size: 0.625rem; color: #78746c;">
-                                ${(metadata.durationMs / 1000).toFixed(1)}s
-                              </span>
-                            ` : ''}
-                          </div>
-                        </div>
-                      `;
-                    })}
+                  <h4 style="font-family: 'Space Mono', monospace; font-size: 0.6875rem; color: #78746c; margin: 0 0 0.75rem 0; text-transform: uppercase;">Grid Images</h4>
+                  <div class="grids-container">
+                    ${assets.filter(a => a.assetType === 'grid_image').map((asset, idx) => html`
+                      <div class="grid-preview">
+                        <img src="${asset.url}" alt="Grid ${idx}" />
+                      </div>
+                    `)}
                   </div>
                 </div>
               ` : ''}
