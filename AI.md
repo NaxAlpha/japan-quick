@@ -2,10 +2,7 @@
 
 ## Summary
 
-Japan Quick is an AI-based system to generate videos - both YouTube shorts and long-form video content. The application consists of:
-
-- **Backend**: Hono-based API running on Cloudflare Workers for video processing and AI orchestration
-- **Frontend**: Lit-based web component application with TypeScript for content management and control interface
+Japan Quick is an AI-based video generation system running on Cloudflare Workers. It scrapes Yahoo News Japan articles, uses Gemini AI to select content and generate scripts, creates visual/audio assets, and renders videos with FFmpeg.
 
 ## File Tree
 
@@ -34,8 +31,8 @@ japan-quick/
 │   │   ├── comment-parser.ts   # Comment extraction utilities (JSON/HTML parsing, nested replies)
 │   │   ├── workflow-helper.ts  # AI workflow utilities (index mapping, cost calculation, prompt building)
 │   │   ├── prompts.ts          # Centralized AI prompt templates (buildSelectionPrompt, buildScriptPrompt, buildGridImagePrompt)
-│   │   ├── dimensions.ts      # Grid dimension calculations for 1K/2K resolutions (NEW)
-│   │   ├── image-fetcher.ts   # Fetch images from URLs and convert to base64 (NEW)
+│   │   ├── dimensions.ts       # Grid dimension calculations for 1K/2K resolutions
+│   │   ├── image-fetcher.ts    # Fetch images from URLs and convert to base64
 │   │   ├── audio-helper.ts     # Audio conversion utilities (pcmToWav, calculatePcmDuration)
 │   │   └── auth.ts             # Frontend Basic Auth header generator (getAuthHeaders)
 │   ├── frontend/
@@ -57,13 +54,17 @@ japan-quick/
 │   │   ├── scheduled-refresh.workflow.ts # ScheduledNewsRefreshWorkflow (cron-triggered)
 │   │   ├── article-scraper.workflow.ts   # ArticleScraperWorkflow (article content scraping)
 │   │   ├── article-rescrape.workflow.ts  # ArticleRescrapeWorkflow (cron-triggered rescrape)
-│   │   └── video-selection.workflow.ts   # VideoSelectionWorkflow (AI video selection, cron-triggered)
+│   │   ├── video-selection.workflow.ts   # VideoSelectionWorkflow (AI video selection, cron-triggered)
+│   │   ├── script-generation.workflow.ts # ScriptGenerationWorkflow (async script generation)
+│   │   ├── asset-generation.workflow.ts  # AssetGenerationWorkflow (async asset generation)
+│   │   └── video-render.workflow.ts      # VideoRenderWorkflow (FFmpeg video composition)
 │   ├── services/
 │   │   ├── news-scraper.ts           # Yahoo News Japan scraper (filters pickup URLs only, with thorough logging)
 │   │   ├── article-scraper.ts        # Yahoo News article scraper (full content + comments)
 │   │   ├── article-scraper-core.ts   # Core article scraping logic (serial processing)
 │   │   ├── gemini.ts                 # Gemini AI service (uses prompts.ts for AI prompts)
 │   │   ├── asset-generator.ts        # Asset generation service (uses prompts.ts and audio-helper.ts)
+│   │   ├── video-renderer.ts         # FFmpeg video rendering in Cloudflare Sandbox
 │   │   ├── r2-storage.ts             # R2 storage service (upload, retrieve, delete assets)
 │   │   └── youtube-auth.ts           # YouTube OAuth 2.0 service (token management, channel operations)
 │   ├── types/
@@ -80,1426 +81,306 @@ japan-quick/
 │   └── tests/
 │       ├── unit/               # Unit tests for services, routes, lib
 │       │   └── lib/
-│       │       └── dimensions.test.ts  # Tests for dimension utility (NEW)
+│       │       └── dimensions.test.ts  # Tests for dimension utility
 │       └── integration/        # Integration tests (e.g., news-e2e.test.ts)
 ├── scripts/
-│   └── verify-asset-generation.ts  # Verification script for asset generation improvements (NEW)
+│   └── verify-asset-generation.ts  # Verification script for asset generation improvements
 ├── tsconfig.json               # TypeScript config for backend (Cloudflare Workers)
 ├── tsconfig.frontend.json      # TypeScript config for frontend (browser)
 ├── vitest.config.ts            # Vitest config with Cloudflare Workers pool
 ├── wrangler.toml               # Cloudflare Workers configuration + auth credentials
+├── Dockerfile.ffmpeg           # FFmpeg container for video rendering (cloudflare/sandbox:0.7.0)
 └── package.json                # Dependencies and scripts
 ```
 
 ## Architecture
 
-### Backend (Cloudflare Workers + Hono)
+**Stack:** Hono + Cloudflare Workers + Lit web components + D1 + R2
+- Entry: `src/index.ts` with Basic HTTP Auth on `/api/*` routes only
+- Database: See `migrations/` for D1 table schemas
+- Storage: R2 with ULID-based flat storage at bucket root: `{ulid}.{ext}`
+- Public URLs: `https://japan-quick-assets.nauman.im/{ulid}.ext`
+- Asset types: slide_image, slide_audio, rendered_video
 
-- Entry point: `src/index.ts`
-- Framework: Hono.js
-- Deployment: Cloudflare Workers via Wrangler
-- Static assets: Served via Wrangler's `[assets]` configuration (wrangler.toml)
-- Core Purpose: Orchestrates AI-based video generation workflow
-- **Authentication**: Basic HTTP Auth protecting **API routes only** (frontend is public)
-- Routes:
-  - `GET /` - Home page (public, renders app-root component)
-  - `GET /news` - News page (public, renders news-page component)
-  - `GET /article/:id` - Article detail page (public, renders article-page component)
-  - `GET /videos` - Videos page (public, renders videos-page component)
-  - `GET /video/:id` - Video detail page (public, renders video-page component)
-  - `GET /settings` - Settings page (public, renders settings-page component - YouTube OAuth)
-  - `GET /api/status` - Service status endpoint (protected)
-  - `GET /api/hello` - Health check/JSON API endpoint (protected)
-  - **News Workflow Routes (protected):**
-    - `POST /api/news/trigger` - Create new workflow instance (NewsScraperWorkflow)
-    - `POST /api/news/trigger-refresh` - Manually trigger scheduled refresh workflow
-    - `POST /api/news/trigger-rescrape` - Manually trigger article rescrape workflow
-    - `GET /api/news/status/:id` - Get workflow status
-    - `GET /api/news/result/:id` - Get completed workflow result
-    - `GET /api/news/latest` - Get most recent D1 snapshot with article status
-    - `POST /api/news/cancel/:id` - Terminate workflow
-  - **Article API Routes (protected):**
-    - `GET /api/articles/:id` - Get article by pick:xxx or article_id
-    - `GET /api/articles/:id/version/:version` - Get specific version
-    - `POST /api/articles/trigger/:pickId` - Manual trigger
-    - `GET /api/articles/status/:workflowId` - Workflow status
-  - **Video API Routes (protected):**
-    - `GET /api/videos` - List videos with pagination (page query param, returns pagination metadata)
-    - `GET /api/videos/:id` - Get single video with cost logs and assets
-    - `POST /api/videos/trigger` - Manual workflow trigger
-    - `GET /api/videos/status/:workflowId` - Workflow status
-    - `POST /api/videos/:id/generate-script` - Trigger script generation workflow (async)
-    - `GET /api/videos/:id/script/status` - Get script generation status (for polling)
-    - `POST /api/videos/:id/generate-assets` - Trigger asset generation workflow (async)
-    - `GET /api/videos/:id/assets/status` - Get asset generation status (for polling)
-    - `GET /api/videos/:id/assets/:assetId` - Serve asset from R2 (public)
-    - `DELETE /api/videos/:id` - Delete video and its cost logs
-    - `POST /api/videos/:id/render` - Trigger video render workflow
-    - `GET /api/videos/:id/render/status` - Poll render status
-  - **YouTube OAuth API Routes (protected):**
-    - `GET /api/youtube/status` - Get current YouTube authentication status
-    - `GET /api/youtube/auth/url` - Generate OAuth authorization URL
-    - `GET /api/youtube/oauth/callback` - Handle OAuth callback from Google (redirects to /settings)
-    - `POST /api/youtube/refresh` - Manually refresh access token
-    - `DELETE /api/youtube/auth` - Deauthorize and clear tokens
+**Workflows** (`src/workflows/`): Durable execution with retry policies. Test with `wrangler dev --remote` or deploy to production.
 
-### Frontend (Lit + TypeScript)
-
-- Entry point: `public/index.html`
-- Framework: Lit (Web Components)
-- Design System: **Tokyo Cyber-Industrial** aesthetic
-  - **Colors**: Off-white background (#f5f3f0), charcoal (#0a0a0a), electric red accent (#e63946)
-  - **Typography**: Zen Tokyo Zoo (display), Space Mono (mono/labels), Inter/Noto Sans JP (body)
-  - **Styling**: Sharp brutalist borders (3px solid), hard shadows (4px 4px 0), Japanese wave pattern overlay
-  - **Fonts**: Google Fonts import for Space Mono, Zen Tokyo Zoo, Noto Sans JP, Inter
-  - **Patterns**: Subtle seigaiha (wave) pattern as background overlay
-  - **Animations**: Marquee ticker, slide-up hero, pulse effects, hover transforms
-- Components:
-  - `<app-root>`: Home page with navigation and API test button
-  - `<news-page>`: News scraping interface with article status badges (all article clicks navigate to article page)
-  - `<article-page>`: Article detail view with version selector, workflow trigger for unscraped articles
-  - `<videos-page>`: Video selection management interface with workflow trigger
-  - `<video-page>`: Video detail view with metadata, selection, and script cards
-  - `<settings-page>`: Settings page with YouTube OAuth connection
-- Build output: `public/frontend/` directory (from TypeScript compilation)
-- Styling: Tokyo Cyber-Industrial aesthetic with design-system.ts tokens
-- Purpose: Provides interface for content generation, preview, and management
-
-### Design System
-
-The frontend uses a **Tokyo Cyber-Industrial** design aesthetic defined in `src/frontend/styles/design-system.ts`:
-
-- **Fonts**: Zen Tokyo Zoo (display), Inter + Noto Sans JP (body), Space Mono (mono/technical)
-- **Colors**: High contrast monochrome (charcoal, off-white) with electric red accent (#e63946)
-- **Borders**: Sharp edges, 3px thick borders, no rounded corners
-- **Shadows**: Brutalist offset shadows (2px 2px 0, 4px 4px 0)
-- **Patterns**: Subtle Japanese wave patterns (seigaiha) in backgrounds
-- **Buttons**: Monospace, uppercase, 0.1em letter-spacing, sharp borders, transform on hover
-
-### Database Helper Functions
-
-Backend uses `src/lib/db-helpers.ts` for common SQL patterns:
-
-- `upsertArticle()` - Insert or update article records
-- `updateArticleStatus()` - Update article status with timestamps
-- `upsertArticleVersion()` - Insert or update article versions
-- `upsertArticleComments()` - Delete and insert comments
-- `getArticleByPickId()` - Fetch article by pick_id
-- `getArticleWithVersions()` - Fetch article with versions and comments
-- `getArticlesByStatus()` - Fetch articles by status
-- `getEligibleArticlesForVideo()` - Fetch articles for video selection
-
-### Frontend Authentication
-
-Frontend uses `src/frontend/lib/auth.ts` for centralized auth headers:
-```typescript
-import { getAuthHeaders } from '../lib/auth.js';
-
-const response = await fetch('/api/news/latest', {
-  headers: getAuthHeaders()
-});
-```
-
-### Utility Modules (src/lib/)
-
-The codebase uses several utility modules for common patterns:
-
-**retry-helper.ts** - Retry logic with exponential backoff:
-- `withRetry<T>()` - Execute function with retry loop and exponential backoff
-- `sleep()` - Promise-based delay utility
-- `getRetryStatus()` - Map attempt number to status string
-
-**comment-parser.ts** - Comment extraction from Yahoo News:
-- `extractCommentsFromJSON()` - Extract from window.__PRELOADED_STATE__
-- `extractCommentsFromHTML()` - Fallback CSS selector parsing
-- `extractNestedReplies()` - Expand replies by clicking "返信" buttons
-- `extractAllComments()` - Main pipeline with multiple strategies
-
-**workflow-helper.ts** - AI workflow utilities:
-- `formatArticlesForAI()` - Create 4-digit indices with mapping
-- `mapIndicesToPickIds()` - Map AI indices back to original pick_ids
-- `calculateTokenCost()` - Calculate Gemini API costs
-- `parseAIResponse()` - Clean and parse JSON from AI
-- `logTokenUsage()` - Log token usage to database
-- `buildAISelectionPrompt()` - Build article selection prompt
-- `validateAIResponse()` - Validate AI response structure
-
-**prompts.ts** - Centralized AI prompt templates:
-- `buildSelectionPrompt()` - Article selection prompt template
-- `buildScriptPrompt()` - Script generation prompt template
-- `buildGridImagePrompt()` - Grid image generation prompt template
-
-**audio-helper.ts** - Audio conversion utilities:
-- `pcmToWav()` - Convert PCM to WAV with header
-- `calculatePcmDuration()` - Calculate audio duration from PCM data
-
-**dimensions.ts** - Dimension calculations for asset generation:
-- `calculateGridDimensions(videoType, imageSize)` - Returns grid dimensions for 1K/2K resolutions
-- `getModelImageSize(model)` - Maps image model ID to '1K' or '2K'
-
-**image-fetcher.ts** - Image fetching utilities:
-- `fetchImageAsBase64(url)` - Fetches image from URL and converts to base64
-- `fetchImagesAsBase64(urls, maxImages)` - Fetches multiple images in parallel
-
-### Cloudflare Bindings
+## Cloudflare Bindings
 
 | Binding | Type | Purpose |
 |---------|------|---------|
-| `BROWSER` | Browser Binding | Puppeteer-based scraping in production |
-| `NEWS_CACHE` | KV Namespace | Cache scraped news for 35 minutes; OAuth state storage (5min TTL) |
-| `DB` | D1 Database | Store news snapshots, articles, videos, and YouTube auth tokens |
-| `ASSETS_BUCKET` | R2 Bucket | Store video assets (grid images and slide audio) |
-| `NEWS_SCRAPER_WORKFLOW` | Workflow | Durable news scraping workflow |
-| `SCHEDULED_REFRESH_WORKFLOW` | Workflow | Cron-triggered background refresh workflow |
-| `ARTICLE_SCRAPER_WORKFLOW` | Workflow | Article content scraping workflow |
-| `ARTICLE_RESCRAPE_WORKFLOW` | Workflow | Cron-triggered article rescrape workflow |
-| `VIDEO_SELECTION_WORKFLOW` | Workflow | Video selection workflow |
-| `VIDEO_RENDER_WORKFLOW` | Workflow | Video rendering workflow (ffmpeg) |
-| `SCRIPT_GENERATION_WORKFLOW` | Workflow | Script generation workflow (async) |
-| `ASSET_GENERATION_WORKFLOW` | Workflow | Asset generation workflow (async) |
-| `ADMIN_USERNAME` | Var | Basic auth username |
-| `ADMIN_PASSWORD` | Var | Basic auth password |
-| `GOOGLE_API_KEY` | Secret | Gemini API key (stored in Cloudflare Secrets) |
-| `YOUTUBE_CLIENT_ID` | Secret | YouTube OAuth client ID |
-| `YOUTUBE_CLIENT_SECRET` | Secret | YouTube OAuth client secret |
-| `YOUTUBE_REDIRECT_URI` | Secret | YouTube OAuth redirect URI |
+| BROWSER | Browser Binding | Puppeteer-based scraping |
+| NEWS_CACHE | KV Namespace | Cache (35min TTL) + OAuth state |
+| DB | D1 Database | SQLite storage |
+| ASSETS_BUCKET | R2 Bucket | Video assets |
+| *_WORKFLOW | Workflow | Durable workflows (8 types) |
+| ADMIN_USERNAME/PASSWORD | Var | Basic auth credentials |
+| GOOGLE_API_KEY | Secret | Gemini API key |
+| YOUTUBE_CLIENT_ID/SECRET/REDIRECT_URI | Secret | YouTube OAuth credentials |
 
-### Cloudflare Workflows
-
-The application uses **Cloudflare Workflows** for durable, retriable execution of scraping operations.
-
-**NewsScraperWorkflow**:
-
-| Step | Description | Retry Policy |
-|------|-------------|--------------|
-| `check-cache` | Check KV for cached data | 3 retries, 1s delay |
-| `scrape-news` | Browser scraping | 5 retries, 5s exponential backoff |
-| `save-to-cache` | Store in KV (35min TTL) | 3 retries, 1s delay |
-| `save-to-database` | Persist snapshot to D1 | 3 retries, 2s delay |
-
-**ScheduledNewsRefreshWorkflow**:
-
-Cron-triggered background refresh (hourly):
-- `scrape-fresh-news` - Always scrape fresh (no cache check)
-- `update-cache` - Update KV cache
-- `save-snapshot` - Save to D1
-- `find-new-articles` - Identify new pickup IDs not yet in database
-- `scrape-article-${pickId}` - Serial article scraping using scrapeArticleCore() with 10-second delays between articles
-- Uses src/services/article-scraper-core.ts for fault-tolerant scraping (comments failures don't block article saves)
-
-**ArticleScraperWorkflow**:
-
-| Step | Description | Retry Policy |
-|------|-------------|--------------|
-| `check-existing` | Check if article exists | - |
-| `scrape-article` | Scrape pickup → article → comments | 3 attempts with retry status |
-| `save-article` | Insert/update article record | 3 retries, 2s delay |
-| `save-version` | Save content to article_versions | 3 retries, 2s delay |
-| `save-comments` | Save comments | 3 retries, 2s delay |
-| `update-status` | Update status, schedule rescrape | - |
-
-**Article Status Progression**: `pending` → `retry_1` → `retry_2` → `error` → `scraped_v1` → `scraped_v2`
-
-**ArticleRescrapeWorkflow**:
-
-Cron-triggered article rescraping (hourly):
-- `find-due-articles` - Query articles with `scraped_v1` status and scheduled_rescrape_at <= now
-- `rescrape-article-${pickId}` - Serial rescraping using scrapeArticleCore() with 10-second delays
-- Updates status to `scraped_v2`, sets second_scraped_at, clears scheduled_rescrape_at
-- Tracks both scrapedPickIds and failedPickIds for reporting
-- Uses src/services/article-scraper-core.ts with isRescrape=true
-
-**VideoSelectionWorkflow**:
-
-| Step | Description | Retry Policy |
-|------|-------------|--------------|
-| `fetch-eligible-articles` | Query articles with `scraped_v2` status from last 24 hours, excluding articles already used in videos | 3 retries, 2s constant delay |
-| `create-video-entry` | Create video record with `doing` status | 3 retries, 2s constant delay |
-| `call-gemini-ai` | Use Gemini 3 Flash to select articles | 3 retries, 5s exponential backoff |
-| `log-cost` | Track input/output tokens and calculate cost | 3 retries, 2s constant delay |
-| `update-video-entry` | Update with AI results, set status to `todo` | 3 retries, 2s constant delay |
-
-**Error Handling**: Workflow sets video status to `error` on failure instead of leaving it stuck in `doing`.
-
-**ScriptGenerationWorkflow** (NEW - Async):
-
-| Step | Description | Retry Policy |
-|------|-------------|--------------|
-| `fetch-video-data` | Validate video exists and check script_status | 3 retries, 2s constant delay |
-| `update-status-generating` | Set script_status to 'generating' | - |
-| `fetch-article-data` | Fetch article content, comments, images from DB | 3 retries, 2s constant delay |
-| `generate-script` | Use Gemini 3 Flash to generate script | 3 retries, 5s exponential backoff |
-| `log-cost` | Track input/output tokens and calculate cost | 3 retries, 2s constant delay |
-| `save-script` | Save script to database, set status to 'generated' | 3 retries, 2s constant delay |
-| `update-total-cost` | Aggregate all costs for the video | 3 retries, 2s constant delay |
-
-**Error Handling**: Workflow sets script_status to `error` with error message on failure.
-
-**AssetGenerationWorkflow** (NEW - Async):
-
-| Step | Description | Retry Policy |
-|------|-------------|--------------|
-| `validate-prerequisites` | Check script is generated and asset is not already generating | 3 retries, 2s constant delay |
-| `select-tts-voice` | Select random voice from 30 available, set asset_status to 'generating' | - |
-| `fetch-reference-images` | Fetch article images as base64 for AI reference | 3 retries, 2s constant delay |
-| `generate-grid-images` | Generate grid images using Gemini | 3 retries, 5s exponential backoff |
-| `upload-grids` | Upload grid images to R2 and create database records | 3 retries, 3s exponential backoff |
-| `generate-audio` | Generate TTS audio for each slide using Gemini | 3 retries, 5s exponential backoff |
-| `upload-audio` | Upload audio files to R2 and create database records | 3 retries, 3s exponential backoff |
-| `log-costs` | Track image generation costs | 3 retries, 2s constant delay |
-| `complete` | Set asset_status to 'generated', update total_cost | 3 retries, 2s constant delay |
-
-**Error Handling**: Workflow sets asset_status to `error` with error message on failure.
-
-**VideoRenderWorkflow**:
-
-| Step | Description | Retry Policy |
-|------|-------------|--------------|
-| `fetch-video` | Validate video and check prerequisites | 3 retries, 2s constant delay |
-| `update-status-rendering` | Set render_status to 'rendering' | - |
-| `fetch-assets` | Fetch video assets from database | 3 retries, 2s constant delay |
-| `fetch-article-date` | Fetch article date for date badge | 3 retries, 2s constant delay |
-| `prepare-asset-metadata` | Build asset URLs with authentication | - |
-| `render-video` | Render video using FFmpeg in container | - |
-| `upload-video` | Upload rendered video to R2 | 3 retries, 3s exponential backoff |
-| `create-asset-record` | Create video asset record in database | 3 retries, 2s constant delay |
-| `update-status-rendered` | Set render_status to 'rendered' | - |
-
-**Error Handling**: Workflow sets render_status to `error` with error message on failure.
-
-**Note**: Workflows require remote deployment to test - use `wrangler dev --remote` or `wrangler deploy`. Cron triggers only work in production. The cron runs hourly (0 * * * *), triggering ScheduledNewsRefreshWorkflow, ArticleRescrapeWorkflow, and VideoSelectionWorkflow (during JST business hours only).
-
-**Stale Status Handling**: The status endpoints (`/api/videos/:id/script/status`, `/api/videos/:id/assets/status`) automatically detect and reset stale 'generating' statuses older than 10 minutes to 'pending' with an error message "Generation timed out (stale status)". This prevents the UI from being stuck waiting for a workflow that crashed or was interrupted.
-
-**Frontend Polling**: The video page frontend implements polling for async operations:
-- Script generation: Polls every 2.5 seconds after triggering workflow
-- Asset generation: Polls every 3 seconds after triggering workflow
-- Render status: Polls every 3 seconds after triggering workflow
-- Polling automatically stops when status reaches terminal state ('generated', 'error', 'rendered') or on page navigation away
-
-### Type System
-
-The `Env` type (single source of truth in `src/types/news.ts`) defines all Cloudflare Workers bindings:
-
-```typescript
-export type Env = {
-  Bindings: {
-    ADMIN_USERNAME: string;
-    ADMIN_PASSWORD: string;
-    GOOGLE_API_KEY: string;
-    BROWSER: BrowserBinding | null;  // Can be null in local dev
-    NEWS_CACHE: KVNamespace;
-    DB: D1Database;
-    ASSETS_BUCKET: R2Bucket;
-    NEWS_SCRAPER_WORKFLOW: Workflow;
-    SCHEDULED_REFRESH_WORKFLOW: Workflow;
-    ARTICLE_SCRAPER_WORKFLOW: Workflow;
-    ARTICLE_RESCRAPE_WORKFLOW: Workflow;
-    VIDEO_SELECTION_WORKFLOW: Workflow;
-    VIDEO_RENDER_WORKFLOW: Workflow;
-    SCRIPT_GENERATION_WORKFLOW: Workflow;
-    ASSET_GENERATION_WORKFLOW: Workflow;
-    YOUTUBE_CLIENT_ID: string;
-    YOUTUBE_CLIENT_SECRET: string;
-    YOUTUBE_REDIRECT_URI: string;
-  }
-};
-```
-
-## Development Guide
-
-### Commands
+## Commands
 
 ```bash
-# Install dependencies
-bun install
-
-# Build frontend TypeScript to JavaScript
-bun run build:frontend
-
-# Start local development server (Wrangler)
-bun run dev
-
-# Start remote development server (for testing workflows)
-wrangler dev --remote
-
-# Run tests
-bun run test
-
-# Run tests with UI
-bun run test:ui
-
-# Run tests with coverage
-bun run test:coverage
-
-# Deploy to Cloudflare Workers (includes frontend build)
-bun run deploy
+bun install                 # Install dependencies
+bun run build:frontend      # Build frontend TypeScript
+bun run dev                 # Local dev server
+wrangler dev --remote       # Remote dev (for workflows)
+bun run test                # Run tests
+bun run deploy              # Deploy to Cloudflare Workers
+wrangler tail --format pretty  # Tail logs
 ```
 
-### Development Patterns
+## Logging
 
-- **Backend**: RESTful API with Hono, following standard Workers patterns for AI orchestration
-- **Frontend**: Web Components with Lit, using scoped CSS and declarative rendering for content management UI
-- **Type Safety**: Full TypeScript coverage with strict mode enabled
-- **Module System**: ES modules throughout (type: "module" in package.json)
-- **Testing**: Vitest with Cloudflare Workers pool for unit and integration tests
+**Format:** `[reqId] [timestamp] [level] [component] message | key=value`
 
-### Logging
-
-The application uses a structured logging utility (`src/lib/logger.ts`) for consistent, debuggable logs.
-
-**Log format:** `[reqId] [timestamp] [level] [component] message | key=value`
-
-**Logger Components**:
-- `newsRoutes`: News API route handlers
-- `newsWorkflow`: News scraper workflow
-- `newsScraper`: News scraping service
-- `articleRoutes`: Article API route handlers
-- `articleWorkflow`: Article scraper workflow
-- `articleScraper`: Article scraping service
-- `videoRoutes`: Video API route handlers
-- `videoWorkflow`: Video selection workflow
-- `gemini`: Gemini AI service (selection and script generation)
-- `scriptGeneration`: Video script generation operations
-- `assetGen`: Asset generation service (grid images and TTS audio)
-- `assetRoutes`: Asset generation API route handlers
-- `youtubeRoutes`: YouTube OAuth route handlers
-- `youtubeAuth`: YouTube OAuth service
-- `auth`: Authentication middleware
+**Components:** newsRoutes, newsWorkflow, newsScraper, articleRoutes, articleWorkflow, articleScraper, videoRoutes, videoWorkflow, gemini, scriptGeneration, assetGen, assetRoutes, youtubeRoutes, youtubeAuth, auth
 
 **Usage:**
 ```typescript
 import { log, generateRequestId } from '../lib/logger.js';
 
-// Routes and workflows - generate reqId once, pass through
 const reqId = generateRequestId();
-log.newsRoutes.info(reqId, 'Request received', { method: 'POST', path: '/trigger' });
-
-// Services - accept reqId as first parameter
-async selectArticles(reqId: string, articles: Article[]) {
-  log.gemini.info(reqId, 'Article selection started', { articleCount: articles.length });
-}
-
-// Script generation
-log.scriptGeneration.info(reqId, 'Script generation started', { videoId, videoType });
-
-// Middleware and utility - no reqId needed (auto-generated)
-log.auth.info('Auth attempt', { path: '/api/hello', hasUsername: 'present' });
+log.gemini.info(reqId, 'Operation started', { videoId: '123' });
 ```
 
 **Guidelines:**
-- Generate `reqId` once per request/workflow, pass to all service calls
-- Always include relevant IDs: `pickId`, `videoId`, `articleId`, `workflowId`
-- Include `durationMs` for operations that take time
+- Generate reqId once per request/workflow, pass through all calls
+- Include relevant IDs: pickId, videoId, articleId, workflowId
+- Include durationMs for timed operations
 - Use INFO for key operations, ERROR with error object for failures
-- Request IDs enable correlation of logs from parallel operations
-
-### Testing & Verification
-
-- **Local development**: Workflows are NOT supported in `wrangler dev` (local mode)
-- **Remote development**: Use `wrangler dev --remote` to test workflows
-- **Production**: Deploy with `wrangler deploy` for full workflow functionality
-- **Cron triggers**: Only work in production, not in dev mode
-
-## Cloudflare Account Information
-
-- **Account ID**: `ccccd0d9d16426ee80bf27b0c0b8a9cb`
-- **Production URL**: `https://japan-quick.nax.workers.dev`
-- **Worker Subdomain**: `nax.workers.dev`
-
-### Workflow Scheduling
-
-- **VideoSelectionWorkflow**: Runs hourly only during JST business hours (8am-8pm JST, which is UTC 23:00, 00:00-11:00)
 
 ## Authentication
 
-The application uses **Basic HTTP Authentication** to protect API routes only. Frontend pages are publicly accessible.
-
-### Credentials
-
-Credentials are stored in `wrangler.toml` under `[vars]`:
-```toml
-[vars]
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "GvkP525fTX0ocMTw8XtAqM9ECvNIx50v"
-```
-
-**Note**: `GOOGLE_API_KEY` is stored as a Cloudflare Secret (not in `wrangler.toml`) for security.
-
-To change the password, generate a new one:
-```bash
-openssl rand -base64 32 | tr -d "=+/" | cut -c1-32
-```
-
-### How It Works
-
-- **Middleware**: `src/middleware/auth.ts` implements Basic HTTP Auth validation
-- **API routes protected**: `app.use('/api/*', basicAuth())` in `src/index.ts`
-- **Frontend routes public**: No auth required for `/` and `/news`
-- **Browser-native**: Login prompt shown by browser automatically
-- **Stateless**: No sessions or tokens, credentials validated on each request
-
-### Testing Auth
-
-```bash
-# Frontend (no auth required)
-curl -i https://your-worker.workers.dev/
-
-# API without auth (should return 401)
-curl -i https://your-worker.workers.dev/api/hello
-
-# API with valid auth
-curl -u admin:password https://your-worker.workers.dev/api/hello
-```
-
-**Note**: Credentials in `wrangler.toml` are visible to anyone with repo access.
-
-## Secrets Management
-
-### Google API Key (Gemini)
-
-The `GOOGLE_API_KEY` is stored in **Cloudflare Secrets** (not in `wrangler.toml`) for security:
-
-```bash
-# Add/update secret (using key from ~/.zshrc)
-echo $GOOGLE_API_KEY | wrangler secret put GOOGLE_API_KEY
-
-# List all secrets
-wrangler secret list
-
-# Delete a secret
-wrangler secret delete GOOGLE_API_KEY
-```
-
-**Important**:
-- Never commit API keys to `wrangler.toml` or version control
-- Store sensitive keys in Cloudflare Secrets
-- Keep local copies in `~/.zshrc` or secure environment
-- Secrets are accessible in code via `env.GOOGLE_API_KEY` (same as vars)
-
-## Data Schemas
-
-### KV Cache (NEWS_CACHE)
-
-- **Key**: `yahoo-japan-top-picks`
-- **TTL**: 2100 seconds (35 minutes)
-- **Purpose**: Reduce scraping frequency and improve response times
-- **Note**: TTL is 35 minutes to ensure cache stays alive between 30-minute scheduled runs
-
-### D1 Database (DB)
-
-```sql
-CREATE TABLE news_snapshots (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  captured_at TEXT NOT NULL,
-  snapshot_name TEXT NOT NULL,
-  data TEXT NOT NULL
-);
-
-CREATE TABLE articles (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  pick_id TEXT NOT NULL UNIQUE,
-  article_id TEXT,
-  article_url TEXT,
-  status TEXT NOT NULL DEFAULT 'pending',
-  title TEXT,
-  source TEXT,
-  thumbnail_url TEXT,
-  published_at TEXT,
-  modified_at TEXT,
-  detected_at TEXT NOT NULL,
-  first_scraped_at TEXT,
-  second_scraped_at TEXT,
-  scheduled_rescrape_at TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE article_versions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  article_id INTEGER NOT NULL,
-  version INTEGER NOT NULL,
-  content TEXT NOT NULL,
-  content_text TEXT,
-  page_count INTEGER DEFAULT 1,
-  images TEXT,
-  scraped_at TEXT NOT NULL,
-  FOREIGN KEY (article_id) REFERENCES articles(id),
-  UNIQUE(article_id, version)
-);
-
-CREATE TABLE article_comments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  article_id INTEGER NOT NULL,
-  version INTEGER NOT NULL,
-  comment_id TEXT,
-  author TEXT,
-  content TEXT NOT NULL,
-  posted_at TEXT,
-  likes INTEGER DEFAULT 0,
-  replies_count INTEGER DEFAULT 0,
-  reactions_empathized INTEGER DEFAULT 0,  -- "共感した" count
-  reactions_understood INTEGER DEFAULT 0,  -- "なるほど" count
-  reactions_questioning INTEGER DEFAULT 0, -- "うーん" count
-  replies TEXT,  -- JSON string of CommentReply[] for nested replies
-  scraped_at TEXT NOT NULL,
-  FOREIGN KEY (article_id) REFERENCES articles(id)
-);
-
-CREATE TABLE models (
-  id TEXT PRIMARY KEY,                    -- e.g., "gemini-3-flash-preview"
-  name TEXT NOT NULL,                     -- e.g., "Gemini 3 Flash"
-  description TEXT,                       -- Model description
-  input_cost_per_million REAL NOT NULL,   -- Cost per 1M input tokens (e.g., 0.50)
-  output_cost_per_million REAL NOT NULL,  -- Cost per 1M output tokens (e.g., 3.00)
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE videos (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  notes TEXT,                    -- Newline-joined selection rationale strings
-  short_title TEXT,              -- English title for video
-  articles TEXT,                 -- JSON array of pick_id values
-  video_type TEXT NOT NULL,      -- "short" | "long"
-  selection_status TEXT NOT NULL DEFAULT 'todo',  -- "todo" | "doing" | "done"
-  script TEXT,                   -- JSON string of VideoScript (title, description, slides)
-  script_status TEXT DEFAULT 'pending',  -- "pending" | "generating" | "generated" | "error"
-  script_error TEXT,             -- Error message if script generation fails
-  total_cost REAL DEFAULT 0,     -- Sum of all cost_logs for this video
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE cost_logs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  video_id INTEGER NOT NULL,
-  log_type TEXT NOT NULL,        -- e.g., "video-selection", "script-generation", "image-generation"
-  model_id TEXT NOT NULL,        -- FK to models.id
-  attempt_id INTEGER DEFAULT 1,  -- Attempt number for retries
-  input_tokens INTEGER,
-  output_tokens INTEGER,
-  cost REAL NOT NULL,            -- Calculated cost for this operation
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  FOREIGN KEY (video_id) REFERENCES videos(id),
-  FOREIGN KEY (model_id) REFERENCES models(id)
-);
-
-CREATE TABLE video_assets (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  video_id INTEGER NOT NULL,
-  asset_type TEXT NOT NULL,      -- 'grid_image' | 'slide_audio'
-  asset_index INTEGER DEFAULT 0, -- 0/1 for grids, 0-17 for audio
-  r2_key TEXT NOT NULL,          -- R2 object path
-  mime_type TEXT NOT NULL,       -- 'image/png' | 'audio/wav'
-  file_size INTEGER,             -- bytes
-  metadata TEXT,                 -- JSON (GridImageMetadata | SlideAudioMetadata)
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
-);
-```
-
-- **news_snapshots.data**: JSON string containing the full YahooNewsResponse
-- **articles.status**: pending | not_available | retry_1 | retry_2 | error | scraped_v1 | scraped_v2
-- **article_versions.version**: 1 (first scrape) or 2 (rescrape after 1 hour)
-- **models.id**: Model identifier (e.g., "gemini-3-flash-preview", "gemini-2.5-flash-image")
-- **videos.video_type**: short (60-120s, 1080x1920) | long (4-6min, 1920x1080)
-- **videos.selection_status**: todo | doing | done | error
-- **videos.articles**: JSON array of pick_id values selected by AI
-- **videos.script**: JSON string of VideoScript interface
-- **videos.script_status**: pending | generating | generated | error
-- **videos.asset_status**: pending | generating | generated | error
-- **videos.image_model**: gemini-2.5-flash-image | gemini-3-pro-image-preview
-- **videos.tts_model**: gemini-2.5-flash-preview-tts | gemini-2.5-pro-preview-tts
-- **videos.tts_voice**: One of 30 available voices (randomly selected, stored for consistency)
-- **cost_logs.log_type**: Operation type (e.g., "video-selection", "script-generation", "image-generation")
-- **video_assets.asset_type**: grid_image | slide_audio
-- **video_assets.r2_key**: Path in R2 bucket (e.g., "videos/41/grid_00.png")
-
-**VideoScript Interface**:
-```typescript
-interface VideoScript {
-  title: string;                // SEO-optimized Japanese title
-  description: string;          // SEO-optimized Japanese description
-  thumbnailDescription: string; // English description for thumbnail image
-  slides: Slide[];              // Array of slides
-}
-
-interface Slide {
-  headline: string;             // Japanese headline text
-  imageDescription: string;     // English description for AI image generation
-  audioNarration: string;       // Japanese narration text
-  estimatedDuration: number;    // Duration in seconds (10-20)
-}
-```
-
-**ScriptStatus Type**: `'pending' | 'generating' | 'generated' | 'error'`
-
-## Yahoo News Japan Scraper
-
-The application includes a Yahoo News Japan scraper that fetches top news picks.
-
-### URL Filtering
-
-The scraper filters to only include "pickup" URLs:
-- **Included**: `https://news.yahoo.co.jp/pickup/XXXXXXX` (7-digit numeric IDs)
-- **Excluded**: Topic pages like `https://news.yahoo.co.jp/topics/science`
-
-Filtering regex: `/^https?:\/\/news\.yahoo\.co\.jp\/pickup\/\d+$/`
-
-### Scraping Strategy
-
-- **Browser Mode (Production)**: Uses Cloudflare Browser Binding with Puppeteer
-- **No HTTP Fallback**: All scraping requires browser binding for reliability
-- **Two-Pass Article Scraping**: First scrape (v1) immediately, rescrape (v2) after 1 hour
-
-### Content Extraction
-
-Article scraper uses semantic HTML selectors:
-- **Title**: `article h1` (primary), any `h1` (fallback)
-- **Content**: `.article_body` div (primary), `article` tag with `p, h2, h3, h4` elements (fallback)
-- **Images**: Filtered to exclude icons and SVGs by URL patterns
-- **Pagination**: Dual strategy - pagination links and pagination containers
-
-**Best Practice**: Always use semantic HTML selectors (`article`, `h1`, `p`) or stable class names (`.article_body`) instead of generated/hashed class names.
-
-### Comment Scraping (Improved)
-
-The comment scraper extracts detailed comment data from Yahoo News:
-- **Hybrid extraction**: Tries `window.__PRELOADED_STATE__` JSON first (faster), falls back to HTML parsing
-- **Reaction breakdown**: 共感した (empathized), なるほど (understood), うーん (questioning) counts
-- **Nested replies**: Clicks "返信" buttons to extract and embed replies within parent comments
-- **Full content**: Clicks "続きを見る" links to expand truncated comments
-- **Fault tolerance**: Returns empty array on failure, doesn't block article scraping
-
-**Comment Data Structure**:
-```typescript
-{
-  commentId?: string;
-  author?: string;
-  content: string;
-  postedAt?: string;
-  likes: number;  // For backwards compatibility = reactions.empathized
-  reactions: {
-    empathized: number;   // "共感した" count
-    understood: number;   // "なるほど" count
-    questioning: number;  // "うーん" count
-  };
-  replies: Array<{
-    commentId?: string;
-    author?: string;
-    content: string;
-    postedAt?: string;
-    reactions?: { empathized, understood, questioning };
-  }>;
-}
-```
-
-## Gemini AI Integration
-
-The application uses Google's Gemini AI for two main purposes: article selection and video script generation.
-
-### Model Configuration
-
-- **Model**: `gemini-3-flash-preview` (Gemini 3 Flash)
-- **Pricing**:
-  - Input: $0.50 per 1M tokens
-  - Output: $3.00 per 1M tokens
-- **Package**: `@google/genai` (Google's official Gemini API client)
-
-### Article Selection
-
-**Purpose**: Analyze recently scraped articles and select the most important ones for video generation
-
-**Selection Criteria**:
-
-The AI evaluates articles based on five criteria:
-
-1. **IMPORTANCE**: Impact on society, public interest, significance
-2. **TIMELINESS**: Breaking news, trending topics, time-sensitive updates
-3. **CLARITY**: Story is clear and can be explained effectively
-4. **VISUAL POTENTIAL**: Story can be illustrated with graphics/footage
-5. **ENGAGEMENT**: Likely to capture viewer attention
-
-### AI Input Format
-
-Articles are formatted with 4-digit indices for efficient reference:
-
-```json
-[
-  {
-    "index": "1234",
-    "title": "Article title",
-    "dateTime": "2024-01-01 12:00",
-    "source": "News Source"
-  }
-]
-```
-
-**Index Mapping**: The service creates a mapping between 4-digit indices and pick_id values. Indices are extracted from the first 4 characters of pick_id, with collision handling using last 4 characters or incremental suffixes.
-
-### AI Output Format
-
-```json
-{
-  "notes": ["reason 1", "reason 2", "reason 3"],
-  "short_title": "English title for the video (max 50 chars)",
-  "articles": ["1234", "5678"],
-  "video_type": "short" | "long"
-}
-```
-
-- **notes**: Array of 2-5 clear, concise reasons for selection
-- **short_title**: English title under 50 characters
-- **articles**: Array of 4-digit indices selected by AI (mapped back to pick_ids)
-- **video_type**:
-  - `short` (60-120s, 1080x1920 vertical): Breaking news, urgent updates, trending topics
-  - `long` (4-6 min, 1920x1080 horizontal): In-depth analysis, informative content, complex stories
-
-**The AI MUST always select at least one article**: The prompt requires the AI to select at least one article, ensuring every workflow run produces a video selection.
-
-**Prompt Configuration**:
-- Includes examples for both short and long video types
-- Content preferences: useful, helpful, educational
-- Exclusions: celebrity gossip, death-related content, personal life stories
-
-### Video Script Generation
-
-**Purpose**: Generate structured video scripts from selected articles
-
-**Model**: `gemini-3-flash-preview` (same as selection)
-
-**Input Data**:
-- Video type (short or long)
-- Selected articles with:
-  - Article content (HTML and text)
-  - Comments with reactions and replies
-  - Images with URLs
-
-**Output Format**: VideoScript with:
-- SEO-optimized title and description (in article language)
-- Thumbnail description (English, for AI image generation)
-- Array of slides with:
-  - Headline (article language)
-  - Image description (English, for AI image generation)
-  - Audio narration (article language)
-  - Estimated duration (10-20 seconds per slide)
-
-**Slide Counts**:
-- Short videos: 6-8 slides
-- Long videos: 15-17 slides
-
-**Language Rules**:
-- Article text content (title, description, headlines, narration): Use article's language
-- Image descriptions (thumbnail, slides): Always English for AI image generation compatibility
-
-**Cost Tracking**: All operations logged to `cost_logs` with `log_type='script-generation'`
-
-### Cost Tracking
-
-All AI operations are tracked in the `cost_logs` table:
-- Input/output token counts are recorded
-- Cost is calculated based on model pricing
-- Total cost per video is aggregated from all related operations
-- Costs are displayed in the videos UI ($0.0000 format)
+**Basic HTTP Auth** on `/api/*` routes only. Frontend pages are public.
+
+**Credentials:** Stored in `wrangler.toml` under `[vars]`
+- Username: `ADMIN_USERNAME`
+- Password: `ADMIN_PASSWORD`
+
+**Secrets:** `GOOGLE_API_KEY`, `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REDIRECT_URI`
+- Managed via: `echo $VALUE | wrangler secret put KEY`
+
+## Database
+
+**D1 Tables:** See `migrations/` for full schemas
+
+- **news_snapshots** - Captured news data snapshots
+- **articles** - Article metadata and status tracking
+  - Status: pending | not_available | retry_1 | retry_2 | error | scraped_v1 | scraped_v2
+- **article_versions** - Article content at v1 and v2 scrapes
+- **article_comments** - Comments with reactions (empathized, understood, questioning) and nested replies
+- **videos** - Video metadata, scripts, assets, status tracking
+  - video_type: short (60-120s, 1080x1920) | long (4-6min, 1920x1080)
+  - script_status: pending | generating | generated | error
+  - asset_status: pending | generating | generated | error
+  - render_status: pending | rendering | rendered | error
+- **cost_logs** - AI operation cost tracking
+- **video_assets** - R2 asset storage records (ULID-based)
+  - asset_type: grid_image | slide_image | slide_audio | rendered_video
+- **models** - AI model pricing configuration
+- **youtube_auth** - YouTube OAuth tokens
+
+## Yahoo News Scraper
+
+**URL Filtering:** Only pickup URLs (`/pickup/\d{7}`)
+
+**Strategies:**
+- Browser Mode (Production): Cloudflare Browser Binding with Puppeteer
+- Two-Pass Scraping: v1 immediately, v2 after 1 hour
+
+**Content Extraction:**
+- Semantic HTML selectors (`article h1`, `.article_body`)
+- Comment extraction via JSON (`window.__PRELOADED_STATE__`) or HTML parsing
+- Reaction counts: empathized, understood, questioning
+- Nested replies expansion
+
+**Browser Binding Best Practices:**
+- Use `puppeteer.launch(browserBinding)` pattern
+- Always call `browser.disconnect()` (NOT `close()`) for session reuse
+- Add `compatibility_flags = ["nodejs_compat"]` to wrangler.toml
+
+## Gemini AI
+
+**Models:**
+- Selection/Scripts: `gemini-3-flash-preview` ($0.50/$3.00 per 1M tokens)
+- Images: `gemini-2.5-flash-image` ($0.039 each) or `gemini-3-pro-image-preview` ($0.134 each)
+- TTS: `gemini-2.5-flash-preview-tts` or `gemini-2.5-pro-preview-tts`
+
+**Article Selection:**
+- Criteria: Importance, Timeliness, Clarity, Visual Potential, Engagement
+- Output: notes, short_title, articles (pick_ids), video_type
+- AI must select at least one article
+
+**Script Generation:**
+- Input: Articles with content, comments, images
+- Output: VideoScript (title, description, thumbnailDescription, slides[])
+- Slide counts: 6-8 (short), 15-17 (long)
+- Language rules: Article text in article language, image descriptions in English
+
+**Cost Tracking:** All operations logged to `cost_logs` table
 
 ## Video Asset Generation
 
-### Overview
+**Grid Images:**
+- 3×3 grids containing slide images + thumbnail
+- Resolutions: 1K (Flash model) or 2K (Pro model)
+- Short: 1 grid (1080×1920 or 2048×3658)
+- Long: 2 grids (1920×1080 or 3658×2048 each)
+- Reference images included for AI context
 
-After video script generation, the system can generate visual and audio assets using Gemini AI:
-- **Grid Images**: 3x3 grids containing slide images and thumbnail (using Gemini 2.5 Flash Image or Gemini 3 Pro Image)
-- **Slide Audio**: TTS narration for each slide (using Gemini 2.5 Flash TTS or Gemini 2.5 Pro TTS)
+**Grid Splitting:**
+- Individual slides extracted using `cross-image` library (pure JavaScript, zero dependencies)
+- Uploaded to R2 with ULID-based keys
+- Stored as `slide_image` asset type
 
-Assets are stored in R2 (Cloudflare Object Storage) and tracked in the `video_assets` database table.
+**TTS Audio:**
+- 30 available voices (randomly selected, stored in `videos.tts_voice`)
+- Generated per slide narration
+- Converted from PCM to WAV format
+- Uploaded to R2 with ULID keys
 
-### Image Generation Models
+**Storage:**
+- Flat ULID-based structure: `{ulid}.{ext}`
+- Public URLs: `https://japan-quick-assets.nauman.im/{ulid}.ext`
+- Asset IDs tracked in `videos.slide_image_asset_ids` and `slide_audio_asset_ids` (JSON arrays)
 
-| Model ID | Description | Cost per Image |
-|----------|-------------|----------------|
-| `gemini-2.5-flash-image` | Fast image generation (default) | $0.039 |
-| `gemini-3-pro-image-preview` | High-quality pro model | $0.134 |
+## Video Rendering
 
-### TTS Models
+**Architecture:** FFmpeg in Cloudflare Sandbox with ULID-based public assets
+- Service: `src/services/video-renderer.ts`
+- Workflow: `src/workflows/video-render.workflow.ts`
+- Container: `Dockerfile.ffmpeg` (based on cloudflare/sandbox:0.7.0)
+- Process: Download slide images/audio → FFmpeg composition → Upload to R2
 
-| Model ID | Description | Input Cost | Output Cost |
-|----------|-------------|------------|-------------|
-| `gemini-2.5-flash-preview-tts` | Fast TTS (default) | $0.50/1M tokens | $10.00/1M tokens |
-| `gemini-2.5-pro-preview-tts` | High-quality TTS | $1.00/1M tokens | $20.00/1M tokens |
+**Key Details:**
+- Individual slide images (not grid crops)
+- Ken Burns zoom (alternating in/out), xfade transitions
+- Japanese date badge overlay (Noto Sans CJK fonts)
+- WebM output (VP9/Opus, 25fps)
+- Assets downloaded via curl inside sandbox (no base64 encoding)
 
-### TTS Voices
+**Dockerfile Requirements:**
+- Base image: `docker.io/cloudflare/sandbox:0.7.0` (must match SDK version)
+- CMD: `["bun", "/container-server/dist/index.js"]` (required for control plane)
+- Instance type: `basic` (4GB disk)
 
-30 available voices: Zephyr, Puck, Charon, Kore, Fenrir, Leda, Enceladus, Aoede, Autonoe, Laomedeia, Iapetus, Erinome, Alnilam, Algieba, Despina, Umbriel, Callirrhoe, Achernar, Sulafat, Vindemiatrix, Achird, Orus, Algenib, Rasalgethi, Gacrux, Pulcherrima, Zubenelgenubi, Sadachbia, Sadaltager.
+## YouTube OAuth
 
-Voice is randomly selected at asset generation start and stored in `videos.tts_voice` for consistency across all slides.
+**Scopes:**
+- youtube.upload, youtube, yt-analytics.readonly
 
-### Grid Image Strategy
-
-The asset generator uses different resolutions based on the selected model:
-- **Flash model** (`gemini-2.5-flash-image`): Uses 1K resolution (1080p)
-- **Pro model** (`gemini-3-pro-image-preview`): Uses 2K resolution (2048p)
-
-The dimensions are calculated using `src/lib/dimensions.ts` which provides:
-- `calculateGridDimensions(videoType, imageSize)` - Returns grid and cell dimensions
-- `getModelImageSize(model)` - Maps model ID to '1K' or '2K'
-
-**Short Videos (9:16)**: 1 grid image
-- 1K: 1080×1920 pixels (3×3 of 360×640 cells)
-- 2K: 2048×3658 pixels (3×3 of 683×1219 cells)
-- Positions 0-7: Slides 1-8
-- Position 8: Thumbnail
-- Unused cells filled with black (#000000)
-
-**Long Videos (16:9)**: 2 grid images
-- 1K: Each 1920×1080 pixels (3×3 of 640×360 cells)
-- 2K: Each 3658×2048 pixels (3×3 of 1219×683 cells)
-- Grid 1: Slides 1-9 (positions 0-8)
-- Grid 2: Slides 10-17 (positions 0-7) + Thumbnail (position 8)
-- Grid 2 uses Grid 1 as style reference for visual consistency
-
-**Reference Images**:
-- Article images are fetched and converted to base64 using `src/lib/image-fetcher.ts`
-- Reference images are included as `inlineData` parts in the Gemini API `contents` array
-- This provides the AI with visual reference to accurately depict story content
-
-### R2 Storage
-
-Assets are stored in the `japan-quick-assets` R2 bucket:
-
-```
-videos/{videoId}/grid_00.png    # First grid image
-videos/{videoId}/grid_01.png    # Second grid (long videos only)
-videos/{videoId}/audio_00.wav   # Slide 0 audio
-videos/{videoId}/audio_01.wav   # Slide 1 audio
-...
-videos/{videoId}/audio_17.wav   # Up to slide 17
-```
-
-### Database Schema
-
-**video_assets table**:
-```sql
-CREATE TABLE video_assets (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  video_id INTEGER NOT NULL,
-  asset_type TEXT NOT NULL,      -- 'grid_image' | 'slide_audio'
-  asset_index INTEGER DEFAULT 0,  -- 0/1 for grids, 0-17 for audio
-  r2_key TEXT NOT NULL,
-  mime_type TEXT NOT NULL,        -- 'image/png' | 'audio/wav'
-  file_size INTEGER,
-  metadata TEXT,                  -- JSON (GridImageMetadata | SlideAudioMetadata)
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
-);
-```
-
-**New videos table columns**:
-- `asset_status`: 'pending' | 'generating' | 'generated' | 'error'
-- `asset_error`: Error message if generation fails
-- `image_model`: Selected image generation model
-- `tts_model`: Selected TTS model
-- `tts_voice`: Selected voice name (consistent per video)
-
-### API Endpoints
-
-**POST /api/videos/:id/generate-assets**
-- Generates grid images and slide audio for a video
-- Requires script to be generated first
-- Returns immediately, assets generated and stored in R2
-- Updates `asset_status` to 'generating' then 'generated'
-
-**GET /api/videos/:id/assets/:assetId**
-- Serves asset from R2 storage
-- Returns image/png or audio/wav with appropriate caching headers
-- Public endpoint (no auth required for serving assets)
-
-### Frontend UI
-
-The video detail page (`/video/:id`) displays:
-- **Model Selectors**: Dropdowns for image and TTS model selection
-- **Generate Assets Button**: Triggers asset generation
-- **Grid Images Preview**: Displays generated grid images
-- **Slides with Audio**: Shows cropped slide images (60×60) with audio players
-
-Cropped images are extracted from grid by calculating cell position in 3×3 grid and applying negative CSS offsets.
-
-### Services
-
-**AssetGeneratorService** (`src/services/asset-generator.ts`):
-- `generateGridImages()`: Creates 3×3 grid images using Gemini
-  - Uses `aspectRatio` and `imageSize` API config parameters
-  - Includes reference images as `inlineData` in contents array
-  - Supports style consistency via previous grid reference
-- `generateSlideAudio()`: Generates TTS audio for a slide
-
-**Dimension Utility** (`src/lib/dimensions.ts`):
-- `calculateGridDimensions(videoType, imageSize)`: Returns grid and cell dimensions
-- `getModelImageSize(model)`: Maps model ID to '1K' or '2K'
-
-**Image Fetcher Utility** (`src/lib/image-fetcher.ts`):
-- `fetchImageAsBase64(url)`: Fetches single image and converts to base64
-- `fetchImagesAsBase64(urls, maxImages)`: Fetches multiple images in parallel
-
-**R2StorageService** (`src/services/r2-storage.ts`):
-- `uploadAsset()`: Uploads asset to R2 bucket
-- `getAsset()`: Retrieves asset from R2
-- `deleteVideoAssets()`: Deletes all assets for a video
-
-## YouTube OAuth 2.0 Integration
-
-### Overview
-
-The application integrates with YouTube OAuth 2.0 to enable video uploads to YouTube channels. Users can connect their YouTube channel through the settings page at `/settings`.
-
-### OAuth Scopes
-
-The integration requests the following YouTube scopes:
-- `https://www.googleapis.com/auth/youtube.upload` - Upload videos to channel
-- `https://www.googleapis.com/auth/youtube` - Manage YouTube account
-- `https://www.googleapis.com/auth/yt-analytics.readonly` - View channel analytics
-
-### OAuth Flow
-
+**Flow:**
 1. User clicks "Connect YouTube Channel" on `/settings`
-2. Frontend calls `GET /api/youtube/auth/url` to get OAuth URL and state
-3. User is redirected to Google's OAuth consent screen
-4. After approval, Google redirects to `/api/youtube/oauth/callback`
-5. Backend exchanges authorization code for access and refresh tokens
-6. Backend fetches channel info and stores in `youtube_auth` table
-7. User is redirected back to `/settings?success=connected`
+2. Backend generates OAuth URL with state (stored in KV, 5min TTL)
+3. User approves at Google consent screen
+4. Google redirects to `/api/youtube/oauth/callback`
+5. Backend exchanges code for tokens, stores in `youtube_auth` table
+6. User redirected to `/settings?success=connected`
 
-### Token Management
+**Token Management:**
+- Access token: 1 hour expiry
+- Refresh token: Long-lived, used for renewals
+- Auto-refresh when < 5 minutes remaining
+- Manual refresh via settings button
 
-- **Access Token**: Stored in `youtube_auth.access_token`, expires after 1 hour
-- **Refresh Token**: Stored in `youtube_auth.refresh_token`, used to get new access tokens
-- **Auto-Refresh**: When token expires in < 5 minutes, auto-refresh on next API call
-- **Manual Refresh**: User can click "Refresh Token" button in settings
+## Design System
 
-### Database Schema
+**Tokyo Cyber-Industrial** aesthetic defined in `src/frontend/styles/design-system.ts`:
 
-```sql
-CREATE TABLE youtube_auth (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  channel_id TEXT NOT NULL UNIQUE,
-  channel_title TEXT,
-  access_token TEXT NOT NULL,
-  refresh_token TEXT NOT NULL,
-  token_type TEXT NOT NULL DEFAULT 'Bearer',
-  scopes TEXT NOT NULL,
-  expires_at INTEGER NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-```
-
-### State Management (CSRF Protection)
-
-OAuth state is stored in `NEWS_CACHE` KV namespace with 5-minute TTL:
-- Key: `oauth_state:{random_state}`
-- Value: `{"createdAt": timestamp}`
-- Deleted after verification (one-time use)
-
-### Settings Page (`/settings`)
-
-The settings page displays:
-- Connection status badge (Connected / Not Connected)
-- Channel name and ID (when connected)
-- Token expiry time with color-coded warnings
-- Granted permissions as formatted badges
-- Connect / Disconnect / Refresh Token buttons
+- **Fonts:** Zen Tokyo Zoo (display), Inter + Noto Sans JP (body), Space Mono (mono)
+- **Colors:** High contrast monochrome with electric red accent (#e63946)
+- **Borders:** Sharp 3px borders, no rounded corners
+- **Shadows:** Brutalist offset (2px 2px 0, 4px 4px 0)
+- **Patterns:** Subtle seigaiha (wave) background
 
 ## Platform Notes
 
-### Cloudflare Workers Specifics
-
-- **Static file serving**: Handled by Wrangler's `[assets]` configuration in wrangler.toml, NOT by Hono middleware
-- **Do NOT use `serveStatic`** from `hono/cloudflare-workers` - causes `__STATIC_CONTENT is not defined` errors in local dev
-
-### Browser Binding Best Practices
-
-**Required for Puppeteer in Cloudflare Workers**:
-1. Install `@cloudflare/puppeteer` package
-2. Add `compatibility_flags = ["nodejs_compat"]` to wrangler.toml
-3. Use `puppeteer.launch(browserBinding)` pattern - never call methods directly on the binding
-
-**Session Management**:
-```typescript
-const browser = await puppeteer.launch(browserBinding);
-const page = await browser.newPage();
-// ... perform scraping operations ...
-await page.close();
-await browser.disconnect();  // NOT browser.close() - use disconnect() to allow session reuse
-```
-
-**Why disconnect() instead of close()?**
-- `browser.disconnect()` preserves the browser session for reuse
-- Prevents "Websocket error: SessionID: xxx" errors
-- Follows Cloudflare's recommended pattern for session management
-- Avoids "waitUntil() tasks did not complete" warnings
-
-### Browser Binding in Workflows
-
-Cloudflare Browser Rendering DOES work in Workflows when using @cloudflare/puppeteer:
-1. Add `BROWSER` to the `WorkflowEnv` interface
-2. Use `puppeteer.launch(this.env.BROWSER)` in workflow steps
-3. Always use `browser.disconnect()` for cleanup
-
-### Build Process
-
-1. **Frontend Build**: Run `bun run build:frontend` to compile TypeScript from `src/frontend/` to `public/frontend/`
-2. **Development**: Use `bun run dev` to run Wrangler dev server with hot reloading
-3. **Production**: Deploy with `bun run deploy` to push to Cloudflare Workers
-
-### Important Notes
-
-- The frontend is built automatically during deployment via `bun run deploy`
-- For local development only, manually build with `bun run build:frontend`
-- Lit uses decorators (experimentalDecorators: true in tsconfig)
-- The `useDefineForClassFields: false` setting is required for Lit to work correctly with TypeScript
-- The `Env` type is defined in `src/types/news.ts` as the single source of truth
-- The `BROWSER` binding can be `null` in local development (no browser binding available)
-
-### Video Rendering Pipeline
-
-### Public Asset System (ULID-based Flat Storage)
-
-The video asset system uses **ULID-based flat storage** with **public URLs** and **individual slide images**.
-
-**Key Changes:**
-1. **ULID-based Flat Storage**: Assets stored at R2 bucket root as `{ulid}.{ext}` (e.g., `01H7XXK1R...png`)
-2. **Public URLs**: Assets served directly via `https://japan-quick-assets.nauman.im/{ulid}.{ext}`
-3. **Individual Slide Images**: Grids are split into individual slides using **FFmpeg** in the video render workflow
-4. **No Base64 Encoding**: Video renderer downloads assets via `curl` inside sandbox
-5. **Asset ID Tracking**: `slide_image_asset_ids` and `slide_audio_asset_ids` stored as JSON arrays
-
-### Database Schema Updates
-
-**New videos table columns:**
-```sql
-ALTER TABLE videos ADD COLUMN slide_image_asset_ids TEXT;   -- JSON array of ULID strings
-ALTER TABLE videos ADD COLUMN slide_audio_asset_ids TEXT;   -- JSON array of ULID strings
-```
-
-**New video_assets table columns:**
-```sql
-ALTER TABLE video_assets ADD COLUMN public_url TEXT;         -- Direct public URL
-ALTER TABLE video_assets ADD COLUMN generation_type TEXT DEFAULT 'grid';  -- 'grid' | 'individual'
-```
-
-**Asset Types:**
-- `grid_image` - Full grid images (for reference)
-- `slide_image` - Individual slide images extracted from grids (NEW)
-- `slide_audio` - TTS audio for each slide
-- `rendered_video` - Final rendered video
-
-### Storage Format
-
-**Before (hierarchical):**
-```
-videos/{videoId}/grid_00.png
-videos/{videoId}/audio_00.wav
-```
-
-**After (flat ULID):**
-```
-{ulid}.png           -- Individual slide image
-{ulid}.wav           -- Slide audio
-{ulid}.webm          -- Rendered video
-```
-
-**Public URL Pattern:**
-- `https://japan-quick-assets.nauman.im/{ulid}.{ext}`
-- Served via R2 custom domain
-- No authentication required
-
-### Grid Splitting with cross-image
-
-Grid images are split into individual slides using **cross-image** (pure JavaScript, zero dependencies) in the asset generator:
-
-```typescript
-// src/services/asset-generator.ts: splitGridsIntoSlides()
-private async splitGridsIntoSlides(reqId: string, grids: GridImageResult[]): Promise<SlideImageResult[]> {
-  const allSlides: SlideImageResult[] = [];
-
-  for (const grid of grids) {
-    const gridBuffer = this.base64ToArrayBuffer(grid.base64);
-
-    // Decode PNG using cross-image (pure JS, no dependencies)
-    const gridImage = await Image.decode(gridBuffer);
-
-    for (const pos of grid.metadata.positions) {
-      if (pos.isEmpty || pos.isThumbnail) continue;
-      if (pos.slideIndex === null) continue;
-
-      // Crop using built-in crop method
-      const cropped = gridImage.crop(pos.cropRect.x, pos.cropRect.y, pos.cropRect.w, pos.cropRect.h);
-
-      // Encode back to PNG
-      const slideBuffer = await cropped.encode('png');
-
-      // Upload to R2 with ULID-based key
-      // ...
-    }
-  }
-
-  return allSlides;
-}
-```
-
-**Why cross-image?**
-- Pure JavaScript implementation with **zero native dependencies**
-- Actively maintained (latest release: 1 month ago)
-- Works across Deno, Node.js, Bun, and Browsers
-- Simple, chainable API with built-in crop/resize operations
-- Better documentation and fault-tolerant decoding
-
-### Video Renderer Updates
-
-The video renderer now uses **individual slide images** instead of grids:
-
-**Before:**
-- Downloaded grid images
-- Extracted slides using FFmpeg crop
-- Base64 encoded assets before writing
-
-**After:**
-- Downloads individual slide images directly
-- Uses `curl` inside sandbox (no base64 encoding)
-- Downloads both images and audio via public URLs
-
-**RenderInput interface:**
-```typescript
-interface RenderInput {
-  script: VideoScript;
-  videoType: VideoType;
-  slideImages: SlideImageAsset[];  // Changed from grids
-  audio: AudioAsset[];
-  articleDate: string;
-}
-
-interface SlideImageAsset {
-  url: string;      // Public URL
-  slideIndex: number;
-}
-```
-
-**Sandbox asset download:**
-```bash
-# Download slide image
-curl -L -o "slides/slide_00.png" "https://japan-quick-assets.nauman.im/{ulid}.png"
-
-# Download audio
-curl -L -o "audio/audio_00.wav" "https://japan-quick-assets.nauman.im/{ulid}.wav"
-```
-
-### API Endpoint Changes
-
-**GET /api/videos/:id/assets/:assetId**
-- Now returns **302 redirect** to `public_url` instead of serving file bytes
-- Returns 404 if asset not found
-- Returns 500 if asset has no `public_url` configured
-
-**GET /api/videos/:id**
-- Returns `slide_image_asset_ids` and `slide_audio_asset_ids` in video response
-- Each ID is a ULID string that can be used to construct public URLs
-
-**POST /api/videos/:id/generate-assets**
-- Generates both grid images AND individual slide images
-- Creates `slide_image` asset records with ULID-based naming
-- Stores public URLs in `video_assets.public_url` column
-- Updates video with `slide_image_asset_ids` and `slide_audio_asset_ids`
-
-### Frontend Changes
-
-The video detail page (`/video/:id`) now displays:
-- **Slide Images Section**: Shows individual slide images (80×80 thumbnails) with audio players
-- **Direct Public URLs**: Uses `https://japan-quick-assets.nauman.im/{ulid}.{ext}` format
-- **No CSS Crop Logic**: Removed negative offset cropping since images are individual slides
-
-**ParsedVideo interface updates:**
-```typescript
-export interface ParsedVideo {
-  // ... existing fields ...
-  slideImageAssetIds: string[];  // Array of ULID strings
-  slideAudioAssetIds: string[];  // Array of ULID strings
-}
-```
-
-### Services
-
-**R2StorageService** (`src/services/r2-storage.ts`):
-- `uploadAsset(ulid, data, mimeType)`: Upload with ULID-based naming
-- `getPublicUrl(ulid, mimeType)`: Returns `https://japan-quick-assets.nauman.im/{ulid}.{ext}`
-- `uploadAssetLegacy()`: Old hierarchical method (kept for compatibility)
-
-**AssetGeneratorService** (`src/services/asset-generator.ts`):
-- `generateGridImages()`: Creates 3×3 grid images using Gemini
-  - Uses `aspectRatio` and `imageSize` API config parameters
-  - Includes reference images as `inlineData` in contents array
-  - Supports style consistency via previous grid reference
-  - Returns only grid images (no individual slides)
-- `generateSlideAudio()`: Generates TTS audio for a slide
-
-### Migration Notes
-
-**Migration 009 (`migrations/009_public_assets.sql`):**
-- Added `slide_image_asset_ids` and `slide_audio_asset_ids` to videos table
-- Added `public_url` and `generation_type` to video_assets table
-- Reset existing assets to force regeneration with new format
-- Successfully applied to remote database
-
-### Dependencies Added
-
-```json
-{
-  "dependencies": {
-    "cross-image": "^0.4.3",  // Pure JS image processing library for grid splitting
-    "ulid": "^2.3.0"          // ULID generation for asset IDs
-  }
-}
-```
-
-**Note**:
-- `sharp` was initially considered but removed due to native dependencies
-- `ImageScript` was tried but also uses native (.node) files
-- `pngjs` had CJS/ESM interoperability issues with Zlib
-- **cross-image** is the final solution - pure JavaScript with zero dependencies, actively maintained
-
----
-
-## Video Rendering Pipeline
-
-### Status: ⚠️ Partially Working - Grid Splitting Verified, Video Render Pending
-
-The video rendering pipeline has been **refactored for ULID-based public assets**. Grid splitting via FFmpeg is confirmed working, but the final video render step encounters a sandbox capacity issue.
-
-**Verification Results (Public Asset System):**
-- ✅ Grid images stored with ULID-based keys at R2 bucket root
-- ✅ Public URLs working (`https://japan-quick-assets.nauman.im/{ulid}.png`)
-- ✅ Grid splitting via FFmpeg works (7 individual slide images created)
-- ✅ Slide images stored with ULID keys and public URLs
-- ✅ `slide_image_asset_ids` and `slide_audio_asset_ids` populated correctly
-- ✅ Asset database records created with correct `asset_index`
-- ⚠️ Final video render step: Sandbox HTTP 500 error (capacity issue)
-
-**Current Architecture (Post-Refactor):**
-1. Asset generator creates grid images AND individual slides (using cross-image)
-2. Individual slides uploaded to R2 with ULID keys during asset generation
-3. Video render workflow fetches pre-split `slide_image` assets
-4. Public URLs used throughout (no base64 encoding for transfers)
-5. Video renderer downloads slides/audio via curl inside sandbox
-
-### Implementation
-
-1. **Video Renderer Service** (`src/services/video-renderer.ts`)
-   - FFmpeg-based video rendering with xfade transitions
-   - Ken Burns zoom effect (alternating in/out)
-   - Japanese date badge overlay using Noto Sans CJK fonts
-   - WebM output (VP9/Opus, 25fps)
-   - Uses single ExecutionSession for all operations
-   - Asset fetching in worker, writing to container via session.writeFile
-   - Comprehensive logging at all stages
-   - Retry logic with exponential backoff (3 attempts, 2s/4s/8s delays)
-
-2. **Video Render Workflow** (`src/workflows/video-render.workflow.ts`)
-   - Orchestrates video rendering from generated assets
-   - **Step 3: Fetch assets** - Fetches `slide_image` and `slide_audio` assets (no grid splitting needed)
-   - **Step 4: Fetch article date** - For date badge overlay
-   - **Step 5: Prepare render inputs** - Build slide images and audio arrays
-   - **Step 6: Render video** - Uses FFmpeg in sandbox for video composition
-   - **Step 7-9: Upload, create record, update status**
-   - Step-by-step process with retry policies
-   - Extended timeouts: 2min for container provisioning, 3min for API ready
-
-3. **Database Migration** (`migrations/008_video_render.sql`)
-   - Added render status tracking columns to videos table
-   - Successfully applied to remote database
-
-4. **Dockerfile** (`Dockerfile.ffmpeg`)
-   - **CRITICAL**: Based on `docker.io/cloudflare/sandbox:0.7.0` (matches SDK version)
-   - **CRITICAL**: Must include `CMD ["bun", "/container-server/dist/index.js"]` to start control plane
-   - Installs ffmpeg, curl, file utility, fonts-noto-cjk-extra
-   - Using `instance_type = "basic"` (4GB disk vs 2GB for lite)
-
-5. **Frontend UI** (`src/frontend/pages/video-page.ts`)
-   - Render card with status and metadata display
-   - Trigger render endpoint
-
-### Critical Issues Found and Fixed
-
-**Issue 1: Incorrect API Usage (Root Cause)**
-- **Problem**: video-renderer.ts had multiple API usage bugs from initial implementation
-- **Symptoms**: Function signature mismatches, wrong parameter types, incorrect command formats
-- **Fix**: Complete refactor to use ExecutionSession API correctly
-- **Commit**: `a360f58` - "fix: Resolve Cloudflare Sandbox API usage bugs in video renderer"
-
-**Issue 2: Missing Container Entrypoint**
-- **Problem**: Dockerfile didn't specify CMD to start Cloudflare Sandbox control plane
-- **Symptom**: "Container crashed while checking for ports" error
-- **Fix**: Added `CMD ["bun", "/container-server/dist/index.js"]` to Dockerfile
-- **Reference**: [Dockerfile docs](https://developers.cloudflare.com/sandbox/configuration/dockerfile/)
-
-**Issue 3: SDK/Container Version Mismatch**
-- **Problem**: Using SDK v0.7.0 but container base image was v0.3.3
-- **Symptom**: "Durable Object reset" errors, container version warnings
-- **Fix**: Updated Dockerfile FROM line to `docker.io/cloudflare/sandbox:0.7.0`
-- **Important**: Always match Docker image version to npm package version
-
-**Issue 4: Missing Authorization Headers**
-- **Problem**: Asset URLs had embedded credentials but fetch() doesn't auto-extract them
-- **Symptom**: "401 Unauthorized" when fetching assets from worker
-- **Fix**: Added `fetchWithAuth()` helper to extract credentials and build Authorization headers
-- **Commit**: `24ca2ac` - "fix: Add Authorization header extraction for asset fetching"
-
-**Issue 5: Stack Overflow on Large File Base64 Encoding**
-- **Problem**: Spread operator with 1.8MB array causes "Maximum call stack size exceeded"
-- **Symptom**: Stack overflow when converting large grid images to base64
-- **Fix**: Implemented chunked base64 encoding (8KB chunks)
-- **Commit**: `1919c63` - "fix: Use chunked base64 encoding to prevent stack overflow"
-
-**Issue 6: Container Provisioning Time**
-- **Problem**: Containers need 2-3 minutes to provision after deployment
-- **Fix**: Added increased timeouts and retry logic for session creation
-- **Note**: Wait 2-3 minutes after deployment before triggering renders
-
-### Previous Debugging Steps
-
-1. Added comprehensive debug logging throughout video-renderer.ts
-2. Added error handling with detailed error context
-3. Added retry logic for session creation (3 attempts with exponential backoff)
-4. Added timeout parameters to fetch operations (30s timeout)
-5. Improved FFmpeg command escaping and error reporting
-6. Identified and fixed Dockerfile CMD requirement
-7. Fixed SDK/container version mismatch
-
-### Configuration
-
-**wrangler.toml**:
-```toml
-[[migrations]]
-tag = "v3"
-new_sqlite_classes = ["Sandbox"]
-
-[[containers]]
-class_name = "Sandbox"
-image = "./Dockerfile.ffmpeg"
-instance_type = "basic"  # 4 GB disk
-max_instances = 3
-```
-
-**Deployment Status**:
-- ✅ **Branch:** `public-asset-system`
-- ✅ **Migration 009 Applied:** ULID-based public asset system
-- ✅ **Grid Splitting Working:** 7 slide images created via FFmpeg
-- ⚠️ **Video Render Pending:** Sandbox capacity issue (HTTP 500)
-
-**Key Commits:**
-1. `a360f58` - Fix: Resolve Cloudflare Sandbox API usage bugs
-2. `24ca2ac` - Fix: Add Authorization header extraction
-3. `1919c63` - Fix: Use chunked base64 encoding
-4. `0e90c38` - Docs: Update AI.md with status
-
-**Usage:**
-- Endpoint: `POST /api/videos/:id/render`
-- Status: `GET /api/videos/:id/render/status`
-- Video URL: `/api/videos/:id/assets/:assetId` (returned in status)
-- Authentication: Required (Basic Auth)
+### Cloudflare Workers
+- Static files served via `[assets]` in wrangler.toml (NOT `serveStatic`)
+- Workflows require `wrangler dev --remote` or production deployment
+- Cron triggers only work in production
+
+### Browser Binding
+- Use `puppeteer.launch(browserBinding)` (never call methods directly on binding)
+- Always `browser.disconnect()` (NOT `close()`) for session reuse
+- Requires `compatibility_flags = ["nodejs_compat"]` in wrangler.toml
+
+### Sandbox Containers
+- Docker image version MUST match SDK version (0.7.0)
+- Container MUST have CMD to start control plane
+- Wait 2-3 minutes after deployment for provisioning
+
+### Frontend Build
+- Build TypeScript with `bun run build:frontend` before dev
+- Deployment automatically builds frontend
+- `useDefineForClassFields: false` required for Lit decorators
+
+## Cloudflare Account
+
+- **Account ID:** `ccccd0d9d16426ee80bf27b0c0b8a9cb`
+- **Production URL:** `https://japan-quick.nax.workers.dev`
+- **Worker Subdomain:** `nax.workers.dev`
+- **Assets Domain:** `https://japan-quick-assets.nauman.im`
+
+## Workflow Scheduling
+
+- **Hourly Cron:** ScheduledNewsRefreshWorkflow, ArticleRescrapeWorkflow
+- **Business Hours Only (JST 8am-8pm):** VideoSelectionWorkflow
+- **Stale Status Handling:** Auto-reset 'generating' status older than 10 minutes
+
+## Development Patterns
+
+- RESTful API with Hono
+- Web Components with Lit, scoped CSS
+- Full TypeScript with strict mode
+- ES modules throughout
+- Vitest with Cloudflare Workers pool
+- Structured logging with request ID correlation
+- Workflow status polling (2.5-3s intervals)
+
+## Type System
+
+**Env Type:** Single source of truth in `src/types/news.ts`
+- Defines all Cloudflare Workers bindings
+- Used throughout backend for type safety
+
+**Video Types:**
+- VideoScript: title, description, thumbnailDescription, slides[]
+- Slide: headline, imageDescription, audioNarration, estimatedDuration
+- VideoType: 'short' | 'long'
+- ImageSize: '1K' | '2K'
+
+## Testing & Verification
+
+**Local:** `bun run dev` (workflows not supported)
+**Remote:** `wrangler dev --remote` (workflows supported)
+**Production:** `bun run deploy` (full functionality including cron)
+
+**Verification Steps:**
+1. Deploy: `bun run deploy` (note version ID)
+2. Tail logs: `wrangler tail --format pretty`
+3. Test endpoints/workflows via curl/browser
+4. Verify logs show no errors, expected behavior
+5. Report results with version ID
+
+## Dependencies
+
+**Key Packages:**
+- `hono` - Web framework
+- `lit` - Web components
+- `@google/genai` - Gemini AI client
+- `@cloudflare/puppeteer` - Browser scraping
+- `cross-image` - Pure JS image processing (grid splitting)
+- `ulid` - ULID generation for asset IDs
+- `vitest` - Testing framework
+
+## Migration History
+
+- 002: articles tables
+- 003: videos, models, cost_logs
+- 004: youtube_auth
+- 005: comment_reactions
+- 006: video_scripts
+- 007: video_assets
+- 008: video_render
+- 009: public_assets (ULID-based system)
