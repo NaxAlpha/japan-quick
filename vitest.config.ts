@@ -9,7 +9,8 @@ export default defineWorkersConfig({
     poolOptions: {
       workers: {
         wrangler: { configPath: 'wrangler.toml' },
-        singleWorker: true
+        singleWorker: true,
+        isolatedStorage: false // Required for projects with Workflows
       }
     },
     coverage: {

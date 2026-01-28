@@ -26,6 +26,7 @@ bucket_name = "japan-quick-assets"
 [vars]
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "GvkP525fTX0ocMTw8XtAqM9ECvNIx50v"
+ASSETS_PUBLIC_URL = "https://japan-quick-assets.nauman.im"
 
 # Workflow bindings
 [[workflows]]
@@ -57,6 +58,16 @@ class_name = "VideoSelectionWorkflow"
 name = "video-render-workflow"
 binding = "VIDEO_RENDER_WORKFLOW"
 class_name = "VideoRenderWorkflow"
+
+[[workflows]]
+name = "script-generation-workflow"
+binding = "SCRIPT_GENERATION_WORKFLOW"
+class_name = "ScriptGenerationWorkflow"
+
+[[workflows]]
+name = "asset-generation-workflow"
+binding = "ASSET_GENERATION_WORKFLOW"
+class_name = "AssetGenerationWorkflow"
 
 # Durable Objects for sandbox container (SQLite DO required for containers)
 [[durable_objects.bindings]]

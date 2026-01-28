@@ -757,6 +757,12 @@ export class VideoPage extends LitElement {
   private renderPollInterval: number | null = null;
 
   @state()
+  private scriptPollInterval: number | null = null;
+
+  @state()
+  private assetPollInterval: number | null = null;
+
+  @state()
   private selectedImageModel: ImageModelId = 'gemini-2.5-flash-image';
 
   @state()
@@ -831,13 +837,14 @@ export class VideoPage extends LitElement {
 
       const data = await response.json();
       if (data.success) {
-        this.video = data.video;
+        // Start polling for status
+        this.startScriptPolling();
       } else {
         this.error = data.error || 'Failed to generate script';
+        this.generatingScript = false;
       }
     } catch (err) {
       this.error = err instanceof Error ? err.message : 'Failed to generate script';
-    } finally {
       this.generatingScript = false;
     }
   }
@@ -871,13 +878,14 @@ export class VideoPage extends LitElement {
 
       const data = await response.json();
       if (data.success) {
-        this.video = data.video;
+        // Start polling for status
+        this.startAssetPolling();
       } else {
         this.error = data.error || 'Failed to generate assets';
+        this.generatingAssets = false;
       }
     } catch (err) {
       this.error = err instanceof Error ? err.message : 'Failed to generate assets';
-    } finally {
       this.generatingAssets = false;
     }
   }
@@ -970,7 +978,107 @@ export class VideoPage extends LitElement {
 
   disconnectedCallback(): void {
     this.stopRenderPolling();
+    this.stopScriptPolling();
+    this.stopAssetPolling();
     super.disconnectedCallback();
+  }
+
+  private startScriptPolling(): void {
+    if (this.scriptPollInterval) {
+      clearInterval(this.scriptPollInterval);
+    }
+
+    this.scriptPollInterval = window.setInterval(() => {
+      this.checkScriptStatus();
+    }, 2500); // Poll every 2.5 seconds
+  }
+
+  private stopScriptPolling(): void {
+    if (this.scriptPollInterval) {
+      clearInterval(this.scriptPollInterval);
+      this.scriptPollInterval = null;
+    }
+  }
+
+  private async checkScriptStatus(): Promise<void> {
+    try {
+      const username = 'admin';
+      const password = 'GvkP525fTX0ocMTw8XtAqM9ECvNIx50v';
+      const credentials = btoa(`${username}:${password}`);
+
+      const response = await fetch(`/api/videos/${this.videoId}/script/status`, {
+        headers: {
+          'Authorization': `Basic ${credentials}`
+        }
+      });
+
+      if (!response.ok) return;
+
+      const data = await response.json();
+      if (data.success) {
+        if (data.status === 'generated') {
+          this.stopScriptPolling();
+          this.generatingScript = false;
+          // Reload video to get the script
+          await this.loadVideo();
+        } else if (data.status === 'error') {
+          this.stopScriptPolling();
+          this.generatingScript = false;
+          this.error = data.error || 'Script generation failed';
+        }
+      }
+    } catch (err) {
+      console.error('Failed to check script status:', err);
+    }
+  }
+
+  private startAssetPolling(): void {
+    if (this.assetPollInterval) {
+      clearInterval(this.assetPollInterval);
+    }
+
+    this.assetPollInterval = window.setInterval(() => {
+      this.checkAssetStatus();
+    }, 3000); // Poll every 3 seconds
+  }
+
+  private stopAssetPolling(): void {
+    if (this.assetPollInterval) {
+      clearInterval(this.assetPollInterval);
+      this.assetPollInterval = null;
+    }
+  }
+
+  private async checkAssetStatus(): Promise<void> {
+    try {
+      const username = 'admin';
+      const password = 'GvkP525fTX0ocMTw8XtAqM9ECvNIx50v';
+      const credentials = btoa(`${username}:${password}`);
+
+      const response = await fetch(`/api/videos/${this.videoId}/assets/status`, {
+        headers: {
+          'Authorization': `Basic ${credentials}`
+        }
+      });
+
+      if (!response.ok) return;
+
+      const data = await response.json();
+      if (data.success) {
+        if (data.status === 'generated') {
+          this.stopAssetPolling();
+          this.generatingAssets = false;
+          // Reload video to get the assets
+          await this.loadVideo();
+        } else if (data.status === 'error') {
+          this.stopAssetPolling();
+          this.generatingAssets = false;
+          this.error = data.error || 'Asset generation failed';
+        }
+      }
+    } catch (err) {
+      console.error('Failed to check asset status:', err);
+    }
   }
 
   private getCropStyle(cell: number): string {

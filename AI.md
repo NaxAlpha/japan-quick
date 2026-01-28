@@ -126,10 +126,14 @@ japan-quick/
     - `GET /api/videos/:id` - Get single video with cost logs and assets
     - `POST /api/videos/trigger` - Manual workflow trigger
     - `GET /api/videos/status/:workflowId` - Workflow status
-    - `POST /api/videos/:id/generate-script` - Generate video script using Gemini AI
-    - `POST /api/videos/:id/generate-assets` - Generate grid images and slide audio
+    - `POST /api/videos/:id/generate-script` - Trigger script generation workflow (async)
+    - `GET /api/videos/:id/script/status` - Get script generation status (for polling)
+    - `POST /api/videos/:id/generate-assets` - Trigger asset generation workflow (async)
+    - `GET /api/videos/:id/assets/status` - Get asset generation status (for polling)
     - `GET /api/videos/:id/assets/:assetId` - Serve asset from R2 (public)
     - `DELETE /api/videos/:id` - Delete video and its cost logs
+    - `POST /api/videos/:id/render` - Trigger video render workflow
+    - `GET /api/videos/:id/render/status` - Poll render status
   - **YouTube OAuth API Routes (protected):**
     - `GET /api/youtube/status` - Get current YouTube authentication status
     - `GET /api/youtube/auth/url` - Generate OAuth authorization URL
@@ -248,6 +252,9 @@ The codebase uses several utility modules for common patterns:
 | `ARTICLE_SCRAPER_WORKFLOW` | Workflow | Article content scraping workflow |
 | `ARTICLE_RESCRAPE_WORKFLOW` | Workflow | Cron-triggered article rescrape workflow |
 | `VIDEO_SELECTION_WORKFLOW` | Workflow | Video selection workflow |
+| `VIDEO_RENDER_WORKFLOW` | Workflow | Video rendering workflow (ffmpeg) |
+| `SCRIPT_GENERATION_WORKFLOW` | Workflow | Script generation workflow (async) |
+| `ASSET_GENERATION_WORKFLOW` | Workflow | Asset generation workflow (async) |
 | `ADMIN_USERNAME` | Var | Basic auth username |
 | `ADMIN_PASSWORD` | Var | Basic auth password |
 | `GOOGLE_API_KEY` | Secret | Gemini API key (stored in Cloudflare Secrets) |
@@ -312,7 +319,61 @@ Cron-triggered article rescraping (hourly):
 
 **Error Handling**: Workflow sets video status to `error` on failure instead of leaving it stuck in `doing`.
 
+**ScriptGenerationWorkflow** (NEW - Async):
+
+| Step | Description | Retry Policy |
+|------|-------------|--------------|
+| `fetch-video-data` | Validate video exists and check script_status | 3 retries, 2s constant delay |
+| `update-status-generating` | Set script_status to 'generating' | - |
+| `fetch-article-data` | Fetch article content, comments, images from DB | 3 retries, 2s constant delay |
+| `generate-script` | Use Gemini 3 Flash to generate script | 3 retries, 5s exponential backoff |
+| `log-cost` | Track input/output tokens and calculate cost | 3 retries, 2s constant delay |
+| `save-script` | Save script to database, set status to 'generated' | 3 retries, 2s constant delay |
+| `update-total-cost` | Aggregate all costs for the video | 3 retries, 2s constant delay |
+
+**Error Handling**: Workflow sets script_status to `error` with error message on failure.
+
+**AssetGenerationWorkflow** (NEW - Async):
+
+| Step | Description | Retry Policy |
+|------|-------------|--------------|
+| `validate-prerequisites` | Check script is generated and asset is not already generating | 3 retries, 2s constant delay |
+| `select-tts-voice` | Select random voice from 30 available, set asset_status to 'generating' | - |
+| `fetch-reference-images` | Fetch article images as base64 for AI reference | 3 retries, 2s constant delay |
+| `generate-grid-images` | Generate grid images using Gemini | 3 retries, 5s exponential backoff |
+| `upload-grids` | Upload grid images to R2 and create database records | 3 retries, 3s exponential backoff |
+| `generate-audio` | Generate TTS audio for each slide using Gemini | 3 retries, 5s exponential backoff |
+| `upload-audio` | Upload audio files to R2 and create database records | 3 retries, 3s exponential backoff |
+| `log-costs` | Track image generation costs | 3 retries, 2s constant delay |
+| `complete` | Set asset_status to 'generated', update total_cost | 3 retries, 2s constant delay |
+
+**Error Handling**: Workflow sets asset_status to `error` with error message on failure.
+
+**VideoRenderWorkflow**:
+
+| Step | Description | Retry Policy |
+|------|-------------|--------------|
+| `fetch-video` | Validate video and check prerequisites | 3 retries, 2s constant delay |
+| `update-status-rendering` | Set render_status to 'rendering' | - |
+| `fetch-assets` | Fetch video assets from database | 3 retries, 2s constant delay |
+| `fetch-article-date` | Fetch article date for date badge | 3 retries, 2s constant delay |
+| `prepare-asset-metadata` | Build asset URLs with authentication | - |
+| `render-video` | Render video using FFmpeg in container | - |
+| `upload-video` | Upload rendered video to R2 | 3 retries, 3s exponential backoff |
+| `create-asset-record` | Create video asset record in database | 3 retries, 2s constant delay |
+| `update-status-rendered` | Set render_status to 'rendered' | - |
+
+**Error Handling**: Workflow sets render_status to `error` with error message on failure.
+
 **Note**: Workflows require remote deployment to test - use `wrangler dev --remote` or `wrangler deploy`. Cron triggers only work in production. The cron runs hourly (0 * * * *), triggering ScheduledNewsRefreshWorkflow, ArticleRescrapeWorkflow, and VideoSelectionWorkflow (during JST business hours only).
+
+**Stale Status Handling**: The status endpoints (`/api/videos/:id/script/status`, `/api/videos/:id/assets/status`) automatically detect and reset stale 'generating' statuses older than 10 minutes to 'pending' with an error message "Generation timed out (stale status)". This prevents the UI from being stuck waiting for a workflow that crashed or was interrupted.
+
+**Frontend Polling**: The video page frontend implements polling for async operations:
+- Script generation: Polls every 2.5 seconds after triggering workflow
+- Asset generation: Polls every 3 seconds after triggering workflow
+- Render status: Polls every 3 seconds after triggering workflow
+- Polling automatically stops when status reaches terminal state ('generated', 'error', 'rendered') or on page navigation away
 
 ### Type System
 
@@ -333,6 +394,9 @@ export type Env = {
     ARTICLE_SCRAPER_WORKFLOW: Workflow;
     ARTICLE_RESCRAPE_WORKFLOW: Workflow;
     VIDEO_SELECTION_WORKFLOW: Workflow;
+    VIDEO_RENDER_WORKFLOW: Workflow;
+    SCRIPT_GENERATION_WORKFLOW: Workflow;
+    ASSET_GENERATION_WORKFLOW: Workflow;
     YOUTUBE_CLIENT_ID: string;
     YOUTUBE_CLIENT_SECRET: string;
     YOUTUBE_REDIRECT_URI: string;
