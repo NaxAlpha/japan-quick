@@ -94,24 +94,28 @@ export interface RenderedVideoMetadata {
 export interface VideoAsset {
   id: number;
   video_id: number;
-  asset_type: 'grid_image' | 'slide_audio' | 'rendered_video';
+  asset_type: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video';
   asset_index: number;
   r2_key: string;
   mime_type: string;
   file_size: number | null;
   metadata: string | null;
+  public_url: string | null;        // Public URL for direct access
+  generation_type: string;          // 'grid' | 'individual'
   created_at: string;
 }
 
 // Parsed asset for frontend (with URL)
 export interface ParsedVideoAsset {
   id: number;
-  assetType: 'grid_image' | 'slide_audio' | 'rendered_video';
+  assetType: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video';
   assetIndex: number;
-  url: string;                    // Served via API route
+  url: string;                    // Public URL or API route
   mimeType: string;
   fileSize: number | null;
   metadata: GridImageMetadata | SlideAudioMetadata | RenderedVideoMetadata | null;
+  publicUrl: string | null;       // Direct public URL
+  generationType: string;         // 'grid' | 'individual'
 }
 
 // Database record interface (notes as string, total_cost field)
@@ -135,17 +139,21 @@ export interface Video {
   render_error: string | null;
   render_started_at: string | null;
   render_completed_at: string | null;
+  slide_image_asset_ids: string | null;   // JSON array of ULID asset IDs
+  slide_audio_asset_ids: string | null;   // JSON array of ULID asset IDs
   created_at: string;
   updated_at: string;
 }
 
 // Frontend-ready interface (notes split by newline to array, articles parsed from JSON)
-export interface ParsedVideo extends Omit<Video, 'notes' | 'articles' | 'script'> {
+export interface ParsedVideo extends Omit<Video, 'notes' | 'articles' | 'script' | 'slide_image_asset_ids' | 'slide_audio_asset_ids'> {
   notes: string[];                   // Split by newline
   articles: string[];                // Parsed from JSON
   script: VideoScript | null;        // Parsed from JSON
   assets: ParsedVideoAsset[];        // Video assets with URLs
   renderedVideo: ParsedVideoAsset | null;  // Rendered video asset if present
+  slideImageAssetIds: string[];      // Parsed slide image asset ULIDs
+  slideAudioAssetIds: string[];      // Parsed slide audio asset ULIDs
 }
 
 // Model info interface
@@ -194,6 +202,8 @@ export function parseVideo(video: Video): ParsedVideo {
     notes: video.notes ? video.notes.split('\n') : [],
     articles: video.articles ? JSON.parse(video.articles) : [],
     script: video.script ? JSON.parse(video.script) : null,
+    slideImageAssetIds: video.slide_image_asset_ids ? JSON.parse(video.slide_image_asset_ids) : [],
+    slideAudioAssetIds: video.slide_audio_asset_ids ? JSON.parse(video.slide_audio_asset_ids) : [],
     assets: [] // Assets are populated separately in the route handler
   };
 }

@@ -405,7 +405,6 @@ videoRoutes.post('/:id/generate-assets', async (c) => {
     log.assetRoutes.info(reqId, 'Asset status set to generating', { videoId: id, ttsVoice });
 
     const script: VideoScript = JSON.parse(video.script!);
-    const isShort = video.video_type === 'short';
 
     // 4. Fetch article reference images
     const articleIds = JSON.parse(video.articles!);
@@ -456,27 +455,49 @@ videoRoutes.post('/:id/generate-assets', async (c) => {
     const assetGen = new AssetGeneratorService(c.env.GOOGLE_API_KEY);
     const r2 = new R2StorageService(c.env.ASSETS_BUCKET);
 
-    // 6. Generate grid images
+    // 6. Generate grid images and individual slide images
     log.assetRoutes.info(reqId, 'Generating grid images', { videoId: id, videoType: video.video_type });
-    const gridImages = await assetGen.generateGridImages(
+    const { grids, slides } = await assetGen.generateGridImages(
       reqId, script, video.video_type, video.image_model, referenceImages
     );
 
+    const gridImageAssetIds: string[] = [];
+    const slideImageAssetIds: string[] = [];
+
     // 7. Upload grid images and create records
-    for (let i = 0; i < gridImages.length; i++) {
-      const img = gridImages[i];
+    for (let i = 0; i < grids.length; i++) {
+      const img = grids[i];
       const data = Uint8Array.from(atob(img.base64), c => c.charCodeAt(0));
-      const { key, size } = await r2.uploadAsset(id, 'grid_image', i, data.buffer, img.mimeType);
+      const { key, size, publicUrl } = await r2.uploadAsset(img.ulid, data.buffer, img.mimeType);
 
       await c.env.DB.prepare(`
-        INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, mime_type, file_size, metadata)
-        VALUES (?, 'grid_image', ?, ?, ?, ?, ?)
-      `).bind(id, i, key, img.mimeType, size, JSON.stringify(img.metadata)).run();
+        INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, public_url, mime_type, file_size, metadata)
+        VALUES (?, 'grid_image', ?, ?, ?, ?, ?, ?)
+      `).bind(id, i, key, publicUrl, img.mimeType, size, JSON.stringify(img.metadata)).run();
 
-      log.assetRoutes.info(reqId, `Grid ${i} uploaded`, { videoId: id, key, size });
+      gridImageAssetIds.push(img.ulid);
+
+      log.assetRoutes.info(reqId, `Grid ${i} uploaded`, { videoId: id, ulid: img.ulid, key, size });
+    }
+
+    // 7b. Upload individual slide images and create records
+    for (let i = 0; i < slides.length; i++) {
+      const slide = slides[i];
+      const data = Uint8Array.from(atob(slide.base64), c => c.charCodeAt(0));
+      const { key, size, publicUrl } = await r2.uploadAsset(slide.ulid, data.buffer, slide.mimeType);
+
+      await c.env.DB.prepare(`
+        INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, public_url, mime_type, file_size, metadata, generation_type)
+        VALUES (?, 'slide_image', ?, ?, ?, ?, ?, ?, 'individual')
+      `).bind(id, slide.metadata.slideIndex, key, publicUrl, slide.mimeType, size, JSON.stringify(slide.metadata)).run();
+
+      slideImageAssetIds.push(slide.ulid);
+
+      log.assetRoutes.info(reqId, `Slide image ${slide.metadata.slideIndex} uploaded`, { videoId: id, ulid: slide.ulid, key, size });
     }
 
     // 8. Generate and upload slide audio
+    const slideAudioAssetIds: string[] = [];
     log.assetRoutes.info(reqId, 'Generating slide audio', { videoId: id, slideCount: script.slides.length });
     for (let i = 0; i < script.slides.length; i++) {
       const audio = await assetGen.generateSlideAudio(
@@ -487,18 +508,20 @@ videoRoutes.post('/:id/generate-assets', async (c) => {
       audio.metadata.slideIndex = i;
 
       const data = Uint8Array.from(atob(audio.base64), c => c.charCodeAt(0));
-      const { key, size } = await r2.uploadAsset(id, 'slide_audio', i, data.buffer, audio.mimeType);
+      const { key, size, publicUrl } = await r2.uploadAsset(audio.ulid, data.buffer, audio.mimeType);
 
       await c.env.DB.prepare(`
-        INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, mime_type, file_size, metadata)
-        VALUES (?, 'slide_audio', ?, ?, ?, ?, ?)
-      `).bind(id, i, key, audio.mimeType, size, JSON.stringify(audio.metadata)).run();
+        INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, public_url, mime_type, file_size, metadata)
+        VALUES (?, 'slide_audio', ?, ?, ?, ?, ?, ?)
+      `).bind(id, i, key, publicUrl, audio.mimeType, size, JSON.stringify(audio.metadata)).run();
 
-      log.assetRoutes.info(reqId, `Slide audio ${i} uploaded`, { videoId: id, key, size, durationMs: audio.metadata.durationMs });
+      slideAudioAssetIds.push(audio.ulid);
+
+      log.assetRoutes.info(reqId, `Slide audio ${i} uploaded`, { videoId: id, ulid: audio.ulid, key, size, durationMs: audio.metadata.durationMs });
     }
 
     // 9. Log costs
-    const gridCount = gridImages.length;
+    const gridCount = grids.length;
     const imageCost = gridCount * (video.image_model === 'gemini-2.5-flash-image' ? 0.039 : 0.134);
     await c.env.DB.prepare(`
       INSERT INTO cost_logs (video_id, log_type, model_id, input_tokens, output_tokens, cost)
@@ -516,14 +539,17 @@ videoRoutes.post('/:id/generate-assets', async (c) => {
     const totalCost = totalCostResult?.total || 0;
 
     await c.env.DB.prepare(`
-      UPDATE videos SET asset_status = 'generated', total_cost = ?, updated_at = datetime('now')
+      UPDATE videos SET asset_status = 'generated', slide_audio_asset_ids = ?, slide_image_asset_ids = ?, total_cost = ?, updated_at = datetime('now')
       WHERE id = ?
-    `).bind(totalCost, id).run();
+    `).bind(JSON.stringify(slideAudioAssetIds), JSON.stringify(slideImageAssetIds), totalCost, id).run();
 
     log.assetRoutes.info(reqId, 'Asset generation completed', {
       videoId: id,
       gridCount,
       slideCount: script.slides.length,
+      gridImageAssetIds,
+      slideImageAssetIds,
+      slideAudioAssetIds,
       totalCost,
       durationMs: Date.now() - startTime
     });

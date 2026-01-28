@@ -1,6 +1,7 @@
 /**
  * VideoRenderWorkflow - Render final video from generated assets using ffmpeg
  * Uses Cloudflare Sandbox with ffmpeg for video processing
+ * Individual slide images are already created by asset generator (UPNG.js)
  */
 
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
@@ -44,7 +45,9 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
             script,
             script_status,
             asset_status,
-            video_type
+            video_type,
+            articles,
+            slide_audio_asset_ids
           FROM videos
           WHERE id = ?
         `).bind(videoId).first();
@@ -80,7 +83,7 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
         `).bind(videoId).run();
       });
 
-      // Step 3: Fetch assets from D1
+      // Step 3: Fetch slide images and audio assets from D1
       const assets = await step.do('fetch-assets', {
         retries: {
           limit: 3,
@@ -94,9 +97,11 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
             asset_type,
             asset_index,
             r2_key,
+            public_url,
             metadata
           FROM video_assets
           WHERE video_id = ?
+            AND asset_type IN ('slide_image', 'slide_audio')
           ORDER BY asset_type, asset_index
         `).bind(videoId).all();
 
@@ -104,12 +109,15 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
       });
       log.videoRenderWorkflow.info(reqId, 'Step completed', { step: 'fetch-assets', assetCount: assets.length });
 
-      // Separate grid images and audio
-      const gridAssets = assets.filter(a => a.asset_type === 'grid_image');
+      const slideImageAssets = assets.filter(a => a.asset_type === 'slide_image');
       const audioAssets = assets.filter(a => a.asset_type === 'slide_audio');
 
-      if (gridAssets.length === 0 || audioAssets.length === 0) {
-        throw new Error('Missing grid images or audio assets');
+      if (slideImageAssets.length === 0) {
+        throw new Error('No slide images found. Asset generation may need to be run again.');
+      }
+
+      if (audioAssets.length === 0) {
+        throw new Error('No audio assets found');
       }
 
       // Step 4: Fetch article date for date badge
@@ -120,7 +128,6 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
           backoff: 'constant'
         }
       }, async () => {
-        // Get first article from video
         const articles = JSON.parse(video.articles || '[]');
         if (articles.length === 0) {
           return new Date().toISOString();
@@ -137,50 +144,44 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
       });
       log.videoRenderWorkflow.info(reqId, 'Step completed', { step: 'fetch-article-date', articleDate });
 
-      // Step 5: Prepare asset metadata with public URLs
-      // Generate base URL for asset downloads (using auth credentials in URL)
-      const { grids, audio } = await step.do('prepare-asset-metadata', async () => {
-        // Build asset URL base with auth credentials
-        // TODO: Make this configurable via environment variable
-        const workerHost = 'japan-quick.nax.workers.dev';
-        const assetUrlBase = `https://${this.env.ADMIN_USERNAME}:${this.env.ADMIN_PASSWORD}@${workerHost}/api/videos/${videoId}/assets`;
-
-        // Extract grid metadata with URLs
-        const grids = gridAssets.map(asset => {
+      // Step 5: Prepare slide images and audio for rendering
+      const { slideImages, audio } = await step.do('prepare-render-inputs', async () => {
+        // Build slide images from slide_image assets
+        const slideImages = slideImageAssets.map(asset => {
+          if (!asset.public_url) {
+            throw new Error(`Slide image asset ${asset.id} missing public_url`);
+          }
           const metadata = JSON.parse(asset.metadata || '{}');
           return {
-            url: `${assetUrlBase}/${asset.id}`,
-            gridIndex: asset.asset_index,
-            width: metadata.width || 1920,
-            height: metadata.height || 1080,
-            cellWidth: metadata.cellWidth || 640,
-            cellHeight: metadata.cellHeight || 360
+            url: asset.public_url,
+            slideIndex: asset.asset_index,
+            width: metadata.width || 0,
+            height: metadata.height || 0
           };
         });
 
-        // Extract audio metadata with URLs
+        // Build audio from audio assets
         const audio = audioAssets.map(asset => {
+          if (!asset.public_url) {
+            throw new Error(`Audio asset ${asset.id} missing public_url`);
+          }
           const metadata = JSON.parse(asset.metadata || '{}');
           return {
-            url: `${assetUrlBase}/${asset.id}`,
+            url: asset.public_url,
             slideIndex: asset.asset_index,
             durationMs: metadata.durationMs || 10000
           };
         });
 
-        return { grids, audio };
+        return { slideImages, audio };
       });
-      log.videoRenderWorkflow.info(reqId, 'Step completed', { step: 'prepare-asset-metadata' });
+      log.videoRenderWorkflow.info(reqId, 'Step completed', { step: 'prepare-render-inputs' });
 
       // Step 6: Render video using VideoRendererService
-      // CRITICAL: Do NOT use step.do for rendering because:
-      // 1. The Sandbox proxy cannot be serialized by the workflow framework
-      // 2. The R2 bucket cannot be captured in the closure
-      // We do rendering as a direct async call instead
       log.videoRenderWorkflow.info(reqId, 'Starting video render', {
         videoType: video.video_type,
         slideCount: script.slides.length,
-        gridCount: grids.length,
+        slideImageCount: slideImages.length,
         audioCount: audio.length
       });
 
@@ -188,8 +189,8 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
       log.videoRenderWorkflow.debug(reqId, 'Getting sandbox', { sandboxId });
       const sandbox = getSandbox(this.env.Sandbox, sandboxId, {
         containerTimeouts: {
-          instanceGetTimeoutMS: 120000, // 2 minutes for container provisioning
-          portReadyTimeoutMS: 180000    // 3 minutes for API to become ready
+          instanceGetTimeoutMS: 120000,
+          portReadyTimeoutMS: 180000
         }
       });
 
@@ -199,7 +200,7 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
       const renderResult = await renderVideo(reqId, sandbox, {
         script,
         videoType: video.video_type,
-        grids,
+        slideImages,
         audio,
         articleDate
       });
@@ -212,7 +213,9 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
       });
 
       // Step 7: Upload video to R2
-      const r2Key = `videos/${videoId}/rendered_${crypto.randomUUID()}.webm`;
+      const { ulid } = await import('ulid');
+      const videoUlid = ulid();
+      const r2Key = `${videoUlid}.webm`;
       const fileSize = await step.do('upload-video', {
         retries: {
           limit: 3,
@@ -220,7 +223,6 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
           backoff: 'exponential'
         }
       }, async () => {
-        // Decode base64 to binary
         const binaryString = atob(renderResult.videoBase64);
         const bytes = new Uint8Array(binaryString.length);
         for (let i = 0; i < binaryString.length; i++) {
@@ -247,14 +249,15 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
         }
       }, async () => {
         const result = await this.env.DB.prepare(`
-          INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, mime_type, file_size, metadata)
-          VALUES (?, 'rendered_video', 0, ?, 'video/webm', ?, ?)
+          INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, mime_type, file_size, metadata, public_url, generation_type)
+          VALUES (?, 'rendered_video', 0, ?, 'video/webm', ?, ?, ?, 'individual')
           RETURNING id
         `).bind(
           videoId,
           r2Key,
           fileSize,
-          JSON.stringify(renderResult.metadata)
+          JSON.stringify(renderResult.metadata),
+          `https://japan-quick-assets.nauman.im/${r2Key}`
         ).first<{ id: number }>();
 
         if (!result) {
@@ -290,7 +293,6 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
     } catch (error) {
       log.videoRenderWorkflow.error(reqId, 'Workflow failed', error as Error, { videoId });
 
-      // Update video status to error
       try {
         await this.env.DB.prepare(`
           UPDATE videos
