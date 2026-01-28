@@ -7,6 +7,7 @@ import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:work
 import { AssetGeneratorService } from '../services/asset-generator.js';
 import { R2StorageService } from '../services/r2-storage.js';
 import { fetchImagesAsBase64 } from '../lib/image-fetcher.js';
+import { ulid } from 'ulid';
 import type { Video, VideoScript, VideoAsset, TTSVoice } from '../types/video.js';
 import type { Env } from '../types/news.js';
 import { log, generateRequestId } from '../lib/logger.js';
@@ -149,8 +150,10 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
       });
       log.assetGenerationWorkflow.info(reqId, 'Step completed', { step: 'fetch-reference-images', totalImages: referenceImages.length });
 
-      // Step 4: Generate grid images
-      const gridImages = await step.do('generate-grid-images', {
+      // Step 4: Generate grid images and individual slides
+      // Uploads everything directly to R2 to avoid 1MiB step output limit
+      // Returns only grid count (not the actual image data)
+      const gridCount = await step.do('generate-grid-images', {
         retries: {
           limit: 3,
           delay: '5 seconds',
@@ -158,45 +161,103 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
         }
       }, async () => {
         const assetGen = new AssetGeneratorService(this.env.GOOGLE_API_KEY);
-        return await assetGen.generateGridImages(
+        const result = await assetGen.generateGridImages(
           reqId, script, video.video_type, video.image_model, referenceImages
         );
-      });
-      log.assetGenerationWorkflow.info(reqId, 'Step completed', { step: 'generate-grid-images', gridCount: gridImages.length });
 
-      // Step 5: Upload grids to R2
-      await step.do('upload-grids', {
-        retries: {
-          limit: 3,
-          delay: '3 seconds',
-          backoff: 'exponential'
-        }
-      }, async () => {
         const r2 = new R2StorageService(this.env.ASSETS_BUCKET);
 
-        // DELETE existing grid_image assets for this video to prevent duplicates
+        // Delete existing slide_image and grid_image assets
         await this.env.DB.prepare(`
-          DELETE FROM video_assets WHERE video_id = ? AND asset_type = 'grid_image'
+          DELETE FROM video_assets WHERE video_id = ? AND asset_type IN ('slide_image', 'grid_image')
         `).bind(videoId).run();
-        log.assetGenerationWorkflow.info(reqId, 'Deleted existing grid assets', { videoId });
+        log.assetGenerationWorkflow.info(reqId, 'Deleted existing image assets', { videoId });
 
-        for (let i = 0; i < gridImages.length; i++) {
-          const img = gridImages[i];
-          const data = Uint8Array.from(atob(img.base64), c => c.charCodeAt(0));
-          const { key, size } = await r2.uploadAsset(videoId, 'grid_image', i, data.buffer, img.mimeType);
+        // Upload individual slides
+        for (const slide of result.slides) {
+          const data = Uint8Array.from(atob(slide.base64), c => c.charCodeAt(0));
+          const { key, size, publicUrl } = await r2.uploadAsset(slide.ulid, data.buffer, slide.mimeType);
 
           await this.env.DB.prepare(`
-            INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, mime_type, file_size, metadata)
-            VALUES (?, 'grid_image', ?, ?, ?, ?, ?)
-          `).bind(videoId, i, key, img.mimeType, size, JSON.stringify(img.metadata)).run();
+            INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, public_url, mime_type, file_size, metadata, generation_type)
+            VALUES (?, 'slide_image', ?, ?, ?, ?, ?, ?, 'individual')
+          `).bind(videoId, slide.metadata.slideIndex, key, publicUrl, slide.mimeType, size, JSON.stringify(slide.metadata)).run();
 
-          log.assetGenerationWorkflow.info(reqId, `Grid ${i} uploaded`, { videoId, key, size });
+          log.assetGenerationWorkflow.info(reqId, `Slide image ${slide.metadata.slideIndex} uploaded`, {
+            videoId,
+            ulid: slide.ulid,
+            key,
+            size,
+            publicUrl
+          });
         }
+
+        // Upload grids
+        for (const grid of result.grids) {
+          const data = Uint8Array.from(atob(grid.base64), c => c.charCodeAt(0));
+          const { key, size, publicUrl } = await r2.uploadAsset(grid.ulid, data.buffer, grid.mimeType);
+
+          await this.env.DB.prepare(`
+            INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, public_url, mime_type, file_size, metadata)
+            VALUES (?, 'grid_image', ?, ?, ?, ?, ?, ?)
+          `).bind(videoId, grid.metadata.gridIndex, key, publicUrl, grid.mimeType, size, JSON.stringify(grid.metadata)).run();
+
+          log.assetGenerationWorkflow.info(reqId, `Grid ${grid.metadata.gridIndex} uploaded`, {
+            videoId,
+            ulid: grid.ulid,
+            key,
+            size,
+            publicUrl
+          });
+        }
+
+        // Return only count to minimize step output size
+        return result.grids.length;
+      });
+      log.assetGenerationWorkflow.info(reqId, 'Step completed', { step: 'generate-grid-images', gridCount });
+
+      // Step 5: Collect ULIDs from uploaded assets
+      const { gridImageAssetIds, slideImageAssetIds } = await step.do('collect-ulids', async () => {
+        // Collect grid_image ULIDs
+        const gridResult = await this.env.DB.prepare(`
+          SELECT r2_key FROM video_assets
+          WHERE video_id = ? AND asset_type = 'grid_image'
+          ORDER BY asset_index
+        `).bind(videoId).all<{ r2_key: string }>();
+
+        const gridImageAssetIds = gridResult.results
+          .map(row => {
+            const match = row.r2_key.match(/^([0-9A-HJKMNP-TV-Z]{26})\./);
+            return match ? match[1] : null;
+          })
+          .filter((id): id is string => id !== null);
+
+        // Collect slide_image ULIDs
+        const slideResult = await this.env.DB.prepare(`
+          SELECT r2_key FROM video_assets
+          WHERE video_id = ? AND asset_type = 'slide_image'
+          ORDER BY asset_index
+        `).bind(videoId).all<{ r2_key: string }>();
+
+        const slideImageAssetIds = slideResult.results
+          .map(row => {
+            const match = row.r2_key.match(/^([0-9A-HJKMNP-TV-Z]{26})\./);
+            return match ? match[1] : null;
+          })
+          .filter((id): id is string => id !== null);
+
+        log.assetGenerationWorkflow.info(reqId, 'Collected ULIDs', {
+          videoId,
+          gridCount: gridImageAssetIds.length,
+          slideCount: slideImageAssetIds.length
+        });
+
+        return { gridImageAssetIds, slideImageAssetIds };
       });
 
       // Step 6: Generate and upload audio for each slide
       // CRITICAL: Generate and upload each slide individually to avoid 1MiB step output limit
-      const audioCount = await step.do('generate-and-upload-audio', {
+      const { audioCount, slideAudioAssetIds } = await step.do('generate-and-upload-audio', {
         retries: {
           limit: 3,
           delay: '5 seconds',
@@ -213,6 +274,7 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
         log.assetGenerationWorkflow.info(reqId, 'Deleted existing audio assets', { videoId });
 
         let uploadedCount = 0;
+        const audioULIDs: string[] = [];
 
         for (let i = 0; i < script.slides.length; i++) {
           const audio = await assetGen.generateSlideAudio(
@@ -222,24 +284,25 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
           // Set the correct slideIndex in metadata
           audio.metadata.slideIndex = i;
 
-          // Upload immediately to R2 to avoid storing in step output
+          // Upload with ULID-based naming
           const data = Uint8Array.from(atob(audio.base64), c => c.charCodeAt(0));
-          const { key, size } = await r2.uploadAsset(videoId, 'slide_audio', i, data.buffer, audio.mimeType);
+          const { key, size, publicUrl } = await r2.uploadAsset(audio.ulid, data.buffer, audio.mimeType);
 
           await this.env.DB.prepare(`
-            INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, mime_type, file_size, metadata)
-            VALUES (?, 'slide_audio', ?, ?, ?, ?, ?)
-          `).bind(videoId, i, key, audio.mimeType, size, JSON.stringify(audio.metadata)).run();
+            INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, public_url, mime_type, file_size, metadata)
+            VALUES (?, 'slide_audio', ?, ?, ?, ?, ?, ?)
+          `).bind(videoId, i, key, publicUrl, audio.mimeType, size, JSON.stringify(audio.metadata)).run();
 
+          audioULIDs.push(audio.ulid);
           uploadedCount++;
-          log.assetGenerationWorkflow.info(reqId, `Slide audio ${i} generated and uploaded`, { videoId, key, size });
+          log.assetGenerationWorkflow.info(reqId, `Slide audio ${i} generated and uploaded`, { videoId, ulid: audio.ulid, key, size });
         }
 
-        return uploadedCount;
+        return { audioCount: uploadedCount, slideAudioAssetIds: audioULIDs };
       });
       log.assetGenerationWorkflow.info(reqId, 'Step completed', { step: 'generate-and-upload-audio', audioCount });
 
-      // Step 8: Log costs
+      // Step 7: Log costs
       await step.do('log-costs', {
         retries: {
           limit: 3,
@@ -247,7 +310,6 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
           backoff: 'constant'
         }
       }, async () => {
-        const gridCount = gridImages.length;
         const imageCost = gridCount * (video.image_model === 'gemini-2.5-flash-image' ? 0.039 : 0.134);
 
         await this.env.DB.prepare(`
@@ -258,7 +320,7 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
         log.assetGenerationWorkflow.info(reqId, 'Costs logged', { imageCost });
       });
 
-      // Step 9: Update status to 'generated'
+      // Step 8: Update status to 'generated' with ULID asset IDs
       await step.do('complete', {
         retries: {
           limit: 3,
@@ -275,22 +337,38 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
 
         await this.env.DB.prepare(`
           UPDATE videos
-          SET asset_status = 'generated', total_cost = ?, updated_at = datetime('now')
+          SET asset_status = 'generated',
+              slide_image_asset_ids = ?,
+              slide_audio_asset_ids = ?,
+              total_cost = ?,
+              updated_at = datetime('now')
           WHERE id = ?
-        `).bind(totalCost, videoId).run();
+        `).bind(
+          JSON.stringify(slideImageAssetIds),
+          JSON.stringify(slideAudioAssetIds),
+          totalCost,
+          videoId
+        ).run();
+
+        log.assetGenerationWorkflow.info(reqId, 'Video status updated', {
+          videoId,
+          slideImageAssetIds,
+          slideAudioAssetIds,
+          totalCost
+        });
       });
 
       log.assetGenerationWorkflow.info(reqId, 'Workflow completed', {
         durationMs: Date.now() - startTime,
         videoId,
-        gridCount: gridImages.length,
+        gridCount,
         slideCount: script.slides.length
       });
 
       return {
         success: true,
         videoId,
-        gridCount: gridImages.length,
+        gridCount,
         slideCount: script.slides.length
       };
     } catch (error) {

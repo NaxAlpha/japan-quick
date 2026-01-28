@@ -4,7 +4,7 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
-import { Image } from 'cross-image';
+import { Image, decodeBase64, encodeBase64 } from 'cross-image';
 import { ulid } from 'ulid';
 import type { VideoScript, ImageModelId, TTSModelId, TTSVoice, GridImageMetadata, SlideAudioMetadata, ImageSize } from '../types/video.js';
 import { log } from '../lib/logger.js';
@@ -140,10 +140,28 @@ export class AssetGeneratorService {
     log.assetGen.info(reqId, 'Starting grid splitting with cross-image', { gridCount: grids.length });
 
     for (const grid of grids) {
-      const gridBuffer = this.base64ToArrayBuffer(grid.base64);
+      // Use cross-image's decodeBase64 to convert base64 to Uint8Array
+      // This ensures the data is in the format cross-image expects
+      let gridImage;
+      try {
+        const gridBytes = decodeBase64(grid.base64);
+        log.assetGen.debug(reqId, 'Decoding grid image', {
+          byteLength: gridBytes.length,
+          base64Length: grid.base64.length,
+          mimeType: grid.mimeType,
+          firstBytes: Array.from(gridBytes.slice(0, 8)) // First 8 bytes for format detection
+        });
 
-      // Decode PNG using cross-image
-      const gridImage = await Image.decode(gridBuffer);
+        // Decode PNG using cross-image
+        gridImage = await Image.decode(gridBytes);
+      } catch (decodeError) {
+        log.assetGen.error(reqId, 'Failed to decode image with cross-image', decodeError as Error, {
+          base64Length: grid.base64.length,
+          mimeType: grid.mimeType,
+          error: (decodeError as Error).message
+        });
+        throw new Error(`Failed to decode grid image: ${decodeError}`);
+      }
 
       const { positions } = grid.metadata;
 
@@ -167,14 +185,53 @@ export class AssetGeneratorService {
         const sourceX = pos.cropRect.x;
         const sourceY = pos.cropRect.y;
 
-        // Crop using cross-image's built-in crop method
-        const cropped = gridImage.crop(sourceX, sourceY, cropWidth, cropHeight);
+        log.assetGen.debug(reqId, `Cropping slide ${pos.slideIndex}`, {
+          cropWidth,
+          cropHeight,
+          sourceX,
+          sourceY,
+          gridWidth: gridImage.width,
+          gridHeight: gridImage.height
+        });
+
+        // CRITICAL: Clone the grid image before cropping because crop() mutates in place!
+        // Each crop needs to start from the original grid, not a previously cropped version
+        const gridClone = gridImage.clone();
+
+        // Crop the cloned image
+        const cropped = gridClone.crop(sourceX, sourceY, cropWidth, cropHeight);
+
+        log.assetGen.debug(reqId, `Cropped slide ${pos.slideIndex}`, {
+          cropWidth,
+          cropHeight,
+          sourceX,
+          sourceY,
+          croppedWidth: cropped.width,
+          croppedHeight: cropped.height
+        });
 
         // Encode back to PNG
-        const slideBuffer = await cropped.encode('png');
+        let slideBuffer;
+        try {
+          slideBuffer = await cropped.encode('png');
+          log.assetGen.debug(reqId, `Encoded slide ${pos.slideIndex}`, {
+            bufferByteLength: slideBuffer.byteLength
+          });
+        } catch (encodeError) {
+          log.assetGen.error(reqId, `Failed to encode slide ${pos.slideIndex}`, encodeError as Error);
+          throw encodeError;
+        }
 
-        // Convert to base64
-        const slideBase64 = this.arrayBufferToBase64(slideBuffer);
+        // Convert to base64 using cross-image's encodeBase64
+        let slideBase64;
+        try {
+          slideBase64 = encodeBase64(new Uint8Array(slideBuffer));
+        } catch (base64Error) {
+          log.assetGen.error(reqId, `Failed to encode base64 for slide ${pos.slideIndex}`, base64Error as Error, {
+            bufferByteLength: slideBuffer.byteLength
+          });
+          throw base64Error;
+        }
 
         const slideUlid = ulid();
         const durationMs = Date.now() - startTime;
@@ -202,30 +259,6 @@ export class AssetGeneratorService {
     allSlides.sort((a, b) => a.metadata.slideIndex - b.metadata.slideIndex);
 
     return allSlides;
-  }
-
-  /**
-   * Convert base64 string to ArrayBuffer
-   */
-  private base64ToArrayBuffer(base64: string): ArrayBuffer {
-    const binaryString = atob(base64);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-    return bytes.buffer;
-  }
-
-  /**
-   * Convert ArrayBuffer to base64 string
-   */
-  private arrayBufferToBase64(buffer: ArrayBuffer): string {
-    const bytes = new Uint8Array(buffer);
-    let binary = '';
-    for (let i = 0; i < bytes.length; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return btoa(binary);
   }
 
   /**
