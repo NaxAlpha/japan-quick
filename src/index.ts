@@ -17,7 +17,9 @@ export {
   ArticleScraperWorkflow,
   ArticleRescrapeWorkflow,
   VideoSelectionWorkflow,
-  VideoRenderWorkflow
+  VideoRenderWorkflow,
+  ScriptGenerationWorkflow,
+  AssetGenerationWorkflow
 } from './workflows/index.js';
 
 // Export Sandbox class for Cloudflare Workers (SQLite DO for containers)

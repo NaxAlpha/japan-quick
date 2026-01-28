@@ -3,11 +3,15 @@
  * GET /api/videos - List 10 most recent videos (supports ?page=N)
  * GET /api/videos/:id - Get single video with assets
  * DELETE /api/videos/:id - Delete video and cost logs
- * POST /api/videos/:id/generate-script - Generate video script
- * POST /api/videos/:id/generate-assets - Generate video assets (images + audio)
+ * POST /api/videos/:id/generate-script - Trigger script generation workflow
+ * POST /api/videos/:id/generate-assets - Trigger asset generation workflow
+ * GET /api/videos/:id/script/status - Get script generation status
+ * GET /api/videos/:id/assets/status - Get asset generation status
  * GET /api/videos/:id/assets/:assetId - Serve asset from R2
  * POST /api/videos/trigger - Manual workflow trigger
  * GET /api/videos/status/:workflowId - Workflow status
+ * POST /api/videos/:id/render - Trigger video render workflow
+ * GET /api/videos/:id/render/status - Poll render status
  */
 
 import { Hono } from 'hono';
@@ -15,12 +19,12 @@ import type { Env } from '../types/news.js';
 import type { Video, ParsedVideo, CostLog, VideoAsset, ParsedVideoAsset, VideoScript, TTS_VOICES } from '../types/video.js';
 import type { VideoSelectionParams, VideoSelectionResult } from '../workflows/video-selection.workflow.js';
 import type { VideoRenderParams, VideoRenderResult } from '../workflows/video-render.workflow.js';
+import type { ScriptGenerationParams, ScriptGenerationResult } from '../workflows/script-generation.workflow.js';
+import type { AssetGenerationParams, AssetGenerationResult } from '../workflows/asset-generation.workflow.js';
 import type { Article, ArticleVersion, ArticleComment } from '../types/article.js';
 import { parseVideo, TTS_VOICES as TTSVoicesArray } from '../types/video.js';
-import { log, generateRequestId } from '../lib/logger.js';
-import { GeminiService } from '../services/gemini.js';
-import { AssetGeneratorService } from '../services/asset-generator.js';
 import { R2StorageService } from '../services/r2-storage.js';
+import { log, generateRequestId } from '../lib/logger.js';
 
 const videoRoutes = new Hono<{ Bindings: Env['Bindings'] }>();
 
@@ -108,11 +112,12 @@ videoRoutes.get('/:id', async (c) => {
       SELECT * FROM video_assets WHERE video_id = ? ORDER BY asset_type, asset_index
     `).bind(id).all();
 
+    // Use direct R2 public URLs for browser <img> and <audio> tags
     const assets: ParsedVideoAsset[] = (assetsResult.results as VideoAsset[]).map(asset => ({
       id: asset.id,
       assetType: asset.asset_type,
       assetIndex: asset.asset_index,
-      url: `/api/videos/${id}/assets/${asset.id}`,
+      url: `${c.env.ASSETS_PUBLIC_URL}/${asset.r2_key}`,
       mimeType: asset.mime_type,
       fileSize: asset.file_size,
       metadata: asset.metadata ? JSON.parse(asset.metadata) : null
@@ -186,7 +191,7 @@ videoRoutes.delete('/:id', async (c) => {
   }
 });
 
-// POST /api/videos/:id/generate-script - Generate video script
+// POST /api/videos/:id/generate-script - Trigger script generation workflow
 videoRoutes.post('/:id/generate-script', async (c) => {
   const reqId = generateRequestId();
   const startTime = Date.now();
@@ -196,8 +201,8 @@ videoRoutes.post('/:id/generate-script', async (c) => {
   try {
     // 1. Validate video exists and can generate
     const video = await c.env.DB.prepare(`
-      SELECT * FROM videos WHERE id = ?
-    `).bind(id).first<Video>();
+      SELECT script_status FROM videos WHERE id = ?
+    `).bind(id).first<{ script_status: string }>();
 
     if (!video) {
       log.videoRoutes.warn(reqId, 'Video not found', { id });
@@ -215,154 +220,25 @@ videoRoutes.post('/:id/generate-script', async (c) => {
       }, 400);
     }
 
-    // 2. Set script_status = 'generating'
-    await c.env.DB.prepare(`
-      UPDATE videos
-      SET script_status = 'generating', script_error = NULL, updated_at = datetime('now')
-      WHERE id = ?
-    `).bind(id).run();
+    // 2. Trigger ScriptGenerationWorkflow
+    const params: ScriptGenerationParams = { videoId: parseInt(id) };
 
-    log.videoRoutes.info(reqId, 'Script status set to generating', { videoId: id });
-
-    // 3. Fetch article content, comments, images from DB
-    const articlePickIds = video.articles ? JSON.parse(video.articles) : [];
-
-    if (articlePickIds.length === 0) {
-      throw new Error('No articles selected for this video');
-    }
-
-    log.videoRoutes.info(reqId, 'Fetching article data', { articleCount: articlePickIds.length });
-
-    const articlesWithContent = [];
-    for (const pickId of articlePickIds) {
-      // Fetch article
-      const article = await c.env.DB.prepare(`
-        SELECT * FROM articles WHERE pick_id = ?
-      `).bind(pickId).first<Article>();
-
-      if (!article) {
-        log.videoRoutes.warn(reqId, 'Article not found', { pickId });
-        continue;
-      }
-
-      // Fetch latest version
-      const version = await c.env.DB.prepare(`
-        SELECT * FROM article_versions
-        WHERE article_id = ?
-        ORDER BY version DESC
-        LIMIT 1
-      `).bind(article.id).first<ArticleVersion>();
-
-      if (!version) {
-        log.videoRoutes.warn(reqId, 'No article version found', { pickId, articleId: article.id });
-        continue;
-      }
-
-      // Fetch comments
-      const commentsResult = await c.env.DB.prepare(`
-        SELECT * FROM article_comments
-        WHERE article_id = ? AND version = ?
-        ORDER BY likes DESC
-        LIMIT 20
-      `).bind(article.id, version.version).all();
-
-      const comments = (commentsResult.results as ArticleComment[]).map(comment => ({
-        author: comment.author,
-        content: comment.content,
-        likes: comment.likes,
-        replies: comment.replies ? JSON.parse(comment.replies) : []
-      }));
-
-      // Parse images
-      const images = version.images ? JSON.parse(version.images) : [];
-
-      articlesWithContent.push({
-        pickId: article.pickId,
-        title: article.title || 'Untitled',
-        content: version.content,
-        contentText: version.contentText,
-        comments,
-        images
-      });
-    }
-
-    if (articlesWithContent.length === 0) {
-      throw new Error('No article content available');
-    }
-
-    log.videoRoutes.info(reqId, 'Article data fetched', { count: articlesWithContent.length });
-
-    // 4. Call geminiService.generateScript()
-    const geminiService = new GeminiService(c.env.GOOGLE_API_KEY);
-    const result = await geminiService.generateScript(reqId, {
-      videoType: video.video_type,
-      articles: articlesWithContent
+    const instance = await c.env.SCRIPT_GENERATION_WORKFLOW.create({
+      id: `script-gen-${id}-${Date.now()}`,
+      params
     });
 
-    const { script, tokenUsage } = result;
-
-    log.videoRoutes.info(reqId, 'Script generated successfully', {
-      slideCount: script.slides.length,
-      inputTokens: tokenUsage.inputTokens,
-      outputTokens: tokenUsage.outputTokens
-    });
-
-    // 5. Log cost to cost_logs
-    const modelId = 'gemini-3-flash-preview';
-    const inputCostPerMillion = 0.50;
-    const outputCostPerMillion = 3.00;
-    const cost = (tokenUsage.inputTokens / 1_000_000) * inputCostPerMillion +
-                 (tokenUsage.outputTokens / 1_000_000) * outputCostPerMillion;
-
-    await c.env.DB.prepare(`
-      INSERT INTO cost_logs (video_id, log_type, model_id, attempt_id, input_tokens, output_tokens, cost)
-      VALUES (?, 'script-generation', ?, 1, ?, ?, ?)
-    `).bind(id, modelId, tokenUsage.inputTokens, tokenUsage.outputTokens, cost).run();
-
-    log.videoRoutes.info(reqId, 'Cost logged', { cost });
-
-    // 6. Update video with script and script_status = 'generated'
-    const scriptJson = JSON.stringify(script);
-    await c.env.DB.prepare(`
-      UPDATE videos
-      SET script = ?, script_status = 'generated', updated_at = datetime('now')
-      WHERE id = ?
-    `).bind(scriptJson, id).run();
-
-    // 7. Update total_cost (sum of all cost logs)
-    const totalCostResult = await c.env.DB.prepare(`
-      SELECT SUM(cost) as total FROM cost_logs WHERE video_id = ?
-    `).bind(id).first<{ total: number }>();
-
-    const totalCost = totalCostResult?.total || 0;
-
-    await c.env.DB.prepare(`
-      UPDATE videos SET total_cost = ? WHERE id = ?
-    `).bind(totalCost, id).run();
-
-    log.videoRoutes.info(reqId, 'Video updated with script', { totalCost });
-
-    // 8. Return updated video
-    const updatedVideo = await c.env.DB.prepare(`
-      SELECT * FROM videos WHERE id = ?
-    `).bind(id).first<Video>();
+    log.videoRoutes.info(reqId, 'Workflow created', { workflowId: instance.id, videoId: id });
 
     return c.json({
       success: true,
-      video: parseVideo(updatedVideo!)
+      workflowId: instance.id
     });
   } catch (error) {
-    // On error, set script_status = 'error' and store error message
-    await c.env.DB.prepare(`
-      UPDATE videos
-      SET script_status = 'error', script_error = ?, updated_at = datetime('now')
-      WHERE id = ?
-    `).bind(error instanceof Error ? error.message : 'Unknown error', id).run();
-
-    log.videoRoutes.error(reqId, 'Script generation failed', error as Error);
+    log.videoRoutes.error(reqId, 'Request failed', error as Error);
     return c.json({
       success: false,
-      error: error instanceof Error ? error.message : 'Failed to generate script'
+      error: error instanceof Error ? error.message : 'Failed to create workflow'
     }, 500);
   } finally {
     const durationMs = Date.now() - startTime;
@@ -370,198 +246,200 @@ videoRoutes.post('/:id/generate-script', async (c) => {
   }
 });
 
-// POST /api/videos/:id/generate-assets - Generate grid images and slide audio
-videoRoutes.post('/:id/generate-assets', async (c) => {
+// GET /api/videos/:id/script/status - Get script generation status
+videoRoutes.get('/:id/script/status', async (c) => {
   const reqId = generateRequestId();
   const startTime = Date.now();
-  const id = parseInt(c.req.param('id'));
-  log.assetRoutes.info(reqId, 'Asset generation requested', { videoId: id });
+  const id = c.req.param('id');
+  log.videoRoutes.info(reqId, 'Request received', { method: 'GET', path: `/:id/script/status`, id });
 
   try {
-    // 1. Fetch video and validate
-    const video = await c.env.DB.prepare('SELECT * FROM videos WHERE id = ?').bind(id).first<Video>();
+    const video = await c.env.DB.prepare(`
+      SELECT script_status, script_error, script
+      FROM videos WHERE id = ?
+    `).bind(id).first<{
+      script_status: string;
+      script_error: string | null;
+      script: string | null;
+    }>();
+
     if (!video) {
-      log.assetRoutes.warn(reqId, 'Video not found', { videoId: id });
-      return c.json({ success: false, error: 'Video not found' }, 404);
-    }
-    if (video.script_status !== 'generated') {
-      log.assetRoutes.warn(reqId, 'Script not generated yet', { videoId: id, scriptStatus: video.script_status });
-      return c.json({ success: false, error: 'Script not generated yet' }, 400);
-    }
-    if (video.asset_status === 'generating') {
-      log.assetRoutes.warn(reqId, 'Asset generation already in progress', { videoId: id });
-      return c.json({ success: false, error: 'Asset generation in progress' }, 409);
+      log.videoRoutes.warn(reqId, 'Video not found', { id });
+      return c.json({
+        success: false,
+        error: 'Video not found'
+      }, 404);
     }
 
-    // 2. Select random voice if not already set
-    const ttsVoice = video.tts_voice || TTSVoicesArray[Math.floor(Math.random() * TTSVoicesArray.length)];
+    // Check for stale 'generating' status (> 10 minutes)
+    if (video.script_status === 'generating') {
+      const updatedResult = await c.env.DB.prepare(`
+        SELECT updated_at FROM videos WHERE id = ?
+      `).bind(id).first<{ updated_at: string }>();
 
-    // 3. Update status to generating
-    await c.env.DB.prepare(`
-      UPDATE videos SET asset_status = 'generating', tts_voice = ?, updated_at = datetime('now')
-      WHERE id = ?
-    `).bind(ttsVoice, id).run();
+      if (updatedResult) {
+        const updatedAt = new Date(updatedResult.updated_at);
+        const staleThreshold = 10 * 60 * 1000; // 10 minutes
+        const now = new Date();
 
-    log.assetRoutes.info(reqId, 'Asset status set to generating', { videoId: id, ttsVoice });
+        if (now.getTime() - updatedAt.getTime() > staleThreshold) {
+          // Auto-reset stale status
+          await c.env.DB.prepare(`
+            UPDATE videos
+            SET script_status = 'pending', script_error = 'Generation timed out (stale status)', updated_at = datetime('now')
+            WHERE id = ?
+          `).bind(id).run();
 
-    const script: VideoScript = JSON.parse(video.script!);
-
-    // 4. Fetch article reference images
-    const articleIds = JSON.parse(video.articles!);
-    const referenceImages: string[] = [];
-
-    // Import the image fetcher utility
-    const { fetchImagesAsBase64 } = await import('../lib/image-fetcher.js');
-
-    for (const pickId of articleIds) {
-      const article = await c.env.DB.prepare(`
-        SELECT id FROM articles WHERE pick_id = ?
-      `).bind(pickId).first<{ id: number }>();
-
-      if (!article) continue;
-
-      const version = await c.env.DB.prepare(`
-        SELECT images FROM article_versions
-        WHERE article_id = ?
-        ORDER BY version DESC
-        LIMIT 1
-      `).bind(article.id).first<{ images: string | null }>();
-
-      if (version?.images) {
-        const images = JSON.parse(version.images) as Array<{ url: string }>;
-        const imageUrls = images.map(img => img.url);
-
-        // Fetch images and convert to base64 (max 3 per article)
-        const fetchedImages = await fetchImagesAsBase64(imageUrls, 3);
-
-        // Store as JSON strings for the asset generator
-        for (const img of fetchedImages) {
-          referenceImages.push(JSON.stringify(img));
+          video.script_status = 'pending';
+          video.script_error = 'Generation timed out (stale status)';
         }
-
-        log.assetRoutes.info(reqId, 'Fetched reference images', {
-          pickId,
-          fetchedCount: fetchedImages.length,
-          totalCount: referenceImages.length
-        });
       }
     }
 
-    log.assetRoutes.info(reqId, 'Total reference images collected', {
-      totalCount: referenceImages.length
+    return c.json({
+      success: true,
+      status: video.script_status,
+      error: video.script_error,
+      hasScript: !!video.script
     });
-
-    // 5. Initialize services
-    const assetGen = new AssetGeneratorService(c.env.GOOGLE_API_KEY);
-    const r2 = new R2StorageService(c.env.ASSETS_BUCKET);
-
-    // 6. Generate grid images and individual slide images
-    log.assetRoutes.info(reqId, 'Generating grid images', { videoId: id, videoType: video.video_type });
-    const { grids, slides } = await assetGen.generateGridImages(
-      reqId, script, video.video_type, video.image_model, referenceImages
-    );
-
-    const gridImageAssetIds: string[] = [];
-    const slideImageAssetIds: string[] = [];
-
-    // 7. Upload grid images and create records
-    for (let i = 0; i < grids.length; i++) {
-      const img = grids[i];
-      const data = Uint8Array.from(atob(img.base64), c => c.charCodeAt(0));
-      const { key, size, publicUrl } = await r2.uploadAsset(img.ulid, data.buffer, img.mimeType);
-
-      await c.env.DB.prepare(`
-        INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, public_url, mime_type, file_size, metadata)
-        VALUES (?, 'grid_image', ?, ?, ?, ?, ?, ?)
-      `).bind(id, i, key, publicUrl, img.mimeType, size, JSON.stringify(img.metadata)).run();
-
-      gridImageAssetIds.push(img.ulid);
-
-      log.assetRoutes.info(reqId, `Grid ${i} uploaded`, { videoId: id, ulid: img.ulid, key, size });
-    }
-
-    // 7b. Upload individual slide images and create records
-    for (let i = 0; i < slides.length; i++) {
-      const slide = slides[i];
-      const data = Uint8Array.from(atob(slide.base64), c => c.charCodeAt(0));
-      const { key, size, publicUrl } = await r2.uploadAsset(slide.ulid, data.buffer, slide.mimeType);
-
-      await c.env.DB.prepare(`
-        INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, public_url, mime_type, file_size, metadata, generation_type)
-        VALUES (?, 'slide_image', ?, ?, ?, ?, ?, ?, 'individual')
-      `).bind(id, slide.metadata.slideIndex, key, publicUrl, slide.mimeType, size, JSON.stringify(slide.metadata)).run();
-
-      slideImageAssetIds.push(slide.ulid);
-
-      log.assetRoutes.info(reqId, `Slide image ${slide.metadata.slideIndex} uploaded`, { videoId: id, ulid: slide.ulid, key, size });
-    }
-
-    // 8. Generate and upload slide audio
-    const slideAudioAssetIds: string[] = [];
-    log.assetRoutes.info(reqId, 'Generating slide audio', { videoId: id, slideCount: script.slides.length });
-    for (let i = 0; i < script.slides.length; i++) {
-      const audio = await assetGen.generateSlideAudio(
-        reqId, script.slides[i].audioNarration, ttsVoice, video.tts_model
-      );
-
-      // Set the correct slideIndex in metadata
-      audio.metadata.slideIndex = i;
-
-      const data = Uint8Array.from(atob(audio.base64), c => c.charCodeAt(0));
-      const { key, size, publicUrl } = await r2.uploadAsset(audio.ulid, data.buffer, audio.mimeType);
-
-      await c.env.DB.prepare(`
-        INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, public_url, mime_type, file_size, metadata)
-        VALUES (?, 'slide_audio', ?, ?, ?, ?, ?, ?)
-      `).bind(id, i, key, publicUrl, audio.mimeType, size, JSON.stringify(audio.metadata)).run();
-
-      slideAudioAssetIds.push(audio.ulid);
-
-      log.assetRoutes.info(reqId, `Slide audio ${i} uploaded`, { videoId: id, ulid: audio.ulid, key, size, durationMs: audio.metadata.durationMs });
-    }
-
-    // 9. Log costs
-    const gridCount = grids.length;
-    const imageCost = gridCount * (video.image_model === 'gemini-2.5-flash-image' ? 0.039 : 0.134);
-    await c.env.DB.prepare(`
-      INSERT INTO cost_logs (video_id, log_type, model_id, input_tokens, output_tokens, cost)
-      VALUES (?, 'image-generation', ?, 0, 0, ?)
-    `).bind(id, video.image_model, imageCost).run();
-
-    // Note: TTS cost logging would require token counts from Gemini API response
-    // For now we're not logging TTS costs as the API doesn't return token usage
-
-    // 10. Update video status
-    const totalCostResult = await c.env.DB.prepare(`
-      SELECT SUM(cost) as total FROM cost_logs WHERE video_id = ?
-    `).bind(id).first<{ total: number }>();
-
-    const totalCost = totalCostResult?.total || 0;
-
-    await c.env.DB.prepare(`
-      UPDATE videos SET asset_status = 'generated', slide_audio_asset_ids = ?, slide_image_asset_ids = ?, total_cost = ?, updated_at = datetime('now')
-      WHERE id = ?
-    `).bind(JSON.stringify(slideAudioAssetIds), JSON.stringify(slideImageAssetIds), totalCost, id).run();
-
-    log.assetRoutes.info(reqId, 'Asset generation completed', {
-      videoId: id,
-      gridCount,
-      slideCount: script.slides.length,
-      gridImageAssetIds,
-      slideImageAssetIds,
-      slideAudioAssetIds,
-      totalCost,
-      durationMs: Date.now() - startTime
-    });
-
-    return c.json({ success: true });
   } catch (error) {
-    log.assetRoutes.error(reqId, 'Asset generation failed', error as Error, { videoId: id });
-    await c.env.DB.prepare(`
-      UPDATE videos SET asset_status = 'error', asset_error = ?, updated_at = datetime('now')
-      WHERE id = ?
-    `).bind((error as Error).message, id).run();
-    return c.json({ success: false, error: (error as Error).message }, 500);
+    log.videoRoutes.error(reqId, 'Request failed', error as Error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get script status'
+    }, 500);
+  } finally {
+    const durationMs = Date.now() - startTime;
+    log.videoRoutes.info(reqId, 'Request completed', { durationMs });
+  }
+});
+
+// POST /api/videos/:id/generate-assets - Trigger asset generation workflow
+videoRoutes.post('/:id/generate-assets', async (c) => {
+  const reqId = generateRequestId();
+  const startTime = Date.now();
+  const id = c.req.param('id');
+  log.videoRoutes.info(reqId, 'Request received', { method: 'POST', path: `/:id/generate-assets`, id });
+
+  try {
+    // 1. Validate video exists and can generate
+    const video = await c.env.DB.prepare(`
+      SELECT script_status, asset_status FROM videos WHERE id = ?
+    `).bind(id).first<{ script_status: string; asset_status: string }>();
+
+    if (!video) {
+      log.videoRoutes.warn(reqId, 'Video not found', { id });
+      return c.json({
+        success: false,
+        error: 'Video not found'
+      }, 404);
+    }
+
+    if (video.script_status !== 'generated') {
+      log.videoRoutes.warn(reqId, 'Script not generated yet', { id, scriptStatus: video.script_status });
+      return c.json({
+        success: false,
+        error: 'Script not generated yet'
+      }, 400);
+    }
+
+    if (video.asset_status === 'generating') {
+      log.videoRoutes.warn(reqId, 'Asset generation already in progress', { id });
+      return c.json({
+        success: false,
+        error: 'Asset generation in progress'
+      }, 409);
+    }
+
+    // 2. Trigger AssetGenerationWorkflow
+    const params: AssetGenerationParams = { videoId: parseInt(id) };
+
+    const instance = await c.env.ASSET_GENERATION_WORKFLOW.create({
+      id: `asset-gen-${id}-${Date.now()}`,
+      params
+    });
+
+    log.videoRoutes.info(reqId, 'Workflow created', { workflowId: instance.id, videoId: id });
+
+    return c.json({
+      success: true,
+      workflowId: instance.id
+    });
+  } catch (error) {
+    log.videoRoutes.error(reqId, 'Request failed', error as Error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to create workflow'
+    }, 500);
+  } finally {
+    const durationMs = Date.now() - startTime;
+    log.videoRoutes.info(reqId, 'Request completed', { durationMs });
+  }
+});
+
+// GET /api/videos/:id/assets/status - Get asset generation status
+videoRoutes.get('/:id/assets/status', async (c) => {
+  const reqId = generateRequestId();
+  const startTime = Date.now();
+  const id = c.req.param('id');
+  log.videoRoutes.info(reqId, 'Request received', { method: 'GET', path: `/:id/assets/status`, id });
+
+  try {
+    const video = await c.env.DB.prepare(`
+      SELECT asset_status, asset_error
+      FROM videos WHERE id = ?
+    `).bind(id).first<{
+      asset_status: string;
+      asset_error: string | null;
+    }>();
+
+    if (!video) {
+      log.videoRoutes.warn(reqId, 'Video not found', { id });
+      return c.json({
+        success: false,
+        error: 'Video not found'
+      }, 404);
+    }
+
+    // Check for stale 'generating' status (> 10 minutes)
+    if (video.asset_status === 'generating') {
+      const updatedResult = await c.env.DB.prepare(`
+        SELECT updated_at FROM videos WHERE id = ?
+      `).bind(id).first<{ updated_at: string }>();
+
+      if (updatedResult) {
+        const updatedAt = new Date(updatedResult.updated_at);
+        const staleThreshold = 10 * 60 * 1000; // 10 minutes
+        const now = new Date();
+
+        if (now.getTime() - updatedAt.getTime() > staleThreshold) {
+          // Auto-reset stale status
+          await c.env.DB.prepare(`
+            UPDATE videos
+            SET asset_status = 'pending', asset_error = 'Generation timed out (stale status)', updated_at = datetime('now')
+            WHERE id = ?
+          `).bind(id).run();
+
+          video.asset_status = 'pending';
+          video.asset_error = 'Generation timed out (stale status)';
+        }
+      }
+    }
+
+    return c.json({
+      success: true,
+      status: video.asset_status,
+      error: video.asset_error
+    });
+  } catch (error) {
+    log.videoRoutes.error(reqId, 'Request failed', error as Error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get asset status'
+    }, 500);
+  } finally {
+    const durationMs = Date.now() - startTime;
+    log.videoRoutes.info(reqId, 'Request completed', { durationMs });
   }
 });
 
@@ -748,6 +626,7 @@ videoRoutes.get('/:id/render/status', async (c) => {
       WHERE video_id = ? AND asset_type = 'rendered_video'
     `).bind(id).first<VideoAsset>();
 
+    // Use direct R2 public URL for rendered video
     return c.json({
       success: true,
       renderStatus: video.render_status,
@@ -756,7 +635,7 @@ videoRoutes.get('/:id/render/status', async (c) => {
       renderCompletedAt: video.render_completed_at,
       renderedVideo: renderedAsset ? {
         id: renderedAsset.id,
-        url: `/api/videos/${id}/assets/${renderedAsset.id}`,
+        url: `${c.env.ASSETS_PUBLIC_URL}/${renderedAsset.r2_key}`,
         mimeType: renderedAsset.mime_type,
         fileSize: renderedAsset.file_size,
         metadata: renderedAsset.metadata ? JSON.parse(renderedAsset.metadata) : null
