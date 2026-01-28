@@ -48,6 +48,7 @@ export type Env = {
   Bindings: {
     ADMIN_USERNAME: string;
     ADMIN_PASSWORD: string;
+    ASSETS_PUBLIC_URL: string;
     BROWSER: BrowserBinding | null;
     NEWS_CACHE: KVNamespace;
     DB: D1Database;

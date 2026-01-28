@@ -174,6 +174,12 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
       }, async () => {
         const r2 = new R2StorageService(this.env.ASSETS_BUCKET);
 
+        // DELETE existing grid_image assets for this video to prevent duplicates
+        await this.env.DB.prepare(`
+          DELETE FROM video_assets WHERE video_id = ? AND asset_type = 'grid_image'
+        `).bind(videoId).run();
+        log.assetGenerationWorkflow.info(reqId, 'Deleted existing grid assets', { videoId });
+
         for (let i = 0; i < gridImages.length; i++) {
           const img = gridImages[i];
           const data = Uint8Array.from(atob(img.base64), c => c.charCodeAt(0));
@@ -188,8 +194,9 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
         }
       });
 
-      // Step 6: Generate audio for each slide
-      const slideAudioResults = await step.do('generate-audio', {
+      // Step 6: Generate and upload audio for each slide
+      // CRITICAL: Generate and upload each slide individually to avoid 1MiB step output limit
+      const audioCount = await step.do('generate-and-upload-audio', {
         retries: {
           limit: 3,
           delay: '5 seconds',
@@ -197,7 +204,15 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
         }
       }, async () => {
         const assetGen = new AssetGeneratorService(this.env.GOOGLE_API_KEY);
-        const results = [];
+        const r2 = new R2StorageService(this.env.ASSETS_BUCKET);
+
+        // DELETE existing slide_audio assets for this video to prevent duplicates
+        await this.env.DB.prepare(`
+          DELETE FROM video_assets WHERE video_id = ? AND asset_type = 'slide_audio'
+        `).bind(videoId).run();
+        log.assetGenerationWorkflow.info(reqId, 'Deleted existing audio assets', { videoId });
+
+        let uploadedCount = 0;
 
         for (let i = 0; i < script.slides.length; i++) {
           const audio = await assetGen.generateSlideAudio(
@@ -207,35 +222,22 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
           // Set the correct slideIndex in metadata
           audio.metadata.slideIndex = i;
 
-          results.push({ index: i, audio });
-        }
-
-        return results;
-      });
-      log.assetGenerationWorkflow.info(reqId, 'Step completed', { step: 'generate-audio', audioCount: slideAudioResults.length });
-
-      // Step 7: Upload audio to R2
-      await step.do('upload-audio', {
-        retries: {
-          limit: 3,
-          delay: '3 seconds',
-          backoff: 'exponential'
-        }
-      }, async () => {
-        const r2 = new R2StorageService(this.env.ASSETS_BUCKET);
-
-        for (const { index, audio } of slideAudioResults) {
+          // Upload immediately to R2 to avoid storing in step output
           const data = Uint8Array.from(atob(audio.base64), c => c.charCodeAt(0));
-          const { key, size } = await r2.uploadAsset(videoId, 'slide_audio', index, data.buffer, audio.mimeType);
+          const { key, size } = await r2.uploadAsset(videoId, 'slide_audio', i, data.buffer, audio.mimeType);
 
           await this.env.DB.prepare(`
             INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, mime_type, file_size, metadata)
             VALUES (?, 'slide_audio', ?, ?, ?, ?, ?)
-          `).bind(videoId, index, key, audio.mimeType, size, JSON.stringify(audio.metadata)).run();
+          `).bind(videoId, i, key, audio.mimeType, size, JSON.stringify(audio.metadata)).run();
 
-          log.assetGenerationWorkflow.info(reqId, `Slide audio ${index} uploaded`, { videoId, key, size });
+          uploadedCount++;
+          log.assetGenerationWorkflow.info(reqId, `Slide audio ${i} generated and uploaded`, { videoId, key, size });
         }
+
+        return uploadedCount;
       });
+      log.assetGenerationWorkflow.info(reqId, 'Step completed', { step: 'generate-and-upload-audio', audioCount });
 
       // Step 8: Log costs
       await step.do('log-costs', {

@@ -23,6 +23,7 @@ import type { ScriptGenerationParams, ScriptGenerationResult } from '../workflow
 import type { AssetGenerationParams, AssetGenerationResult } from '../workflows/asset-generation.workflow.js';
 import type { Article, ArticleVersion, ArticleComment } from '../types/article.js';
 import { parseVideo, TTS_VOICES as TTSVoicesArray } from '../types/video.js';
+import { R2StorageService } from '../services/r2-storage.js';
 import { log, generateRequestId } from '../lib/logger.js';
 
 const videoRoutes = new Hono<{ Bindings: Env['Bindings'] }>();
@@ -111,11 +112,12 @@ videoRoutes.get('/:id', async (c) => {
       SELECT * FROM video_assets WHERE video_id = ? ORDER BY asset_type, asset_index
     `).bind(id).all();
 
+    // Use direct R2 public URLs for browser <img> and <audio> tags
     const assets: ParsedVideoAsset[] = (assetsResult.results as VideoAsset[]).map(asset => ({
       id: asset.id,
       assetType: asset.asset_type,
       assetIndex: asset.asset_index,
-      url: `/api/videos/${id}/assets/${asset.id}`,
+      url: `${c.env.ASSETS_PUBLIC_URL}/${asset.r2_key}`,
       mimeType: asset.mime_type,
       fileSize: asset.file_size,
       metadata: asset.metadata ? JSON.parse(asset.metadata) : null
@@ -624,6 +626,7 @@ videoRoutes.get('/:id/render/status', async (c) => {
       WHERE video_id = ? AND asset_type = 'rendered_video'
     `).bind(id).first<VideoAsset>();
 
+    // Use direct R2 public URL for rendered video
     return c.json({
       success: true,
       renderStatus: video.render_status,
@@ -632,7 +635,7 @@ videoRoutes.get('/:id/render/status', async (c) => {
       renderCompletedAt: video.render_completed_at,
       renderedVideo: renderedAsset ? {
         id: renderedAsset.id,
-        url: `/api/videos/${id}/assets/${renderedAsset.id}`,
+        url: `${c.env.ASSETS_PUBLIC_URL}/${renderedAsset.r2_key}`,
         mimeType: renderedAsset.mime_type,
         fileSize: renderedAsset.file_size,
         metadata: renderedAsset.metadata ? JSON.parse(renderedAsset.metadata) : null
