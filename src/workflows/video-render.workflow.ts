@@ -1,7 +1,7 @@
 /**
  * VideoRenderWorkflow - Render final video from generated assets using ffmpeg
  * Uses Cloudflare Sandbox with ffmpeg for video processing
- * Individual slide images are already created by asset generator (UPNG.js)
+ * Individual slide images are already created by asset generator and stored in R2
  */
 
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';

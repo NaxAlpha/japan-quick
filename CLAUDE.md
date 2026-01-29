@@ -8,6 +8,23 @@ Each time you complete a task or learn important information about the project, 
 
 **AI.md**: Keep current state only (summary, file tree, architecture, commands, auth, schemas, platform learnings, practices). NEVER add dated entries, version IDs, or incident-specific notes.
 
+## Managing Temporary Information
+
+Use the `.context/` directory (gitignored) for temporary work items:
+- `.context/notes.md` - Temporary status updates, debugging notes, work-in-progress information
+- `.context/todos.md` - Current tasks, pending work items, temporary checklists
+- `.context/debugging.md` - Investigation logs, verification results, testing notes
+- `.context/feature-status.md` - Feature implementation status, known issues
+
+**AI.md Guidelines:**
+- Keep ONLY permanent reference information (architecture, patterns, conventions)
+- NO development logs, debugging history, or commit records
+- NO detailed feature narratives or step-by-step implementations
+- NO code examples or SQL schemas (reference source files instead)
+- NO status markers like "⚠️ Partially Working" or verification checklists
+- Target: 300-400 lines maximum
+- Rule: If it will change within a week, it belongs in `.context/`, not AI.md
+
 ALWAYS check your work before returning control to the user. Run tests if available, verify builds, etc. Never return incomplete or unverified work to the user.
 
 ## Manual Verification
