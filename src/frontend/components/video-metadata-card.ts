@@ -14,13 +14,7 @@ export class VideoMetadataCard extends LitElement {
       background: #ffffff;
       border: 3px solid #0a0a0a;
       box-shadow: 4px 4px 0 #0a0a0a;
-      grid-column: span 4;
-    }
-
-    @media (max-width: 1024px) {
-      .card {
-        grid-column: span 12;
-      }
+      width: 300px;
     }
 
     .card-header {

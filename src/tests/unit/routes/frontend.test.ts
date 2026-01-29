@@ -32,7 +32,7 @@ describe('Frontend Routes', () => {
 
     expect(html).toContain('<meta charset="UTF-8">');
     expect(html).toContain('viewport');
-    expect(html).toContain('Yahoo News Japan - Top Picks');
+    expect(html).toContain('Yahoo News Japan - Japan Quick');
   });
 
   it('should return HTML for / route', async () => {

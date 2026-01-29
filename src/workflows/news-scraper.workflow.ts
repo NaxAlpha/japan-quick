@@ -98,6 +98,15 @@ export class NewsScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, NewsScr
         };
       }
 
+      // Check if we got any items
+      if (refreshResult.data.topPicks.length === 0) {
+        log.newsScraperWorkflow.warn(reqId, 'Refresh workflow returned empty data', { itemCount: 0 });
+        return {
+          success: false,
+          error: 'No news items found - scraping may have failed'
+        };
+      }
+
       // Return the fresh data from the refresh workflow
       log.newsScraperWorkflow.info(reqId, 'Workflow completed', { durationMs: Date.now() - startTime, itemCount: refreshResult.data.topPicks.length, snapshotName: refreshResult.snapshotName });
       return {

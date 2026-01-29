@@ -76,27 +76,32 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
       });
       log.scheduledRefreshWorkflow.info(reqId, 'Step completed', { step: 'update-cache', durationMs: Date.now() - cacheStart });
 
-      // Step 3: Save snapshot to D1
+      // Step 3: Save snapshot to D1 (only if we have data)
       const snapshotStart = Date.now();
-      const snapshotName = await step.do('save-snapshot', {
-        retries: {
-          limit: RETRY_POLICIES.DEFAULT.limit,
-          delay: RETRY_POLICIES.DEFAULT.delay,
-          backoff: RETRY_POLICIES.DEFAULT.backoff
-        }
-      }, async () => {
-        const now = new Date();
-        const snapshotName = `article-snapshot-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}-${String(now.getSeconds()).padStart(2, '0')}`;
+      let snapshotName: string | undefined;
+      if (topPicks.length > 0) {
+        snapshotName = await step.do('save-snapshot', {
+          retries: {
+            limit: RETRY_POLICIES.DEFAULT.limit,
+            delay: RETRY_POLICIES.DEFAULT.delay,
+            backoff: RETRY_POLICIES.DEFAULT.backoff
+          }
+        }, async () => {
+          const now = new Date();
+          const snapshotName = `article-snapshot-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}-${String(now.getSeconds()).padStart(2, '0')}`;
 
-        await this.env.DB.prepare(
-          'INSERT INTO news_snapshots (captured_at, snapshot_name, data) VALUES (?, ?, ?)'
-        )
-          .bind(newsData.scrapedAt, snapshotName, JSON.stringify(newsData))
-          .run();
+          await this.env.DB.prepare(
+            'INSERT INTO news_snapshots (captured_at, snapshot_name, data) VALUES (?, ?, ?)'
+          )
+            .bind(newsData.scrapedAt, snapshotName, JSON.stringify(newsData))
+            .run();
 
-        return snapshotName;
-      });
-      log.scheduledRefreshWorkflow.info(reqId, 'Step completed', { step: 'save-snapshot', durationMs: Date.now() - snapshotStart, snapshotName });
+          return snapshotName;
+        });
+        log.scheduledRefreshWorkflow.info(reqId, 'Step completed', { step: 'save-snapshot', durationMs: Date.now() - snapshotStart, snapshotName });
+      } else {
+        log.scheduledRefreshWorkflow.warn(reqId, 'Skipping snapshot - no items scraped', { itemCount: 0 });
+      }
 
       // Step 4: Clean up old snapshots (older than 30 days)
       const cleanupStart = Date.now();
