@@ -103,28 +103,11 @@ export class VideoAssetsCard extends LitElement {
 
     .slide-audio-item {
       display: flex;
-      align-items: center;
-      gap: 1rem;
+      flex-direction: column;
+      gap: 0.75rem;
       padding: 0.75rem;
       background: #fafafa;
       border: 2px solid #e8e6e1;
-    }
-
-    .slide-image {
-      width: 80px;
-      height: 80px;
-      object-fit: cover;
-      border: 2px solid #0a0a0a;
-      flex-shrink: 0;
-      background: #f3f4f6;
-    }
-
-    .slide-content {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      gap: 0.375rem;
-      min-width: 0;
     }
 
     .slide-content-title {
@@ -135,6 +118,14 @@ export class VideoAssetsCard extends LitElement {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+
+    .slide-image {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      object-fit: cover;
+      border: 2px solid #0a0a0a;
+      background: #f3f4f6;
     }
 
     .slide-audio-player {
@@ -284,28 +275,28 @@ export class VideoAssetsCard extends LitElement {
                 </div>
               ` : ''}
 
-              ${script && slideImageAssetIds && slideImageAssetIds.length > 0 ? html`
+              ${assets && assets.filter(a => a.assetType === 'slide_image').length > 0 ? html`
                 <div style="margin-top: 1.5rem;">
                   <h4 style="font-family: 'Space Mono', monospace; font-size: 0.6875rem; color: #78746c; margin: 0 0 0.75rem 0; text-transform: uppercase;">Slide Images</h4>
                   <div class="slides-audio-list">
-                    ${slideImageAssetIds.map((assetId: string, idx: number) => html`
-                      <div class="slide-audio-item">
-                        <img
-                          class="slide-image"
-                          src="https://japan-quick-assets.nauman.im/${assetId}.png"
-                          alt="Slide ${idx + 1}"
-                        />
-
-                        <div class="slide-content">
-                          <div class="slide-content-title">${script.slides[idx]?.headline || 'Slide ' + (idx + 1)}</div>
-                          ${slideAudioAssetIds && slideAudioAssetIds[idx] ? html`
+                    ${assets.filter(a => a.assetType === 'slide_image').map((asset, idx) => {
+                      const audioAsset = assets.find(a => a.assetType === 'slide_audio' && a.assetIndex === idx);
+                      return html`
+                        <div class="slide-audio-item">
+                          <div class="slide-content-title">${script?.slides[idx]?.headline || 'Slide ' + (idx + 1)}</div>
+                          <img
+                            class="slide-image"
+                            src="${asset.url}"
+                            alt="Slide ${idx + 1}"
+                          />
+                          ${audioAsset ? html`
                             <div class="slide-audio-player">
-                              <audio controls src="https://japan-quick-assets.nauman.im/${slideAudioAssetIds[idx]}.wav"></audio>
+                              <audio controls src="${audioAsset.url}"></audio>
                             </div>
                           ` : ''}
                         </div>
-                      </div>
-                    `)}
+                      `;
+                    })}
                   </div>
                 </div>
               ` : ''}
