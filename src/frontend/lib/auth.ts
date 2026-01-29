@@ -1,17 +1,17 @@
 /**
  * Authentication utilities for frontend API requests.
- * Provides centralized Basic Auth header generation.
+ * Provides centralized JWT auth header generation.
+ * Re-exports from auth-service for backward compatibility.
  */
 
-/**
- * Returns Basic Auth headers for API requests.
- * Credentials match those in wrangler.toml [vars] section.
- */
-export function getAuthHeaders(): HeadersInit {
-  const username = 'admin';
-  const password = 'GvkP525fTX0ocMTw8XtAqM9ECvNIx50v';
-  const credentials = btoa(`${username}:${password}`);
-  return {
-    'Authorization': `Basic ${credentials}`
-  };
-}
+export {
+  getAuthHeaders,
+  login,
+  logout,
+  isAuthenticated,
+  validateToken,
+  handleUnauthorized,
+  authenticatedFetch,
+  type LoginCredentials,
+  type LoginResponse
+} from './auth-service.js';

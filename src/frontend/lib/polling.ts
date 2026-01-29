@@ -3,7 +3,7 @@
  * Provides consistent polling pattern across pages with automatic cleanup
  */
 
-import { getAuthHeaders } from './auth.js';
+import { getAuthHeaders, handleUnauthorized } from './auth.js';
 
 export interface PollingConfig {
   /** Function that returns the endpoint URL to poll */
@@ -70,6 +70,12 @@ export function createPoller(config: PollingConfig): Poller {
       const headers = config.getAuthHeaders ? config.getAuthHeaders() : getAuthHeaders();
 
       const response = await fetch(endpoint, { headers });
+
+      // Handle 401 Unauthorized - redirect to login
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);

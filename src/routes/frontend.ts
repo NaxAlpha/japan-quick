@@ -67,4 +67,15 @@ frontendRoutes.get('/videos', (c) => {
   return c.html(html);
 });
 
+// Login page - uses login-page component
+frontendRoutes.get('/login', (c) => {
+  const html = renderPageTemplate({
+    title: 'Login - Japan Quick',
+    description: 'Login to Japan Quick',
+    componentName: 'login-page',
+    scriptPath: '/frontend/pages/login-page.js'
+  });
+  return c.html(html);
+});
+
 export { frontendRoutes };

@@ -1,15 +1,26 @@
 /**
  * YouTube OAuth status card component
- * Displays YouTube connection status and actions
+ * Displays YouTube connection status, channel info, token status, scopes, and actions
  */
 import { LitElement, html, css } from 'lit';
 import { customElement, state, property } from 'lit/decorators.js';
-import { getAuthHeaders } from '../lib/auth.js';
+import { authenticatedFetch, getAuthHeaders } from '../lib/auth.js';
 import { baseStyles, buttonStyles, badgeStyles, loadingStyles } from '../styles/shared-styles.js';
+
+interface YouTubeAuthStatus {
+  isConnected: boolean;
+  channel?: {
+    id: string;
+    title: string;
+  };
+  scopes?: string[];
+  expiresAt?: number;
+  tokenExpiresIn?: number;
+}
 
 @customElement('youtube-oauth-status-card')
 export class YouTubeOAuthStatusCard extends LitElement {
-  static styles = [baseStyles, badgeStyles, loadingStyles, css`
+  static styles = [baseStyles, buttonStyles, badgeStyles, loadingStyles, css`
     .settings-section {
       background: #ffffff;
       border: 3px solid #0a0a0a;
@@ -51,6 +62,96 @@ export class YouTubeOAuthStatusCard extends LitElement {
       line-height: 1.6;
     }
 
+    .channel-info {
+      margin: 1.5rem 0;
+      padding: 1rem;
+      background: #f5f3f0;
+      border: 2px solid #0a0a0a;
+    }
+
+    .channel-name {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.875rem;
+      font-weight: 700;
+      color: #0a0a0a;
+      text-transform: uppercase;
+      margin: 0 0 0.5rem 0;
+    }
+
+    .channel-id {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      color: #58544c;
+      margin: 0;
+    }
+
+    .token-info {
+      margin: 1rem 0;
+      padding: 1rem;
+      background: #f5f3f0;
+      border: 2px solid #0a0a0a;
+    }
+
+    .token-info-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid #e8e6e1;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+    }
+
+    .token-info-row:last-child {
+      border-bottom: none;
+    }
+
+    .token-label {
+      color: #58544c;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .token-value {
+      color: #0a0a0a;
+      font-weight: 700;
+    }
+
+    .token-expires-soon {
+      color: #f97316;
+    }
+
+    .token-expired {
+      color: #e63946;
+    }
+
+    .scopes-list {
+      margin: 1.5rem 0;
+    }
+
+    .scopes-title {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      font-weight: 700;
+      color: #0a0a0a;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 0.75rem;
+    }
+
+    .scope-item {
+      padding: 0.375rem 0.625rem;
+      background: #f5f3f0;
+      border: 1px solid #0a0a0a;
+      display: inline-block;
+      margin: 0.125rem;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      color: #0a0a0a;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
     .button-group {
       display: flex;
       gap: 0.75rem;
@@ -87,10 +188,16 @@ export class YouTubeOAuthStatusCard extends LitElement {
   private disconnecting: boolean = false;
 
   @state()
+  private refreshing: boolean = false;
+
+  @state()
   private error: string | null = null;
 
   @state()
   private message: string | null = null;
+
+  @state()
+  private authStatus: YouTubeAuthStatus | null = null;
 
   connectedCallback() {
     super.connectedCallback();
@@ -103,9 +210,7 @@ export class YouTubeOAuthStatusCard extends LitElement {
       this.error = null;
       this.message = null;
 
-      const response = await fetch('/api/youtube/status', {
-        headers: getAuthHeaders()
-      });
+      const response = await authenticatedFetch('/api/youtube/status');
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -113,11 +218,13 @@ export class YouTubeOAuthStatusCard extends LitElement {
 
       const data = await response.json();
       if (data.success) {
+        this.authStatus = data.data;
         (this as unknown as { isYouTubeConnected: boolean }).isYouTubeConnected = data.data.isConnected;
       } else {
         throw new Error(data.error || 'Failed to load status');
       }
     } catch (err) {
+      // authenticatedFetch handles 401 by redirecting, so we only see other errors
       this.error = err instanceof Error ? err.message : 'Failed to load status';
     } finally {
       this.loading = false;
@@ -129,9 +236,7 @@ export class YouTubeOAuthStatusCard extends LitElement {
       this.connecting = true;
       this.error = null;
 
-      const response = await fetch('/api/youtube/auth/url', {
-        headers: getAuthHeaders()
-      });
+      const response = await authenticatedFetch('/api/youtube/auth/url');
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -150,6 +255,36 @@ export class YouTubeOAuthStatusCard extends LitElement {
     }
   }
 
+  private async refreshToken() {
+    try {
+      this.refreshing = true;
+      this.error = null;
+
+      const response = await authenticatedFetch('/api/youtube/refresh', {
+        method: 'POST'
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data.success) {
+        this.message = 'Token refreshed successfully';
+        await this.loadStatus();
+        setTimeout(() => {
+          this.message = null;
+        }, 3000);
+      } else {
+        throw new Error(data.error || 'Failed to refresh token');
+      }
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : 'Failed to refresh token';
+    } finally {
+      this.refreshing = false;
+    }
+  }
+
   private async disconnect() {
     if (!confirm('Are you sure you want to disconnect your YouTube channel?')) {
       return;
@@ -159,9 +294,8 @@ export class YouTubeOAuthStatusCard extends LitElement {
       this.disconnecting = true;
       this.error = null;
 
-      const response = await fetch('/api/youtube/auth', {
-        method: 'DELETE',
-        headers: getAuthHeaders()
+      const response = await authenticatedFetch('/api/youtube/auth', {
+        method: 'DELETE'
       });
 
       if (!response.ok) {
@@ -171,6 +305,7 @@ export class YouTubeOAuthStatusCard extends LitElement {
       const data = await response.json();
       if (data.success) {
         this.message = 'Disconnected successfully';
+        this.authStatus = null;
         (this as unknown as { isYouTubeConnected: boolean }).isYouTubeConnected = false;
       } else {
         throw new Error(data.error || 'Failed to disconnect');
@@ -180,6 +315,41 @@ export class YouTubeOAuthStatusCard extends LitElement {
     } finally {
       this.disconnecting = false;
     }
+  }
+
+  private formatTokenExpires(expiresIn: number | undefined): string {
+    if (expiresIn === undefined) return 'Unknown';
+    if (expiresIn <= 0) return 'Expired';
+
+    const hours = Math.floor(expiresIn / 3600);
+    const minutes = Math.floor((expiresIn % 3600) / 60);
+
+    if (hours > 24) {
+      const days = Math.floor(hours / 24);
+      return `${days} day${days > 1 ? 's' : ''}`;
+    }
+
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+
+    return `${minutes} minute${minutes !== 1 ? 's' : ''}`;
+  }
+
+  private getTokenExpiryClass(expiresIn: number | undefined): string {
+    if (expiresIn === undefined) return '';
+    if (expiresIn <= 0) return 'token-expired';
+    if (expiresIn < 300) return 'token-expires-soon'; // Less than 5 minutes
+    return '';
+  }
+
+  private formatScope(scope: string): string {
+    const scopeNames: Record<string, string> = {
+      'https://www.googleapis.com/auth/youtube.upload': 'Upload Videos',
+      'https://www.googleapis.com/auth/youtube': 'Manage Account',
+      'https://www.googleapis.com/auth/yt-analytics.readonly': 'View Analytics',
+    };
+    return scopeNames[scope] || scope;
   }
 
   render() {
@@ -208,39 +378,71 @@ export class YouTubeOAuthStatusCard extends LitElement {
           permission to upload videos and access channel analytics.
         </p>
 
-        ${this.isYouTubeConnected ? html`
-          ${this.renderConnectedActions()}
-        ` : html`
-          ${this.renderDisconnectedActions()}
-        `}
-      </div>
-    `;
-  }
+        ${this.authStatus?.channel ? html`
+          <div class="channel-info">
+            <p class="channel-name">${this.authStatus.channel.title}</p>
+            <p class="channel-id">Channel ID: ${this.authStatus.channel.id}</p>
+          </div>
+        ` : ''}
 
-  private renderConnectedActions() {
-    return html`
-      <div class="button-group">
-        <button
-          class="button button-secondary"
-          ?disabled=${this.disconnecting}
-          @click=${this.disconnect}
-        >
-          ${this.disconnecting ? '[ DISCONNECTING... ]' : '[ Disconnect Channel ]'}
-        </button>
-      </div>
-    `;
-  }
+        ${this.isYouTubeConnected && this.authStatus ? html`
+          <div class="token-info">
+            <div class="token-info-row">
+              <span class="token-label">Token Status:</span>
+              <span class="token-value">Connected</span>
+            </div>
+            <div class="token-info-row">
+              <span class="token-label">Expires In:</span>
+              <span class="token-value ${this.getTokenExpiryClass(this.authStatus.tokenExpiresIn)}">
+                ${this.formatTokenExpires(this.authStatus.tokenExpiresIn)}
+              </span>
+            </div>
+          </div>
+        ` : ''}
 
-  private renderDisconnectedActions() {
-    return html`
-      <div class="button-group">
-        <button
-          class="button button-primary"
-          ?disabled=${this.connecting}
-          @click=${this.startOAuth}
-        >
-          ${this.connecting ? '[ CONNECTING... ]' : '[ Connect YouTube Channel ]'}
-        </button>
+        ${this.authStatus?.scopes && this.authStatus.scopes.length > 0 ? html`
+          <div class="scopes-list">
+            <p class="scopes-title">Permissions Granted:</p>
+            ${this.authStatus.scopes.map(scope => html`
+              <span class="scope-item">${this.formatScope(scope)}</span>
+            `)}
+          </div>
+        ` : ''}
+
+        ${this.error ? html`
+          <div class="error-message">${this.error}</div>
+        ` : ''}
+
+        ${this.message ? html`
+          <div class="success-message">${this.message}</div>
+        ` : ''}
+
+        <div class="button-group">
+          ${this.isYouTubeConnected ? html`
+            <button
+              class="button button-secondary"
+              ?disabled=${this.refreshing}
+              @click=${this.refreshToken}
+            >
+              ${this.refreshing ? '[ REFRESHING... ]' : '[ Refresh Token ]'}
+            </button>
+            <button
+              class="button button-danger"
+              ?disabled=${this.disconnecting}
+              @click=${this.disconnect}
+            >
+              ${this.disconnecting ? '[ DISCONNECTING... ]' : '[ Disconnect Channel ]'}
+            </button>
+          ` : html`
+            <button
+              class="button button-primary"
+              ?disabled=${this.connecting}
+              @click=${this.startOAuth}
+            >
+              ${this.connecting ? '[ CONNECTING... ]' : '[ Connect YouTube Channel ]'}
+            </button>
+          `}
+        </div>
       </div>
     `;
   }
