@@ -327,6 +327,7 @@ log.gemini.info(reqId, 'Operation started', { videoId: '123' });
 - **Hourly Cron:** ScheduledNewsRefreshWorkflow, ArticleRescrapeWorkflow
 - **Business Hours Only (JST 8am-8pm):** VideoSelectionWorkflow
 - **Stale Status Handling:** Auto-reset 'generating' status older than 10 minutes
+- **Empty Snapshot Prevention:** Workflows skip saving snapshots when 0 items scraped; manual trigger returns error for empty results
 
 ## Development Patterns
 
