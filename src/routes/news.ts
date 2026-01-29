@@ -10,10 +10,12 @@
  */
 
 import { Hono } from 'hono';
-import type { Env, YahooNewsTopPick, YahooNewsResponse } from '../types/news.js';
+import type { Env } from '../types/env.js';
+import type { YahooNewsTopPick, YahooNewsResponse } from '../types/news.js';
 import type { NewsScraperParams, NewsScraperResult } from '../workflows/types.js';
 import type { ArticleStatus } from '../types/article.js';
 import { log, generateRequestId } from '../lib/logger.js';
+import { successResponse, errorResponse, notFoundResponse, serverErrorResponse } from '../lib/api-response.js';
 
 const newsRoutes = new Hono<{ Bindings: Env['Bindings'] }>();
 
@@ -41,16 +43,10 @@ newsRoutes.post('/trigger', async (c) => {
     });
 
     log.newsRoutes.info(reqId, 'Workflow created', { workflowId: instance.id });
-    return c.json({
-      success: true,
-      workflowId: instance.id
-    });
+    return successResponse({ workflowId: instance.id });
   } catch (error) {
     log.newsRoutes.error(reqId, 'Request failed', error as Error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to create workflow'
-    }, 500);
+    return serverErrorResponse(error as Error);
   } finally {
     const durationMs = Date.now() - startTime;
     log.newsRoutes.info(reqId, 'Request completed', { status: 200, durationMs });
@@ -69,16 +65,10 @@ newsRoutes.post('/trigger-refresh', async (c) => {
     });
 
     log.newsRoutes.info(reqId, 'Workflow created', { workflowId: instance.id });
-    return c.json({
-      success: true,
-      workflowId: instance.id
-    });
+    return successResponse({ workflowId: instance.id });
   } catch (error) {
     log.newsRoutes.error(reqId, 'Request failed', error as Error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to create scheduled refresh workflow'
-    }, 500);
+    return serverErrorResponse(error as Error);
   } finally {
     const durationMs = Date.now() - startTime;
     log.newsRoutes.info(reqId, 'Request completed', { status: 200, durationMs });
@@ -97,16 +87,10 @@ newsRoutes.post('/trigger-rescrape', async (c) => {
     });
 
     log.newsRoutes.info(reqId, 'Workflow created', { workflowId: instance.id });
-    return c.json({
-      success: true,
-      workflowId: instance.id
-    });
+    return successResponse({ workflowId: instance.id });
   } catch (error) {
     log.newsRoutes.error(reqId, 'Request failed', error as Error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to create article rescrape workflow'
-    }, 500);
+    return serverErrorResponse(error as Error);
   } finally {
     const durationMs = Date.now() - startTime;
     log.newsRoutes.info(reqId, 'Request completed', { status: 200, durationMs });
@@ -126,26 +110,19 @@ newsRoutes.get('/status/:id', async (c) => {
 
     if (!instance) {
       log.newsRoutes.warn(reqId, 'Workflow not found', { workflowId });
-      return c.json({
-        success: false,
-        error: 'Workflow not found'
-      }, 404);
+      return notFoundResponse('Workflow');
     }
 
     const status = await instance.status();
 
-    return c.json({
-      success: true,
+    return successResponse({
       workflowId: instance.id,
       status: status.status,
       output: status.output
     });
   } catch (error) {
     log.newsRoutes.error(reqId, 'Request failed', error as Error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to get workflow status'
-    }, 500);
+    return serverErrorResponse(error as Error);
   } finally {
     const durationMs = Date.now() - startTime;
     log.newsRoutes.info(reqId, 'Request completed', { status: 200, durationMs });
@@ -165,21 +142,14 @@ newsRoutes.get('/result/:id', async (c) => {
 
     if (!instance) {
       log.newsRoutes.warn(reqId, 'Workflow not found', { workflowId });
-      return c.json({
-        success: false,
-        error: 'Workflow not found'
-      }, 404);
+      return notFoundResponse('Workflow');
     }
 
     const status = await instance.status();
 
     if (status.status !== 'complete') {
       log.newsRoutes.warn(reqId, 'Workflow not yet complete', { workflowId, status: status.status });
-      return c.json({
-        success: false,
-        error: 'Workflow not yet complete',
-        status: status.status
-      }, 400);
+      return errorResponse('Workflow not yet complete', 400);
     }
 
     const result = status.output as NewsScraperResult;
@@ -215,16 +185,10 @@ newsRoutes.get('/result/:id', async (c) => {
       });
     }
 
-    return c.json({
-      success: true,
-      result
-    });
+    return successResponse({ result });
   } catch (error) {
     log.newsRoutes.error(reqId, 'Request failed', error as Error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to get workflow result'
-    }, 500);
+    return serverErrorResponse(error as Error);
   } finally {
     const durationMs = Date.now() - startTime;
     log.newsRoutes.info(reqId, 'Request completed', { status: 200, durationMs });
@@ -244,10 +208,7 @@ newsRoutes.get('/latest', async (c) => {
 
     if (!result) {
       log.newsRoutes.warn(reqId, 'No snapshots found');
-      return c.json({
-        success: false,
-        error: 'No snapshots found'
-      }, 404);
+      return notFoundResponse('News snapshots');
     }
 
     // Parse the JSON data field
@@ -288,8 +249,7 @@ newsRoutes.get('/latest', async (c) => {
       };
     });
 
-    return c.json({
-      success: true,
+    return successResponse({
       snapshot: {
         id: result.id,
         capturedAt: result.captured_at,
@@ -302,10 +262,7 @@ newsRoutes.get('/latest', async (c) => {
     });
   } catch (error) {
     log.newsRoutes.error(reqId, 'Request failed', error as Error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to get latest snapshot'
-    }, 500);
+    return serverErrorResponse(error as Error);
   } finally {
     const durationMs = Date.now() - startTime;
     log.newsRoutes.info(reqId, 'Request completed', { status: 200, durationMs });
@@ -325,25 +282,16 @@ newsRoutes.post('/cancel/:id', async (c) => {
 
     if (!instance) {
       log.newsRoutes.warn(reqId, 'Workflow not found', { workflowId });
-      return c.json({
-        success: false,
-        error: 'Workflow not found'
-      }, 404);
+      return notFoundResponse('Workflow');
     }
 
     await instance.terminate();
     log.newsRoutes.info(reqId, 'Workflow terminated', { workflowId });
 
-    return c.json({
-      success: true,
-      message: 'Workflow terminated'
-    });
+    return successResponse({ message: 'Workflow terminated' });
   } catch (error) {
     log.newsRoutes.error(reqId, 'Request failed', error as Error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to terminate workflow'
-    }, 500);
+    return serverErrorResponse(error as Error);
   } finally {
     const durationMs = Date.now() - startTime;
     log.newsRoutes.info(reqId, 'Request completed', { status: 200, durationMs });

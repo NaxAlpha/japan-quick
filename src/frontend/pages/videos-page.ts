@@ -10,6 +10,8 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, state, property } from 'lit/decorators.js';
 import { getAuthHeaders } from '../lib/auth.js';
+import { baseStyles, buttonStyles, badgeStyles, loadingStyles } from '../styles/shared-styles.js';
+import { POLLING } from '../lib/constants.js';
 
 type VideoType = 'short' | 'long';
 type VideoSelectionStatus = 'todo' | 'doing' | 'done';
@@ -30,37 +32,9 @@ interface ParsedVideo {
 
 @customElement('videos-page')
 export class VideosPage extends LitElement {
-  static styles = css`
-    @import url('https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Zen+Tokyo+Zoo&display=swap');
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=Inter:wght@400;500;600;700;800&display=swap');
-
-    :host {
-      display: block;
-      width: 100%;
-      min-height: 100vh;
-    }
-
+  static styles = [baseStyles, buttonStyles, badgeStyles, loadingStyles, css`
     .container {
-      padding: 2rem;
       max-width: 1200px;
-      margin: 0 auto;
-      background: #f5f3f0;
-      min-height: 100vh;
-      position: relative;
-    }
-
-    /* Background pattern */
-    .container::before {
-      content: '';
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background-image: url("data:image/svg+xml,%3Csvg width='120' height='60' viewBox='0 0 120 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 30 Q 15 15, 30 30 T 60 30 T 90 30 T 120 30' stroke='%23e63946' stroke-width='0.5' fill='none' opacity='0.06'/%3E%3C/svg%3E");
-      background-size: 120px 60px;
-      pointer-events: none;
-      z-index: 0;
     }
 
     /* Header */
@@ -80,45 +54,6 @@ export class VideosPage extends LitElement {
       min-width: 280px;
     }
 
-    .home-link {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.5rem 1rem;
-      background: #0a0a0a;
-      color: #ffffff;
-      font-family: 'Space Mono', monospace;
-      font-size: 0.6875rem;
-      font-weight: 400;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      border: 2px solid #0a0a0a;
-      text-decoration: none;
-      transition: all 0.15s ease-out;
-      box-shadow: 2px 2px 0 #0a0a0a;
-      margin-bottom: 1.5rem;
-    }
-
-    .home-link:hover {
-      background: #e63946;
-      border-color: #e63946;
-      transform: translate(-1px, -1px);
-      box-shadow: 3px 3px 0 #0a0a0a;
-    }
-
-    h1 {
-      font-family: 'Zen Tokyo Zoo', sans-serif;
-      font-size: clamp(2rem, 6vw, 3.5rem);
-      font-weight: 400;
-      line-height: 1;
-      color: #0a0a0a;
-      margin: 0;
-      text-transform: uppercase;
-    }
-
-    h1 .accent {
-      color: #e63946;
-    }
 
     .header-right {
       display: flex;
@@ -127,40 +62,6 @@ export class VideosPage extends LitElement {
       gap: 0.75rem;
     }
 
-    /* Trigger button */
-    .trigger-button {
-      padding: 0.875rem 1.5rem;
-      background: #e63946;
-      color: #ffffff;
-      border: 3px solid #e63946;
-      font-family: 'Space Mono', monospace;
-      font-size: 0.75rem;
-      font-weight: 400;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      cursor: pointer;
-      transition: all 0.15s ease-out;
-      box-shadow: 4px 4px 0 #0a0a0a;
-    }
-
-    .trigger-button:hover:not(:disabled) {
-      background: #0a0a0a;
-      border-color: #0a0a0a;
-      transform: translate(-2px, -2px);
-      box-shadow: 6px 6px 0 #0a0a0a;
-    }
-
-    .trigger-button:focus-visible {
-      outline: 3px solid #e63946;
-      outline-offset: 3px;
-    }
-
-    .trigger-button:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-      transform: none;
-      box-shadow: 4px 4px 0 #0a0a0a;
-    }
 
     .stats {
       display: flex;
@@ -261,56 +162,6 @@ export class VideosPage extends LitElement {
       justify-content: flex-end;
     }
 
-    .badge {
-      font-family: 'Space Mono', monospace;
-      font-size: 0.625rem;
-      font-weight: 400;
-      padding: 0.25rem 0.5rem;
-      border: 1px solid #0a0a0a;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      white-space: nowrap;
-    }
-
-    .badge.type-short {
-      background: #e63946;
-      color: #ffffff;
-      border-color: #e63946;
-    }
-
-    .badge.type-long {
-      background: #0a0a0a;
-      color: #ffffff;
-      border-color: #0a0a0a;
-    }
-
-    .badge.script-pending,
-    .badge.asset-pending {
-      background: #f5f3f0;
-      color: #58544c;
-    }
-
-    .badge.script-generating,
-    .badge.asset-generating {
-      background: #0066cc;
-      color: #ffffff;
-      border-color: #0066cc;
-    }
-
-    .badge.script-generated,
-    .badge.asset-generated {
-      background: #2d6a4f;
-      color: #ffffff;
-      border-color: #2d6a4f;
-    }
-
-    .badge.script-error,
-    .badge.asset-error {
-      background: #0a0a0a;
-      color: #e63946;
-      border-color: #e63946;
-    }
-
     .video-meta {
       padding: 0 1.25rem 0.75rem;
       display: flex;
@@ -375,17 +226,9 @@ export class VideosPage extends LitElement {
 
     /* Status messages */
     .status-message {
-      text-align: center;
       padding: 4rem 2rem;
       font-family: 'Inter', sans-serif;
       font-size: 1rem;
-      color: #58544c;
-      position: relative;
-      z-index: 1;
-    }
-
-    .status-message.error {
-      color: #e63946;
     }
 
     /* Load more */
@@ -399,36 +242,8 @@ export class VideosPage extends LitElement {
 
     .load-more-button {
       padding: 0.875rem 2rem;
-      background: #0a0a0a;
-      color: #ffffff;
-      border: 3px solid #0a0a0a;
-      font-family: 'Space Mono', monospace;
-      font-size: 0.75rem;
-      font-weight: 400;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      cursor: pointer;
-      transition: all 0.15s ease-out;
-      box-shadow: 4px 4px 0 #0a0a0a;
     }
-
-    .load-more-button:hover:not(:disabled) {
-      background: #e63946;
-      border-color: #e63946;
-      transform: translate(-2px, -2px);
-      box-shadow: 6px 6px 0 #0a0a0a;
-    }
-
-    .load-more-button:focus-visible {
-      outline: 3px solid #e63946;
-      outline-offset: 3px;
-    }
-
-    .load-more-button:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-    }
-  `;
+  `];
 
   @state()
   private videos: ParsedVideo[] = [];
@@ -525,7 +340,7 @@ export class VideosPage extends LitElement {
       if (data.success) {
         setTimeout(() => {
           this.loadVideos();
-        }, 3000);
+        }, POLLING.VIDEOS_POLL_INTERVAL_MS);
       } else {
         throw new Error(data.error || 'Failed to trigger workflow');
       }

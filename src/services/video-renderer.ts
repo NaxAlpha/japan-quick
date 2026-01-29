@@ -6,6 +6,7 @@
 import type { VideoScript, VideoType, RenderedVideoMetadata } from '../types/video.js';
 import { log } from '../lib/logger.js';
 import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
+import { VIDEO_RENDERING } from '../lib/constants.js';
 
 interface SlideImageAsset {
   url: string;      // Public URL to download from
@@ -61,7 +62,7 @@ async function writeAssets(
       // Use curl to download directly inside the sandbox
       const curlResult = await session.exec(
         `curl -L -o "${slidePath}" "${slide.url}"`,
-        { timeoutMs: 60000 }
+        { timeoutMs: VIDEO_RENDERING.ASSET_FETCH_TIMEOUT_MS }
       );
 
       if (!curlResult.success) {
@@ -80,7 +81,7 @@ async function writeAssets(
       // Use curl to download directly inside the sandbox
       const curlResult = await session.exec(
         `curl -L -o "${audioPath}" "${aud.url}"`,
-        { timeoutMs: 60000 }
+        { timeoutMs: VIDEO_RENDERING.ASSET_FETCH_TIMEOUT_MS }
       );
 
       if (!curlResult.success) {
@@ -121,7 +122,7 @@ async function executeFfmpeg(
 
   try {
     // Calculate slide durations with 0.5s padding on each end
-    const slideDurations = input.audio.map(a => (a.durationMs / 1000) + 1.0); // 0.5s + audio + 0.5s
+    const slideDurations = input.audio.map(a => (a.durationMs / 1000) + VIDEO_RENDERING.TRANSITION_DURATION_S);
     log.videoRenderer.debug(reqId, 'Calculated slide durations', {
       durations: slideDurations,
       totalDuration: slideDurations.reduce((a, b) => a + b, 0)
@@ -214,7 +215,7 @@ async function executeFfmpeg(
     });
 
     const startTime = Date.now();
-    const result = await session.exec(ffmpegCommand, { timeoutMs: 300000 });
+    const result = await session.exec(ffmpegCommand, { timeoutMs: VIDEO_RENDERING.FFMPEG_TIMEOUT_MS });
     const duration = Date.now() - startTime;
 
     log.videoRenderer.info(reqId, 'FFmpeg execution completed', {
@@ -248,7 +249,7 @@ async function executeFfmpeg(
 function getMetadata(outputPath: string, input: RenderInput): RenderedVideoMetadata {
   // Calculate total duration from audio + padding
   const totalAudioDuration = input.audio.reduce((sum, a) => sum + a.durationMs, 0) / 1000;
-  const totalDuration = totalAudioDuration + (input.audio.length * 1.0); // 1s padding per slide
+  const totalDuration = totalAudioDuration + (input.audio.length * VIDEO_RENDERING.TRANSITION_DURATION_S);
 
   return {
     width: input.videoType === 'short' ? 1080 : 1920,
@@ -283,7 +284,7 @@ export async function renderVideo(
 
     // Retry session creation with exponential backoff
     let retries = 3;
-    let delay = 2000; // Start with 2 second delay
+    let delay = VIDEO_RENDERING.SESSION_RETRY_BASE_DELAY_MS;
 
     while (retries > 0) {
       try {

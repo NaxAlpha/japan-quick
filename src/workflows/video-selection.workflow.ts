@@ -7,8 +7,9 @@ import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:work
 import { GeminiService } from '../services/gemini.js';
 import type { Article } from '../types/article.js';
 import type { Video } from '../types/video.js';
-import type { Env } from '../types/news.js';
+import type { Env } from '../types/env.js';
 import { log, generateRequestId } from '../lib/logger.js';
+import { RETRY_POLICIES, SCRAPING, VIDEO_RENDERING } from '../lib/constants.js';
 
 export interface VideoSelectionParams {
   // Empty - cron triggered
@@ -34,9 +35,9 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
       const fetchStart = Date.now();
       const articles = await step.do('fetch-eligible-articles', {
         retries: {
-          limit: 3,
-          delay: "2 seconds",
-          backoff: "constant"
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: RETRY_POLICIES.DEFAULT.delay,
+          backoff: RETRY_POLICIES.DEFAULT.backoff
         }
       }, async () => {
         const result = await this.env.DB.prepare(`
@@ -84,9 +85,9 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
       const createStart = Date.now();
       videoId = await step.do('create-video-entry', {
         retries: {
-          limit: 3,
-          delay: "2 seconds",
-          backoff: "constant"
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: RETRY_POLICIES.DEFAULT.delay,
+          backoff: RETRY_POLICIES.DEFAULT.backoff
         }
       }, async () => {
         const result = await this.env.DB.prepare(`
@@ -107,9 +108,9 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
       const geminiStart = Date.now();
       const selectionResult = await step.do('call-gemini-ai', {
         retries: {
-          limit: 3,
-          delay: "5 seconds",
-          backoff: "exponential"
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: RETRY_POLICIES.AI_CALL.delay,
+          backoff: RETRY_POLICIES.AI_CALL.backoff
         }
       }, async () => {
         const geminiService = new GeminiService(this.env.GOOGLE_API_KEY);
@@ -121,9 +122,9 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
       const costStart = Date.now();
       const costData = await step.do('log-cost', {
         retries: {
-          limit: 3,
-          delay: "2 seconds",
-          backoff: "constant"
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: RETRY_POLICIES.DEFAULT.delay,
+          backoff: RETRY_POLICIES.DEFAULT.backoff
         }
       }, async () => {
         const { inputTokens, outputTokens } = selectionResult.tokenUsage;
@@ -147,9 +148,9 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
       const updateStart = Date.now();
       await step.do('update-video-entry', {
         retries: {
-          limit: 3,
-          delay: "2 seconds",
-          backoff: "constant"
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: RETRY_POLICIES.DEFAULT.delay,
+          backoff: RETRY_POLICIES.DEFAULT.backoff
         }
       }, async () => {
         // Calculate total cost from cost_logs

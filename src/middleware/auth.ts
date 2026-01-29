@@ -1,5 +1,5 @@
 import { MiddlewareHandler } from 'hono'
-import type { Env } from '../types/news.js'
+import type { Env } from '../types/env.js'
 import { log } from '../lib/logger.js'
 
 export const basicAuth = (): MiddlewareHandler<{
