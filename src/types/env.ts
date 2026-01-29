@@ -29,6 +29,7 @@ export type Env = {
     // Auth
     ADMIN_USERNAME: string;
     ADMIN_PASSWORD: string;
+    JWT_SECRET: string;
     // Storage
     NEWS_CACHE: KVNamespace;
     DB: D1Database;

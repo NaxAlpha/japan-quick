@@ -25,8 +25,11 @@ bucket_name = "japan-quick-assets"
 
 [vars]
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "GvkP525fTX0ocMTw8XtAqM9ECvNIx50v"
+ADMIN_PASSWORD = "gUgcbHCgVesfqQmQn+5GHhHyMFZ8dLfDlFuT37C4fTA"
 ASSETS_PUBLIC_URL = "https://japan-quick-assets.nauman.im"
+
+# JWT_SECRET must be set as a Cloudflare secret (not in vars):
+# echo "YOUR_SECRET" | wrangler secret put JWT_SECRET
 
 # Workflow bindings
 [[workflows]]

@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
-import { basicAuth } from './middleware/auth.js';
+import { jwtAuth } from './middleware/jwt-auth.js';
+import { authRoutes } from './routes/auth.js';
 import { newsRoutes } from './routes/news.js';
 import { articleRoutes } from './routes/articles.js';
 import { videoRoutes } from './routes/videos.js';
@@ -27,31 +28,33 @@ export { Sandbox };
 
 const app = new Hono<Env>();
 
-// Frontend page routes (no auth required for UI)
+// Frontend page routes (public - 401 handling via fetch-init.js)
 app.route('/', frontendRoutes);
 
 // Log app initialization
 log.app.info('Japan Quick API initialized', { version: '1.0.0' });
 
-// Apply auth middleware to ALL API routes (including workflows)
-app.use('/api/*', basicAuth());
+// Auth routes (public - register before auth middleware)
+app.route('/api/auth', authRoutes);
 
-// Apply auth middleware to settings page
-app.use('/settings', basicAuth());
+// Apply JWT auth middleware to ALL API routes
+// /api/auth routes are public (registered above, excluded by middleware)
+// Frontend pages are public - 401 handling done via fetch-init.js
+app.use('/api/*', jwtAuth());
 
-// News/Workflow API routes (protected)
+// News/Workflow API routes (protected by /api/* middleware)
 app.route('/api/news', newsRoutes);
 
-// Article API routes (protected)
+// Article API routes (protected by /api/* middleware)
 app.route('/api/articles', articleRoutes);
 
-// Video API routes (protected)
+// Video API routes (protected by /api/* middleware)
 app.route('/api/videos', videoRoutes);
 
-// YouTube API routes (protected)
+// YouTube API routes (protected by /api/* middleware)
 app.route('/api/youtube', youtubeRoutes);
 
-// Settings page (protected)
+// Settings page (public - API calls protected by /api/* middleware)
 app.get('/settings', (c) => {
   const html = renderPageTemplate({
     title: 'Settings - Japan Quick',

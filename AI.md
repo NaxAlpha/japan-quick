@@ -22,7 +22,8 @@ japan-quick/
 ├── src/
 │   ├── index.ts                # Cloudflare Workers backend with Hono + workflow exports
 │   ├── middleware/
-│   │   └── auth.ts             # Basic HTTP authentication middleware
+│   │   ├── auth.ts            # Legacy Basic HTTP auth (deprecated)
+│   │   └── jwt-auth.ts        # JWT authentication middleware
 │   ├── lib/
 │   │   ├── logger.ts           # Structured logging utility with request ID tracking
 │   │   ├── html-template.ts    # HTML template utilities (with props support)
@@ -39,9 +40,11 @@ japan-quick/
 │   │   ├── styles/
 │   │   │   └── design-system.ts # Tokyo Cyber-Industrial design tokens (Colors, Typography, Spacing, etc.)
 │   │   ├── lib/
-│   │   │   └── auth.ts         # Frontend Basic Auth headers (getAuthHeaders)
+│   │   │   ├── auth.ts         # Frontend auth utilities (re-exports from auth-service)
+│   │   │   └── auth-service.ts # JWT token management (login, logout, getAuthHeaders)
 │   │   ├── app.ts              # LitElement root component (AppRoot)
 │   │   └── pages/
+│   │       ├── login-page.ts   # Login page component (Tokyo aesthetic)
 │   │       ├── news-page.ts    # News page component (workflow trigger/poll/result pattern)
 │   │       ├── article-page.ts # Article detail page component (Tokyo aesthetic)
 │   │       ├── videos-page.ts  # Videos page component (video selection management)
@@ -66,18 +69,20 @@ japan-quick/
 │   │   ├── asset-generator.ts        # Asset generation service (uses prompts.ts and audio-helper.ts)
 │   │   ├── video-renderer.ts         # FFmpeg video rendering in Cloudflare Sandbox
 │   │   ├── r2-storage.ts             # R2 storage service (upload, retrieve, delete assets)
-│   │   └── youtube-auth.ts           # YouTube OAuth 2.0 service (token management, channel operations)
+│   │   ├── youtube-auth.ts           # YouTube OAuth 2.0 service (token management, channel operations)
+│   │   └── jwt-auth.ts              # JWT token generation and verification service
 │   ├── types/
 │   │   ├── news.ts             # News type definitions + Env type (single source of truth)
 │   │   ├── article.ts          # Article type definitions
 │   │   ├── video.ts            # Video type definitions (Video, Model, CostLog, ImageSize, ImageDimensions)
 │   │   └── youtube.ts          # YouTube OAuth type definitions
 │   ├── routes/
-│   │   ├── news.ts             # API routes for news workflow management
-│   │   ├── articles.ts         # API routes for article management
-│   │   ├── videos.ts           # API routes for video workflow management
-│   │   ├── youtube.ts          # API routes for YouTube OAuth (status, auth URL, callback, refresh, disconnect)
-│   │   └── frontend.ts         # Frontend route handlers (/, /news, /article/:id, /videos, /video/:id, /settings)
+│   │   ├── auth.ts            # JWT auth routes (login, me, logout)
+│   │   ├── news.ts            # API routes for news workflow management
+│   │   ├── articles.ts        # API routes for article management
+│   │   ├── videos.ts          # API routes for video workflow management
+│   │   ├── youtube.ts         # API routes for YouTube OAuth (status, auth URL, callback, refresh, disconnect)
+│   │   └── frontend.ts        # Frontend route handlers (/, /login, /news, /article/:id, /videos, /video/:id, /settings)
 │   └── tests/
 │       ├── unit/               # Unit tests for services, routes, lib
 │       │   └── lib/
@@ -96,7 +101,7 @@ japan-quick/
 ## Architecture
 
 **Stack:** Hono + Cloudflare Workers + Lit web components + D1 + R2
-- Entry: `src/index.ts` with Basic HTTP Auth on `/api/*` routes only
+- Entry: `src/index.ts` with JWT authentication on `/api/*` routes
 - Database: See `migrations/` for D1 table schemas
 - Storage: R2 with ULID-based flat storage at bucket root: `{ulid}.{ext}`
 - Public URLs: `https://japan-quick-assets.nauman.im/{ulid}.ext`
@@ -113,7 +118,8 @@ japan-quick/
 | DB | D1 Database | SQLite storage |
 | ASSETS_BUCKET | R2 Bucket | Video assets |
 | *_WORKFLOW | Workflow | Durable workflows (8 types) |
-| ADMIN_USERNAME/PASSWORD | Var | Basic auth credentials |
+| ADMIN_USERNAME/PASSWORD | Var | Admin credentials (login) |
+| JWT_SECRET | Secret | JWT signing key |
 | GOOGLE_API_KEY | Secret | Gemini API key |
 | YOUTUBE_CLIENT_ID/SECRET/REDIRECT_URI | Secret | YouTube OAuth credentials |
 
@@ -151,13 +157,51 @@ log.gemini.info(reqId, 'Operation started', { videoId: '123' });
 
 ## Authentication
 
-**Basic HTTP Auth** on `/api/*` routes only. Frontend pages are public.
+**JWT-based authentication** on `/api/*` routes only. Frontend pages are public.
 
-**Credentials:** Stored in `wrangler.toml` under `[vars]`
-- Username: `ADMIN_USERNAME`
-- Password: `ADMIN_PASSWORD`
+### Login Flow
 
-**Secrets:** `GOOGLE_API_KEY`, `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REDIRECT_URI`
+1. **Browser:** Visit `/login` and enter credentials
+2. **API:** Call `POST /api/auth/login` with username/password
+3. **Token:** Server returns signed JWT (7 day expiry)
+4. **Storage:** Token stored in localStorage as `japan_quick_auth_token`
+5. **API Requests:** All requests include `Authorization: Bearer <token>`
+
+### Credentials Storage
+
+- **Location:** `wrangler.toml` under `[vars]` ONLY
+- **Keys:** `ADMIN_USERNAME`, `ADMIN_PASSWORD`
+- **Rotation:** Update values in wrangler.toml and redeploy
+
+### cURL Example
+
+```bash
+# Login (password matches wrangler.toml)
+TOKEN=$(curl -s -X POST https://japan-quick.nax.workers.dev/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"PASSWORD_FROM_TOML"}' \
+  | jq -r '.data.token')
+
+# Use token for API requests
+curl https://japan-quick.nax.workers.dev/api/videos \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Protected Endpoints
+
+All `/api/*` routes require JWT authentication:
+- `/api/videos/*` - Video operations
+- `/api/news/*` - News scraping
+- `/api/articles/*` - Article operations
+- `/api/youtube/*` - YouTube OAuth
+
+### Environment Variables
+
+- `JWT_SECRET` (secret) - JWT signing key (set via `wrangler secret put`)
+- `ADMIN_USERNAME` (var) - Admin username (in wrangler.toml)
+- `ADMIN_PASSWORD` (var) - Admin password (in wrangler.toml)
+
+**Secrets:** `GOOGLE_API_KEY`, `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REDIRECT_URI`, `JWT_SECRET`
 - Managed via: `echo $VALUE | wrangler secret put KEY`
 
 ## Database
