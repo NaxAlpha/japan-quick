@@ -7,8 +7,9 @@ import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:work
 import { GeminiService } from '../services/gemini.js';
 import type { Video, VideoScript } from '../types/video.js';
 import type { Article, ArticleVersion, ArticleComment } from '../types/article.js';
-import type { Env } from '../types/news.js';
+import type { Env } from '../types/env.js';
 import { log, generateRequestId } from '../lib/logger.js';
+import { RETRY_POLICIES, SCRAPING, VIDEO_RENDERING } from '../lib/constants.js';
 
 export interface ScriptGenerationParams {
   videoId: number;
@@ -33,7 +34,7 @@ export class ScriptGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings']
       // Step 1: Fetch video data
       const video = await step.do('fetch-video-data', {
         retries: {
-          limit: 3,
+          limit: RETRY_POLICIES.DEFAULT.limit,
           delay: '2 seconds',
           backoff: 'constant'
         }
@@ -79,7 +80,7 @@ export class ScriptGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings']
       // Step 3: Fetch article content, comments, images
       const articlesWithContent = await step.do('fetch-article-data', {
         retries: {
-          limit: 3,
+          limit: RETRY_POLICIES.DEFAULT.limit,
           delay: '2 seconds',
           backoff: 'constant'
         }
@@ -149,7 +150,7 @@ export class ScriptGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings']
       // Step 4: Generate script using Gemini AI
       const generationResult = await step.do('generate-script', {
         retries: {
-          limit: 3,
+          limit: RETRY_POLICIES.DEFAULT.limit,
           delay: '5 seconds',
           backoff: 'exponential'
         }
@@ -165,7 +166,7 @@ export class ScriptGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings']
       // Step 5: Log token costs
       const costData = await step.do('log-cost', {
         retries: {
-          limit: 3,
+          limit: RETRY_POLICIES.DEFAULT.limit,
           delay: '2 seconds',
           backoff: 'constant'
         }
@@ -189,7 +190,7 @@ export class ScriptGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings']
       // Step 6: Save script to database
       await step.do('save-script', {
         retries: {
-          limit: 3,
+          limit: RETRY_POLICIES.DEFAULT.limit,
           delay: '2 seconds',
           backoff: 'constant'
         }
@@ -206,7 +207,7 @@ export class ScriptGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings']
       // Step 7: Update total_cost
       await step.do('update-total-cost', {
         retries: {
-          limit: 3,
+          limit: RETRY_POLICIES.DEFAULT.limit,
           delay: '2 seconds',
           backoff: 'constant'
         }

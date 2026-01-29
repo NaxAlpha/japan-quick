@@ -14,6 +14,7 @@ import puppeteer from '@cloudflare/puppeteer';
 import type { ArticleScraperParams, ArticleScraperResult, ArticleStatus } from '../types/article.js';
 import { ArticleScraper } from '../services/article-scraper.js';
 import { log, generateRequestId } from '../lib/logger.js';
+import { RETRY_POLICIES, SCRAPING, VIDEO_RENDERING } from '../lib/constants.js';
 import {
   checkArticleForScraping,
   upsertArticle,
@@ -41,9 +42,9 @@ export class ArticleScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, Arti
       const checkStart = Date.now();
       const existingArticle = await step.do('check-existing', {
         retries: {
-          limit: 3,
-          delay: "1 second",
-          backoff: "constant"
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: RETRY_POLICIES.CACHE.delay,
+          backoff: RETRY_POLICIES.DEFAULT.backoff
         }
       }, async () => {
         return checkArticleForScraping(this.env.DB, pickId);
@@ -72,8 +73,8 @@ export class ArticleScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, Arti
           pickupResult = await step.do(`scrape-pickup-attempt-${attempt}`, {
             retries: {
               limit: 1, // No automatic retries, we handle manually
-              delay: "5 seconds",
-              backoff: "constant"
+              delay: RETRY_POLICIES.AI_CALL.delay,
+              backoff: RETRY_POLICIES.DEFAULT.backoff
             }
           }, async () => {
             // Use ArticleScraper directly with browser binding
@@ -120,9 +121,9 @@ export class ArticleScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, Arti
         log.articleScraperWorkflow.info(reqId, 'Article is external or has no URL', { pickId, isExternal: pickupResult.isExternal });
         await step.do('save-not-available', {
           retries: {
-            limit: 3,
-            delay: "2 seconds",
-            backoff: "constant"
+            limit: RETRY_POLICIES.DEFAULT.limit,
+            delay: RETRY_POLICIES.DEFAULT.delay,
+            backoff: RETRY_POLICIES.DEFAULT.backoff
           }
         }, async () => {
           await upsertArticle(this.env.DB, { pickId, status: 'not_available' });
@@ -141,8 +142,8 @@ export class ArticleScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, Arti
       const articleData = await step.do('scrape-article', {
         retries: {
           limit: 5,
-          delay: "5 seconds",
-          backoff: "exponential"
+          delay: RETRY_POLICIES.AI_CALL.delay,
+          backoff: RETRY_POLICIES.AI_CALL.backoff
         }
       }, async () => {
         // Use ArticleScraper directly with browser binding
@@ -156,9 +157,9 @@ export class ArticleScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, Arti
       const commentsScrapeStart = Date.now();
       const comments = await step.do('scrape-comments', {
         retries: {
-          limit: 3,
-          delay: "5 seconds",
-          backoff: "exponential"
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: RETRY_POLICIES.AI_CALL.delay,
+          backoff: RETRY_POLICIES.AI_CALL.backoff
         }
       }, async () => {
         // Use ArticleScraper directly with browser binding
@@ -177,9 +178,9 @@ export class ArticleScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, Arti
       const saveArticleStart = Date.now();
       const articleId = await step.do('save-article', {
         retries: {
-          limit: 3,
-          delay: "2 seconds",
-          backoff: "constant"
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: RETRY_POLICIES.DEFAULT.delay,
+          backoff: RETRY_POLICIES.DEFAULT.backoff
         }
       }, async () => {
         return upsertArticle(this.env.DB, {
@@ -200,9 +201,9 @@ export class ArticleScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, Arti
       const saveVersionStart = Date.now();
       await step.do('save-version', {
         retries: {
-          limit: 3,
-          delay: "2 seconds",
-          backoff: "constant"
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: RETRY_POLICIES.DEFAULT.delay,
+          backoff: RETRY_POLICIES.DEFAULT.backoff
         }
       }, async () => {
         await upsertArticleVersion(this.env.DB, {
@@ -220,9 +221,9 @@ export class ArticleScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, Arti
       const saveCommentsStart = Date.now();
       await step.do('save-comments', {
         retries: {
-          limit: 3,
-          delay: "2 seconds",
-          backoff: "constant"
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: RETRY_POLICIES.DEFAULT.delay,
+          backoff: RETRY_POLICIES.DEFAULT.backoff
         }
       }, async () => {
         await upsertArticleComments(this.env.DB, {
@@ -238,9 +239,9 @@ export class ArticleScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, Arti
       const newStatus: ArticleStatus = isRescrape ? 'scraped_v2' : 'scraped_v1';
       await step.do('update-status', {
         retries: {
-          limit: 3,
-          delay: "2 seconds",
-          backoff: "constant"
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: RETRY_POLICIES.DEFAULT.delay,
+          backoff: RETRY_POLICIES.DEFAULT.backoff
         }
       }, async () => {
         await updateArticleStatus(this.env.DB, articleId, newStatus, {

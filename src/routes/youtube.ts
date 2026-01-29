@@ -4,9 +4,10 @@
  */
 
 import { Hono } from 'hono';
-import type { Env } from '../types/news.js';
+import type { Env } from '../types/env.js';
 import { YouTubeAuthService } from '../services/youtube-auth.js';
 import { generateRequestId, createLogger } from '../lib/logger.js';
+import { successResponse, errorResponse, serverErrorResponse, unauthorizedResponse } from '../lib/api-response.js';
 
 const log = createLogger('YouTubeRoutes');
 
@@ -36,11 +37,11 @@ youtubeRoutes.get('/status', async (c) => {
     const durationMs = Date.now() - startTime;
     log.info(reqId, 'Status request completed', { durationMs, isConnected: status.isConnected });
 
-    return c.json({ success: true, data: status });
+    return successResponse({ data: status });
   } catch (error) {
     const durationMs = Date.now() - startTime;
     log.error(reqId, 'Status request failed', error as Error);
-    return c.json({ success: false, error: 'Failed to get status' }, 500);
+    return serverErrorResponse(error as Error);
   }
 });
 
@@ -68,11 +69,11 @@ youtubeRoutes.get('/auth/url', async (c) => {
     const durationMs = Date.now() - startTime;
     log.info(reqId, 'Auth URL generated', { durationMs, state });
 
-    return c.json({ success: true, data: { url, state } });
+    return successResponse({ data: { url, state } });
   } catch (error) {
     const durationMs = Date.now() - startTime;
     log.error(reqId, 'Auth URL generation failed', error as Error);
-    return c.json({ success: false, error: 'Failed to generate auth URL' }, 500);
+    return serverErrorResponse(error as Error);
   }
 });
 
@@ -167,7 +168,7 @@ youtubeRoutes.post('/refresh', async (c) => {
     const durationMs = Date.now() - startTime;
     log.info(reqId, 'Token refreshed', { durationMs, expiresAt: result.expiresAt });
 
-    return c.json({ success: true, data: result });
+    return successResponse({ data: result });
   } catch (error) {
     const durationMs = Date.now() - startTime;
     log.error(reqId, 'Token refresh failed', error as Error);
@@ -175,7 +176,7 @@ youtubeRoutes.post('/refresh', async (c) => {
     const errorMessage = error instanceof Error ? error.message : 'Failed to refresh token';
     const status = errorMessage === 'not_authenticated' ? 401 : 500;
 
-    return c.json({ success: false, error: errorMessage }, status);
+    return errorResponse(errorMessage, status);
   }
 });
 
@@ -203,11 +204,11 @@ youtubeRoutes.delete('/auth', async (c) => {
     const durationMs = Date.now() - startTime;
     log.info(reqId, 'Deauthorize completed', { durationMs });
 
-    return c.json({ success: true, data: { message: 'Disconnected successfully' } });
+    return successResponse({ data: { message: 'Disconnected successfully' } });
   } catch (error) {
     const durationMs = Date.now() - startTime;
     log.error(reqId, 'Deauthorize failed', error as Error);
-    return c.json({ success: false, error: 'Failed to disconnect' }, 500);
+    return serverErrorResponse(error as Error);
   }
 });
 

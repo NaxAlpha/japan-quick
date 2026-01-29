@@ -6,9 +6,7 @@
 import puppeteer from '@cloudflare/puppeteer';
 import type { ScrapedArticleData, ScrapedComment, CommentReactions, CommentReply } from '../types/article.js';
 import { log, generateRequestId } from '../lib/logger.js';
-
-const USER_AGENT = 'Mozilla/5.0 (compatible; JapanQuick/1.0)';
-const TIMEOUT_MS = 30000;
+import { SCRAPING } from '../lib/constants.js';
 
 // Result of scraping a pickup page
 export interface PickupScrapeResult {
@@ -68,12 +66,12 @@ export class ArticleScraper {
     log.articleScraper.info(reqId, 'Launching browser for pickup page', { pickupUrl });
     const browser = await puppeteer.launch(browserBinding);
     const page = await browser.newPage();
-    await page.setUserAgent(USER_AGENT);
+    await page.setUserAgent(SCRAPING.USER_AGENT);
 
     log.articleScraper.info(reqId, 'Loading pickup page', { pickupUrl });
     await page.goto(pickupUrl, {
       waitUntil: 'domcontentloaded',
-      timeout: TIMEOUT_MS
+      timeout: SCRAPING.TIMEOUT_MS
     });
     log.articleScraper.info(reqId, 'Pickup page loaded successfully', { pickupUrl });
 
@@ -179,12 +177,12 @@ export class ArticleScraper {
     log.articleScraper.info(reqId, 'Launching browser for article page', { articleUrl });
     const browser = await puppeteer.launch(browserBinding);
     const page = await browser.newPage();
-    await page.setUserAgent(USER_AGENT);
+    await page.setUserAgent(SCRAPING.USER_AGENT);
 
     log.articleScraper.info(reqId, 'Loading article page', { articleUrl });
     await page.goto(articleUrl, {
       waitUntil: 'domcontentloaded',
-      timeout: TIMEOUT_MS
+      timeout: SCRAPING.TIMEOUT_MS
     });
     log.articleScraper.info(reqId, 'Article page loaded successfully', { articleUrl });
 
@@ -391,7 +389,7 @@ export class ArticleScraper {
         const pageUrl = `${articleUrl}?page=${pageNum}`;
         await page.goto(pageUrl, {
           waitUntil: 'domcontentloaded',
-          timeout: TIMEOUT_MS
+          timeout: SCRAPING.TIMEOUT_MS
         });
 
         const pageData = await page.evaluate(() => {
@@ -539,13 +537,13 @@ export class ArticleScraper {
     log.articleScraper.info(reqId, 'Launching browser for comments page', { commentsUrl });
     const browser = await puppeteer.launch(browserBinding);
     const page = await browser.newPage();
-    await page.setUserAgent(USER_AGENT);
+    await page.setUserAgent(SCRAPING.USER_AGENT);
 
     try {
       log.articleScraper.info(reqId, 'Loading comments page', { commentsUrl });
       await page.goto(commentsUrl, {
         waitUntil: 'domcontentloaded',
-        timeout: TIMEOUT_MS
+        timeout: SCRAPING.TIMEOUT_MS
       });
       log.articleScraper.info(reqId, 'Comments page loaded successfully', { commentsUrl });
     } catch (error) {

@@ -12,6 +12,9 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { getAuthHeaders } from '../lib/auth.js';
+import { baseStyles, buttonStyles, badgeStyles, loadingStyles } from '../styles/shared-styles.js';
+import { createPoller, type Poller } from '../lib/polling.js';
+import { POLLING, TERMINAL_STATES } from '../lib/constants.js';
 
 type ArticleStatus = 'pending' | 'not_available' | 'scraped_v1' | 'scraped_v2';
 
@@ -28,37 +31,14 @@ type FetchState = 'not-fetched' | 'triggering' | 'polling' | 'fetched';
 
 @customElement('news-page')
 export class NewsPage extends LitElement {
-  static styles = css`
-    @import url('https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Zen+Tokyo+Zoo&display=swap');
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=Inter:wght@400;500;600;700;800&display=swap');
-
-    :host {
-      display: block;
-      width: 100%;
-      min-height: 100vh;
-    }
-
+  static styles = [
+    baseStyles,
+    buttonStyles,
+    badgeStyles,
+    loadingStyles,
+    css`
     .container {
-      padding: 2rem;
       max-width: 900px;
-      margin: 0 auto;
-      background: #f5f3f0;
-      min-height: 100vh;
-      position: relative;
-    }
-
-    /* Background pattern */
-    .container::before {
-      content: '';
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background-image: url("data:image/svg+xml,%3Csvg width='120' height='60' viewBox='0 0 120 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 30 Q 15 15, 30 30 T 60 30 T 90 30 T 120 30' stroke='%23e63946' stroke-width='0.5' fill='none' opacity='0.06'/%3E%3C/svg%3E");
-      background-size: 120px 60px;
-      pointer-events: none;
-      z-index: 0;
     }
 
     /* Header */
@@ -78,44 +58,8 @@ export class NewsPage extends LitElement {
       min-width: 280px;
     }
 
-    .home-link {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.5rem 1rem;
-      background: #0a0a0a;
-      color: #ffffff;
-      font-family: 'Space Mono', monospace;
-      font-size: 0.6875rem;
-      font-weight: 400;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      border: 2px solid #0a0a0a;
-      text-decoration: none;
-      transition: all 0.15s ease-out;
-      box-shadow: 2px 2px 0 #0a0a0a;
-      margin-bottom: 1.5rem;
-    }
-
-    .home-link:hover {
-      background: #e63946;
-      border-color: #e63946;
-      transform: translate(-1px, -1px);
-      box-shadow: 3px 3px 0 #0a0a0a;
-    }
-
     h1 {
-      font-family: 'Zen Tokyo Zoo', sans-serif;
-      font-size: clamp(1.75rem, 5vw, 2.5rem);
-      font-weight: 400;
       line-height: 1;
-      color: #0a0a0a;
-      margin: 0;
-      text-transform: uppercase;
-    }
-
-    h1 .accent {
-      color: #e63946;
     }
 
     .header-right {
@@ -123,41 +67,6 @@ export class NewsPage extends LitElement {
       flex-direction: column;
       align-items: flex-end;
       gap: 0.75rem;
-    }
-
-    /* Scrape button */
-    .scrape-button {
-      padding: 0.875rem 1.5rem;
-      background: #e63946;
-      color: #ffffff;
-      border: 3px solid #e63946;
-      font-family: 'Space Mono', monospace;
-      font-size: 0.75rem;
-      font-weight: 400;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      cursor: pointer;
-      transition: all 0.15s ease-out;
-      box-shadow: 4px 4px 0 #0a0a0a;
-    }
-
-    .scrape-button:hover:not(:disabled) {
-      background: #0a0a0a;
-      border-color: #0a0a0a;
-      transform: translate(-2px, -2px);
-      box-shadow: 6px 6px 0 #0a0a0a;
-    }
-
-    .scrape-button:focus-visible {
-      outline: 3px solid #e63946;
-      outline-offset: 3px;
-    }
-
-    .scrape-button:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-      transform: none;
-      box-shadow: 4px 4px 0 #0a0a0a;
     }
 
     /* Snapshot info */
@@ -275,45 +184,7 @@ export class NewsPage extends LitElement {
     }
 
     .status-badge {
-      font-family: 'Space Mono', monospace;
-      font-size: 0.625rem;
-      font-weight: 400;
-      padding: 0.25rem 0.5rem;
-      border: 1px solid #0a0a0a;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      white-space: nowrap;
       flex-shrink: 0;
-    }
-
-    .status-badge.new {
-      background: #e63946;
-      color: #ffffff;
-      border-color: #e63946;
-    }
-
-    .status-badge.external {
-      background: #78746c;
-      color: #ffffff;
-      border-color: #78746c;
-    }
-
-    .status-badge.pending {
-      background: #e9c46a;
-      color: #78350f;
-      border-color: #e9c46a;
-    }
-
-    .status-badge.scraped-v1 {
-      background: #0066cc;
-      color: #ffffff;
-      border-color: #0066cc;
-    }
-
-    .status-badge.scraped-v2 {
-      background: #2d6a4f;
-      color: #ffffff;
-      border-color: #2d6a4f;
     }
 
     .news-meta {
@@ -335,40 +206,11 @@ export class NewsPage extends LitElement {
       content: '📅';
     }
 
-    /* Status messages */
-    .status-message {
-      text-align: center;
-      padding: 4rem 2rem;
-      font-family: 'Inter', sans-serif;
-      font-size: 1rem;
-      color: #58544c;
-      position: relative;
-      z-index: 1;
-    }
-
-    .status-message.error {
-      color: #e63946;
-    }
-
     .status-message.polling {
       display: flex;
       flex-direction: column;
       align-items: center;
       gap: 1rem;
-    }
-
-    .loading-spinner {
-      display: inline-block;
-      width: 2rem;
-      height: 2rem;
-      border: 3px solid #e8e6e1;
-      border-top-color: #e63946;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-
-    @keyframes spin {
-      to { transform: rotate(360deg); }
     }
 
     /* Footer */
@@ -380,31 +222,6 @@ export class NewsPage extends LitElement {
       justify-content: center;
       position: relative;
       z-index: 1;
-    }
-
-    .home-link-footer {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.5rem 1rem;
-      background: #0a0a0a;
-      color: #ffffff;
-      font-family: 'Space Mono', monospace;
-      font-size: 0.6875rem;
-      font-weight: 400;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      border: 2px solid #0a0a0a;
-      text-decoration: none;
-      transition: all 0.15s ease-out;
-      box-shadow: 2px 2px 0 #0a0a0a;
-    }
-
-    .home-link-footer:hover {
-      background: #e63946;
-      border-color: #e63946;
-      transform: translate(-1px, -1px);
-      box-shadow: 3px 3px 0 #0a0a0a;
     }
 
     @media (max-width: 640px) {
@@ -423,7 +240,8 @@ export class NewsPage extends LitElement {
         gap: 0.5rem;
       }
     }
-  `;
+  `];
+
 
   @state()
   private topPicks: YahooNewsTopPick[] = [];
@@ -443,7 +261,7 @@ export class NewsPage extends LitElement {
   @state()
   private snapshotInfo: string = '';
 
-  private pollingInterval: number | null = null;
+  private workflowPoller: Poller | null = null;
 
   connectedCallback() {
     super.connectedCallback();
@@ -452,7 +270,9 @@ export class NewsPage extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
-    this.stopPolling();
+    if (this.workflowPoller) {
+      this.workflowPoller.stop();
+    }
   }
 
   private async loadLatestSnapshot() {
@@ -511,52 +331,38 @@ export class NewsPage extends LitElement {
   }
 
   private startPolling() {
-    this.stopPolling();
-
-    this.pollingInterval = window.setInterval(() => {
-      this.checkWorkflowStatus();
-    }, 2000);
-
-    this.checkWorkflowStatus();
-  }
-
-  private stopPolling() {
-    if (this.pollingInterval !== null) {
-      clearInterval(this.pollingInterval);
-      this.pollingInterval = null;
-    }
-  }
-
-  private async checkWorkflowStatus() {
     if (!this.workflowId) return;
 
-    try {
-      const response = await fetch(`/api/news/status/${this.workflowId}`, {
-        headers: getAuthHeaders()
-      });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const data = await response.json();
-      if (!data.success) {
-        throw new Error('Failed to get workflow status');
-      }
-
-      this.statusMessage = `Status: ${data.status}`;
-
-      if (data.status === 'complete') {
-        this.stopPolling();
-        await this.fetchWorkflowResult();
-      } else if (data.status === 'failed' || data.status === 'terminated') {
-        this.stopPolling();
-        this.error = `Workflow ${data.status}`;
+    this.workflowPoller = createPoller({
+      getEndpoint: () => `/api/news/status/${this.workflowId!}`,
+      intervalMs: POLLING.NEWS_POLL_INTERVAL_MS,
+      terminalStates: [TERMINAL_STATES.WORKFLOW.COMPLETE, TERMINAL_STATES.WORKFLOW.FAILED, 'terminated'],
+      onStatus: (status) => {
+        this.statusMessage = `Status: ${status}`;
+      },
+      onComplete: async (terminalStatus) => {
+        if (terminalStatus === TERMINAL_STATES.WORKFLOW.COMPLETE) {
+          await this.fetchWorkflowResult();
+        } else {
+          // Handle failed or terminated workflows
+          const errorMessages: Record<string, string> = {
+            [TERMINAL_STATES.WORKFLOW.FAILED]: 'Workflow failed during execution',
+            'terminated': 'Workflow was terminated before completion'
+          };
+          this.error = errorMessages[terminalStatus] || `Workflow ended with status: ${terminalStatus}`;
+          this.fetchState = 'not-fetched';
+          this.statusMessage = '';
+          this.workflowId = null;
+        }
+      },
+      onError: (err) => {
+        this.error = `Workflow failed: ${err.message}`;
         this.fetchState = 'not-fetched';
         this.statusMessage = '';
       }
-    } catch (err) {
-      console.error('Polling error:', err);
-    }
+    });
+
+    this.workflowPoller.start();
   }
 
   private async fetchWorkflowResult() {

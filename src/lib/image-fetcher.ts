@@ -3,6 +3,8 @@
  * Fetches images from URLs and converts to base64 for Gemini API
  */
 
+import { IMAGE_FETCHING, SCRAPING } from './constants.js';
+
 interface FetchedImage {
   mimeType: string;
   data: string; // base64 encoded
@@ -14,9 +16,9 @@ interface FetchedImage {
 export async function fetchImageAsBase64(url: string): Promise<FetchedImage | null> {
   try {
     const response = await fetch(url, {
-      signal: AbortSignal.timeout(10000), // 10 second timeout
+      signal: AbortSignal.timeout(IMAGE_FETCHING.TIMEOUT_MS),
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; JapanQuick/1.0)'
+        'User-Agent': SCRAPING.USER_AGENT
       }
     });
 

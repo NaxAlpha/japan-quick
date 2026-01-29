@@ -12,6 +12,7 @@ import { scrapeArticleCore } from '../services/article-scraper-core.js';
 import type { YahooNewsResponse } from '../types/news.js';
 import type { ScheduledRefreshParams, ScheduledRefreshResult } from './types.js';
 import { log, generateRequestId } from '../lib/logger.js';
+import { RETRY_POLICIES, SCRAPING, VIDEO_RENDERING } from '../lib/constants.js';
 
 interface WorkflowEnv {
   BROWSER: any;
@@ -42,8 +43,8 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
       const topPicks = await step.do('scrape-fresh-news', {
         retries: {
           limit: 5,
-          delay: "5 seconds",
-          backoff: "exponential"
+          delay: RETRY_POLICIES.AI_CALL.delay,
+          backoff: RETRY_POLICIES.AI_CALL.backoff
         }
       }, async () => {
         // Use YahooNewsScraper directly with browser binding
@@ -64,9 +65,9 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
       const cacheStart = Date.now();
       await step.do('update-cache', {
         retries: {
-          limit: 3,
-          delay: "1 second",
-          backoff: "constant"
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: RETRY_POLICIES.CACHE.delay,
+          backoff: RETRY_POLICIES.DEFAULT.backoff
         }
       }, async () => {
         await this.env.NEWS_CACHE.put(CACHE_KEY, JSON.stringify(newsData), {
@@ -79,9 +80,9 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
       const snapshotStart = Date.now();
       const snapshotName = await step.do('save-snapshot', {
         retries: {
-          limit: 3,
-          delay: "2 seconds",
-          backoff: "constant"
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: RETRY_POLICIES.DEFAULT.delay,
+          backoff: RETRY_POLICIES.DEFAULT.backoff
         }
       }, async () => {
         const now = new Date();
@@ -101,9 +102,9 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
       const cleanupStart = Date.now();
       const cleanupCount = await step.do('cleanup-old-snapshots', {
         retries: {
-          limit: 3,
-          delay: "1 second",
-          backoff: "constant"
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: RETRY_POLICIES.CACHE.delay,
+          backoff: RETRY_POLICIES.DEFAULT.backoff
         }
       }, async () => {
         const result = await this.env.DB.prepare(
@@ -118,9 +119,9 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
       const findArticlesStart = Date.now();
       const newPickIds = await step.do('find-new-articles', {
         retries: {
-          limit: 3,
-          delay: "2 seconds",
-          backoff: "constant"
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: RETRY_POLICIES.DEFAULT.delay,
+          backoff: RETRY_POLICIES.DEFAULT.backoff
         }
       }, async () => {
         // Extract pickIds from scraped news
@@ -156,8 +157,8 @@ export class ScheduledNewsRefreshWorkflow extends WorkflowEntrypoint<WorkflowEnv
         await step.do(`scrape-article-${pickId}`, {
           retries: {
             limit: 2,
-            delay: "5 seconds",
-            backoff: "constant"
+            delay: RETRY_POLICIES.AI_CALL.delay,
+            backoff: RETRY_POLICIES.DEFAULT.backoff
           }
         }, async () => {
           return await scrapeArticleCore({

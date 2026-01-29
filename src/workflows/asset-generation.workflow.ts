@@ -9,8 +9,9 @@ import { R2StorageService } from '../services/r2-storage.js';
 import { fetchImagesAsBase64 } from '../lib/image-fetcher.js';
 import { ulid } from 'ulid';
 import type { Video, VideoScript, VideoAsset, TTSVoice } from '../types/video.js';
-import type { Env } from '../types/news.js';
+import type { Env } from '../types/env.js';
 import { log, generateRequestId } from '../lib/logger.js';
+import { RETRY_POLICIES, SCRAPING, VIDEO_RENDERING } from '../lib/constants.js';
 
 export interface AssetGenerationParams {
   videoId: number;
@@ -36,7 +37,7 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
       // Step 1: Validate prerequisites
       const video = await step.do('validate-prerequisites', {
         retries: {
-          limit: 3,
+          limit: RETRY_POLICIES.DEFAULT.limit,
           delay: '2 seconds',
           backoff: 'constant'
         }
@@ -104,7 +105,7 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
       // Step 3: Fetch reference images
       const referenceImages = await step.do('fetch-reference-images', {
         retries: {
-          limit: 3,
+          limit: RETRY_POLICIES.DEFAULT.limit,
           delay: '2 seconds',
           backoff: 'constant'
         }
@@ -155,7 +156,7 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
       // Returns only grid count (not the actual image data)
       const gridCount = await step.do('generate-grid-images', {
         retries: {
-          limit: 3,
+          limit: RETRY_POLICIES.DEFAULT.limit,
           delay: '5 seconds',
           backoff: 'exponential'
         }
@@ -259,7 +260,7 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
       // CRITICAL: Generate and upload each slide individually to avoid 1MiB step output limit
       const { audioCount, slideAudioAssetIds } = await step.do('generate-and-upload-audio', {
         retries: {
-          limit: 3,
+          limit: RETRY_POLICIES.DEFAULT.limit,
           delay: '5 seconds',
           backoff: 'exponential'
         }
@@ -305,7 +306,7 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
       // Step 7: Log costs
       await step.do('log-costs', {
         retries: {
-          limit: 3,
+          limit: RETRY_POLICIES.DEFAULT.limit,
           delay: '2 seconds',
           backoff: 'constant'
         }
@@ -323,7 +324,7 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
       // Step 8: Update status to 'generated' with ULID asset IDs
       await step.do('complete', {
         retries: {
-          limit: 3,
+          limit: RETRY_POLICIES.DEFAULT.limit,
           delay: '2 seconds',
           backoff: 'constant'
         }

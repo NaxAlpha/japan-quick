@@ -7,13 +7,11 @@
 import puppeteer from '@cloudflare/puppeteer';
 import type { YahooNewsTopPick } from '../types/news.js';
 import { log } from '../lib/logger.js';
-
-const TOP_PICKS_URL = 'https://news.yahoo.co.jp/topics/top-picks';
-const USER_AGENT = 'Mozilla/5.0 (compatible; JapanQuick/1.0)';
+import { SCRAPING, URL_PATTERNS } from '../lib/constants.js';
 
 // Filter to only include pickup URLs (e.g., https://news.yahoo.co.jp/pickup/XXXXXXX)
 function isPickupUrl(url: string): boolean {
-  return /^https?:\/\/news\.yahoo\.co\.jp\/pickup\/\d+$/.test(url);
+  return URL_PATTERNS.YAHOO_PICKUP.test(url);
 }
 
 // Helper function to filter items by pickup URL
@@ -45,12 +43,12 @@ export class YahooNewsScraper {
 
       const browser = await puppeteer.launch(browserBinding);
       const page = await browser.newPage();
-      await page.setUserAgent(USER_AGENT);
+      await page.setUserAgent(SCRAPING.USER_AGENT);
 
-      log.newsScraper.info('Navigating to page', { url: TOP_PICKS_URL });
-      await page.goto(TOP_PICKS_URL, {
+      log.newsScraper.info('Navigating to page', { url: URL_PATTERNS.YAHOO_TOP_PICKS });
+      await page.goto(URL_PATTERNS.YAHOO_TOP_PICKS, {
         waitUntil: 'domcontentloaded',
-        timeout: 20000
+        timeout: SCRAPING.NEWS_TIMEOUT_MS
       });
 
       const topPicks = await page.evaluate(() => {

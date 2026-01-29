@@ -15,7 +15,7 @@
  */
 
 import { Hono } from 'hono';
-import type { Env } from '../types/news.js';
+import type { Env } from '../types/env.js';
 import type { Video, ParsedVideo, CostLog, VideoAsset, ParsedVideoAsset, VideoScript, TTS_VOICES } from '../types/video.js';
 import type { VideoSelectionParams, VideoSelectionResult } from '../workflows/video-selection.workflow.js';
 import type { VideoRenderParams, VideoRenderResult } from '../workflows/video-render.workflow.js';
@@ -25,6 +25,8 @@ import type { Article, ArticleVersion, ArticleComment } from '../types/article.j
 import { parseVideo, TTS_VOICES as TTSVoicesArray } from '../types/video.js';
 import { R2StorageService } from '../services/r2-storage.js';
 import { log, generateRequestId } from '../lib/logger.js';
+import { successResponse, errorResponse, notFoundResponse, serverErrorResponse, conflictResponse } from '../lib/api-response.js';
+import { POLLING } from '../lib/constants.js';
 
 const videoRoutes = new Hono<{ Bindings: Env['Bindings'] }>();
 
@@ -57,8 +59,7 @@ videoRoutes.get('/', async (c) => {
 
     const hasMore = offset + videos.length < total;
 
-    return c.json({
-      success: true,
+    return successResponse({
       videos,
       pagination: {
         page,
@@ -69,10 +70,7 @@ videoRoutes.get('/', async (c) => {
     });
   } catch (error) {
     log.videoRoutes.error(reqId, 'Request failed', error as Error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to fetch videos'
-    }, 500);
+    return serverErrorResponse(error as Error);
   } finally {
     const durationMs = Date.now() - startTime;
     log.videoRoutes.info(reqId, 'Request completed', { status: 200, durationMs });
@@ -94,10 +92,7 @@ videoRoutes.get('/:id', async (c) => {
 
     if (!video) {
       log.videoRoutes.warn(reqId, 'Video not found', { id });
-      return c.json({
-        success: false,
-        error: 'Video not found'
-      }, 404);
+      return notFoundResponse('Video');
     }
 
     // Fetch cost logs
@@ -125,17 +120,10 @@ videoRoutes.get('/:id', async (c) => {
 
     const parsedVideo = parseVideo(video);
 
-    return c.json({
-      success: true,
-      video: { ...parsedVideo, assets },
-      costLogs
-    });
+    return successResponse({ video: { ...parsedVideo, assets }, costLogs });
   } catch (error) {
     log.videoRoutes.error(reqId, 'Request failed', error as Error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to fetch video'
-    }, 500);
+    return serverErrorResponse(error as Error);
   } finally {
     const durationMs = Date.now() - startTime;
     log.videoRoutes.info(reqId, 'Request completed', { status: 200, durationMs });
@@ -157,10 +145,7 @@ videoRoutes.delete('/:id', async (c) => {
 
     if (!video) {
       log.videoRoutes.warn(reqId, 'Video not found', { id });
-      return c.json({
-        success: false,
-        error: 'Video not found'
-      }, 404);
+      return notFoundResponse('Video');
     }
 
     // Delete cost_logs first (foreign key constraint)
@@ -175,16 +160,10 @@ videoRoutes.delete('/:id', async (c) => {
 
     log.videoRoutes.info(reqId, 'Video deleted', { id });
 
-    return c.json({
-      success: true,
-      message: 'Video deleted successfully'
-    });
+    return successResponse({ message: 'Video deleted successfully' });
   } catch (error) {
     log.videoRoutes.error(reqId, 'Request failed', error as Error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to delete video'
-    }, 500);
+    return serverErrorResponse(error as Error);
   } finally {
     const durationMs = Date.now() - startTime;
     log.videoRoutes.info(reqId, 'Request completed', { status: 200, durationMs });
@@ -206,18 +185,12 @@ videoRoutes.post('/:id/generate-script', async (c) => {
 
     if (!video) {
       log.videoRoutes.warn(reqId, 'Video not found', { id });
-      return c.json({
-        success: false,
-        error: 'Video not found'
-      }, 404);
+      return notFoundResponse('Video');
     }
 
     if (video.script_status === 'generating') {
       log.videoRoutes.warn(reqId, 'Script generation already in progress', { id });
-      return c.json({
-        success: false,
-        error: 'Script generation already in progress'
-      }, 400);
+      return conflictResponse('Script generation already in progress');
     }
 
     // 2. Trigger ScriptGenerationWorkflow
@@ -230,16 +203,10 @@ videoRoutes.post('/:id/generate-script', async (c) => {
 
     log.videoRoutes.info(reqId, 'Workflow created', { workflowId: instance.id, videoId: id });
 
-    return c.json({
-      success: true,
-      workflowId: instance.id
-    });
+    return successResponse({ workflowId: instance.id });
   } catch (error) {
     log.videoRoutes.error(reqId, 'Request failed', error as Error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to create workflow'
-    }, 500);
+    return serverErrorResponse(error as Error);
   } finally {
     const durationMs = Date.now() - startTime;
     log.videoRoutes.info(reqId, 'Request completed', { durationMs });
@@ -265,10 +232,7 @@ videoRoutes.get('/:id/script/status', async (c) => {
 
     if (!video) {
       log.videoRoutes.warn(reqId, 'Video not found', { id });
-      return c.json({
-        success: false,
-        error: 'Video not found'
-      }, 404);
+      return notFoundResponse('Video');
     }
 
     // Check for stale 'generating' status (> 10 minutes)
@@ -279,7 +243,7 @@ videoRoutes.get('/:id/script/status', async (c) => {
 
       if (updatedResult) {
         const updatedAt = new Date(updatedResult.updated_at);
-        const staleThreshold = 10 * 60 * 1000; // 10 minutes
+        const staleThreshold = POLLING.STALE_STATUS_THRESHOLD_MS;
         const now = new Date();
 
         if (now.getTime() - updatedAt.getTime() > staleThreshold) {
@@ -296,18 +260,14 @@ videoRoutes.get('/:id/script/status', async (c) => {
       }
     }
 
-    return c.json({
-      success: true,
+    return successResponse({
       status: video.script_status,
       error: video.script_error,
       hasScript: !!video.script
     });
   } catch (error) {
     log.videoRoutes.error(reqId, 'Request failed', error as Error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to get script status'
-    }, 500);
+    return serverErrorResponse(error as Error);
   } finally {
     const durationMs = Date.now() - startTime;
     log.videoRoutes.info(reqId, 'Request completed', { durationMs });
@@ -329,26 +289,17 @@ videoRoutes.post('/:id/generate-assets', async (c) => {
 
     if (!video) {
       log.videoRoutes.warn(reqId, 'Video not found', { id });
-      return c.json({
-        success: false,
-        error: 'Video not found'
-      }, 404);
+      return notFoundResponse('Video');
     }
 
     if (video.script_status !== 'generated') {
       log.videoRoutes.warn(reqId, 'Script not generated yet', { id, scriptStatus: video.script_status });
-      return c.json({
-        success: false,
-        error: 'Script not generated yet'
-      }, 400);
+      return errorResponse('Script not generated yet', 400);
     }
 
     if (video.asset_status === 'generating') {
       log.videoRoutes.warn(reqId, 'Asset generation already in progress', { id });
-      return c.json({
-        success: false,
-        error: 'Asset generation in progress'
-      }, 409);
+      return conflictResponse('Asset generation in progress');
     }
 
     // 2. Trigger AssetGenerationWorkflow
@@ -361,16 +312,10 @@ videoRoutes.post('/:id/generate-assets', async (c) => {
 
     log.videoRoutes.info(reqId, 'Workflow created', { workflowId: instance.id, videoId: id });
 
-    return c.json({
-      success: true,
-      workflowId: instance.id
-    });
+    return successResponse({ workflowId: instance.id });
   } catch (error) {
     log.videoRoutes.error(reqId, 'Request failed', error as Error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to create workflow'
-    }, 500);
+    return serverErrorResponse(error as Error);
   } finally {
     const durationMs = Date.now() - startTime;
     log.videoRoutes.info(reqId, 'Request completed', { durationMs });
@@ -395,10 +340,7 @@ videoRoutes.get('/:id/assets/status', async (c) => {
 
     if (!video) {
       log.videoRoutes.warn(reqId, 'Video not found', { id });
-      return c.json({
-        success: false,
-        error: 'Video not found'
-      }, 404);
+      return notFoundResponse('Video');
     }
 
     // Check for stale 'generating' status (> 10 minutes)
@@ -409,7 +351,7 @@ videoRoutes.get('/:id/assets/status', async (c) => {
 
       if (updatedResult) {
         const updatedAt = new Date(updatedResult.updated_at);
-        const staleThreshold = 10 * 60 * 1000; // 10 minutes
+        const staleThreshold = POLLING.STALE_STATUS_THRESHOLD_MS;
         const now = new Date();
 
         if (now.getTime() - updatedAt.getTime() > staleThreshold) {
@@ -426,17 +368,13 @@ videoRoutes.get('/:id/assets/status', async (c) => {
       }
     }
 
-    return c.json({
-      success: true,
+    return successResponse({
       status: video.asset_status,
       error: video.asset_error
     });
   } catch (error) {
     log.videoRoutes.error(reqId, 'Request failed', error as Error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to get asset status'
-    }, 500);
+    return serverErrorResponse(error as Error);
   } finally {
     const durationMs = Date.now() - startTime;
     log.videoRoutes.info(reqId, 'Request completed', { durationMs });
@@ -445,6 +383,7 @@ videoRoutes.get('/:id/assets/status', async (c) => {
 
 // GET /api/videos/:id/assets/:assetId - Serve asset from R2
 videoRoutes.get('/:id/assets/:assetId', async (c) => {
+  const reqId = generateRequestId();
   const videoId = c.req.param('id');
   const assetId = c.req.param('assetId');
 
@@ -454,14 +393,14 @@ videoRoutes.get('/:id/assets/:assetId', async (c) => {
     `).bind(assetId, videoId).first<VideoAsset>();
 
     if (!asset) {
-      return c.json({ error: 'Asset not found' }, 404);
+      return errorResponse('Asset not found', 404);
     }
 
     const r2 = new R2StorageService(c.env.ASSETS_BUCKET);
     const object = await r2.getAsset(asset.r2_key);
 
     if (!object) {
-      return c.json({ error: 'Asset file not found in storage' }, 404);
+      return errorResponse('Asset file not found in storage', 404);
     }
 
     return new Response(object.body, {
@@ -472,8 +411,8 @@ videoRoutes.get('/:id/assets/:assetId', async (c) => {
       }
     });
   } catch (error) {
-    log.assetRoutes.error('Asset retrieval failed', error as Error, { videoId, assetId });
-    return c.json({ error: 'Failed to retrieve asset' }, 500);
+    log.videoRoutes.error(reqId, 'Asset retrieval failed', error as Error, { videoId, assetId });
+    return serverErrorResponse(error as Error);
   }
 });
 
@@ -492,16 +431,10 @@ videoRoutes.post('/trigger', async (c) => {
     });
 
     log.videoRoutes.info(reqId, 'Workflow created', { workflowId: instance.id });
-    return c.json({
-      success: true,
-      workflowId: instance.id
-    });
+    return successResponse({ workflowId: instance.id });
   } catch (error) {
     log.videoRoutes.error(reqId, 'Request failed', error as Error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to create workflow'
-    }, 500);
+    return serverErrorResponse(error as Error);
   } finally {
     const durationMs = Date.now() - startTime;
     log.videoRoutes.info(reqId, 'Request completed', { status: 200, durationMs });
@@ -520,26 +453,19 @@ videoRoutes.get('/status/:workflowId', async (c) => {
 
     if (!instance) {
       log.videoRoutes.warn(reqId, 'Workflow not found', { workflowId });
-      return c.json({
-        success: false,
-        error: 'Workflow not found'
-      }, 404);
+      return notFoundResponse('Workflow');
     }
 
     const status = await instance.status();
 
-    return c.json({
-      success: true,
+    return successResponse({
       workflowId: instance.id,
       status: status.status,
       output: status.output
     });
   } catch (error) {
     log.videoRoutes.error(reqId, 'Request failed', error as Error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to get workflow status'
-    }, 500);
+    return serverErrorResponse(error as Error);
   } finally {
     const durationMs = Date.now() - startTime;
     log.videoRoutes.info(reqId, 'Request completed', { status: 200, durationMs });
@@ -559,17 +485,17 @@ videoRoutes.post('/:id/render', async (c) => {
 
     if (!video) {
       log.videoRoutes.warn(reqId, 'Video not found', { videoId: id });
-      return c.json({ success: false, error: 'Video not found' }, 404);
+      return notFoundResponse('Video');
     }
 
     if (video.asset_status !== 'generated') {
       log.videoRoutes.warn(reqId, 'Assets not generated yet', { videoId: id, assetStatus: video.asset_status });
-      return c.json({ success: false, error: 'Assets not generated yet' }, 400);
+      return errorResponse('Assets not generated yet', 400);
     }
 
     if (video.render_status === 'rendering') {
       log.videoRoutes.warn(reqId, 'Render already in progress', { videoId: id });
-      return c.json({ success: false, error: 'Render already in progress' }, 409);
+      return conflictResponse('Render already in progress');
     }
 
     const params: VideoRenderParams = { videoId: id };
@@ -581,16 +507,10 @@ videoRoutes.post('/:id/render', async (c) => {
     });
 
     log.videoRoutes.info(reqId, 'Render workflow created', { workflowId: instance.id, videoId: id });
-    return c.json({
-      success: true,
-      workflowId: instance.id
-    });
+    return successResponse({ workflowId: instance.id });
   } catch (error) {
     log.videoRoutes.error(reqId, 'Request failed', error as Error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to create render workflow'
-    }, 500);
+    return serverErrorResponse(error as Error);
   } finally {
     const durationMs = Date.now() - startTime;
     log.videoRoutes.info(reqId, 'Request completed', { durationMs });
@@ -617,7 +537,7 @@ videoRoutes.get('/:id/render/status', async (c) => {
 
     if (!video) {
       log.videoRoutes.warn(reqId, 'Video not found', { videoId: id });
-      return c.json({ success: false, error: 'Video not found' }, 404);
+      return notFoundResponse('Video');
     }
 
     // Fetch rendered video asset if exists
@@ -627,8 +547,7 @@ videoRoutes.get('/:id/render/status', async (c) => {
     `).bind(id).first<VideoAsset>();
 
     // Use direct R2 public URL for rendered video
-    return c.json({
-      success: true,
+    return successResponse({
       renderStatus: video.render_status,
       renderError: video.render_error,
       renderStartedAt: video.render_started_at,
@@ -643,10 +562,7 @@ videoRoutes.get('/:id/render/status', async (c) => {
     });
   } catch (error) {
     log.videoRoutes.error(reqId, 'Request failed', error as Error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to get render status'
-    }, 500);
+    return serverErrorResponse(error as Error);
   } finally {
     const durationMs = Date.now() - startTime;
     log.videoRoutes.info(reqId, 'Request completed', { durationMs });

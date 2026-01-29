@@ -8,8 +8,9 @@ import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:work
 import { getSandbox } from '@cloudflare/sandbox';
 import { renderVideo } from '../services/video-renderer.js';
 import type { Video, VideoAsset, VideoScript } from '../types/video.js';
-import type { Env } from '../types/news.js';
+import type { Env } from '../types/env.js';
 import { log, generateRequestId } from '../lib/logger.js';
+import { RETRY_POLICIES, SCRAPING, VIDEO_RENDERING } from '../lib/constants.js';
 
 export interface VideoRenderParams {
   videoId: number;
@@ -34,7 +35,7 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
       // Step 1: Fetch and validate video
       const video = await step.do('fetch-video', {
         retries: {
-          limit: 3,
+          limit: RETRY_POLICIES.DEFAULT.limit,
           delay: '2 seconds',
           backoff: 'constant'
         }
@@ -86,7 +87,7 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
       // Step 3: Fetch slide images and audio assets from D1
       const assets = await step.do('fetch-assets', {
         retries: {
-          limit: 3,
+          limit: RETRY_POLICIES.DEFAULT.limit,
           delay: '2 seconds',
           backoff: 'constant'
         }
@@ -123,7 +124,7 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
       // Step 4: Fetch article date for date badge
       const articleDate = await step.do('fetch-article-date', {
         retries: {
-          limit: 3,
+          limit: RETRY_POLICIES.DEFAULT.limit,
           delay: '2 seconds',
           backoff: 'constant'
         }
@@ -189,8 +190,8 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
       log.videoRenderWorkflow.debug(reqId, 'Getting sandbox', { sandboxId });
       const sandbox = getSandbox(this.env.Sandbox, sandboxId, {
         containerTimeouts: {
-          instanceGetTimeoutMS: 120000,
-          portReadyTimeoutMS: 180000
+          instanceGetTimeoutMS: VIDEO_RENDERING.INSTANCE_GET_TIMEOUT_MS,
+          portReadyTimeoutMS: VIDEO_RENDERING.PORT_READY_TIMEOUT_MS
         }
       });
 
@@ -218,7 +219,7 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
       const r2Key = `${videoUlid}.webm`;
       const fileSize = await step.do('upload-video', {
         retries: {
-          limit: 3,
+          limit: RETRY_POLICIES.DEFAULT.limit,
           delay: '3 seconds',
           backoff: 'exponential'
         }
@@ -243,7 +244,7 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
       // Step 8: Create asset record
       const assetId = await step.do('create-asset-record', {
         retries: {
-          limit: 3,
+          limit: RETRY_POLICIES.DEFAULT.limit,
           delay: '2 seconds',
           backoff: 'constant'
         }

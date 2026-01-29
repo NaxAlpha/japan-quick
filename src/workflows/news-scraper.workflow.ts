@@ -7,6 +7,7 @@ import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:work
 import type { YahooNewsResponse } from '../types/news.js';
 import type { NewsScraperParams, NewsScraperResult, ScheduledRefreshResult } from './types.js';
 import { log, generateRequestId } from '../lib/logger.js';
+import { RETRY_POLICIES, SCRAPING, VIDEO_RENDERING } from '../lib/constants.js';
 
 interface WorkflowEnv {
   BROWSER: any;
@@ -32,9 +33,9 @@ export class NewsScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, NewsScr
       if (!params.skipCache) {
         cachedData = await step.do('check-cache', {
           retries: {
-            limit: 3,
-            delay: "1 second",
-            backoff: "constant"
+            limit: RETRY_POLICIES.DEFAULT.limit,
+            delay: RETRY_POLICIES.CACHE.delay,
+            backoff: RETRY_POLICIES.DEFAULT.backoff
           }
         }, async () => {
           const cached = await this.env.NEWS_CACHE.get(CACHE_KEY, 'json');
@@ -62,9 +63,9 @@ export class NewsScraperWorkflow extends WorkflowEntrypoint<WorkflowEnv, NewsScr
       const refreshStart = Date.now();
       const refreshResult = await step.do('trigger-refresh-workflow', {
         retries: {
-          limit: 3,
-          delay: "2 seconds",
-          backoff: "constant"
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: RETRY_POLICIES.DEFAULT.delay,
+          backoff: RETRY_POLICIES.DEFAULT.backoff
         }
       }, async () => {
         // Create an instance of the scheduled refresh workflow
