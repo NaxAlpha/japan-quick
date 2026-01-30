@@ -120,7 +120,19 @@ videoRoutes.get('/:id', async (c) => {
 
     const parsedVideo = parseVideo(video);
 
-    return successResponse({ video: { ...parsedVideo, assets }, costLogs });
+    // Extract renderedVideo from assets for convenient access
+    const renderedVideoAsset = (assetsResult.results as VideoAsset[]).find(
+      a => a.asset_type === 'rendered_video'
+    );
+    const renderedVideo = renderedVideoAsset ? {
+      id: renderedVideoAsset.id,
+      url: `${c.env.ASSETS_PUBLIC_URL}/${renderedVideoAsset.r2_key}`,
+      mimeType: renderedVideoAsset.mime_type,
+      fileSize: renderedVideoAsset.file_size,
+      metadata: renderedVideoAsset.metadata ? JSON.parse(renderedVideoAsset.metadata) : null
+    } : null;
+
+    return successResponse({ video: { ...parsedVideo, assets, renderedVideo }, costLogs });
   } catch (error) {
     log.videoRoutes.error(reqId, 'Request failed', error as Error);
     return serverErrorResponse(error as Error);
