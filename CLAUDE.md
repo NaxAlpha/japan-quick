@@ -34,7 +34,12 @@ After code changes, verify in production before marking complete:
 1. **Deploy**: `bun run deploy` (note version ID)
 2. **Tail logs**: `wrangler tail --format pretty` (separate terminal)
 3. **Test affected endpoints/workflows** using curl/browser
-4. **Verify**: logs show no errors, expected behavior works
+4. **Verify**:
+   - Logs show no errors, expected operations appear
+   - Database entries are created/updated correctly
+   - R2 artifacts/files are stored as expected
+   - API responses match expectations
+   - Side effects are correct (caches, queues, etc.)
 5. **Report**: version ID, test results, errors, output samples
 
 ## Mandatory Coding Principles
@@ -104,3 +109,21 @@ log.gemini.error(reqId, 'Operation failed', error as Error, { pickId: '12345' })
 - Include durationMs for operations that take time
 - Use INFO for key operations, DEBUG for verbose details
 - Use ERROR with the error object for failures
+
+## Working with External Libraries
+
+When implementing features that use external libraries or APIs, follow this workflow:
+
+1. **Research and Documentation**:
+   - Read the latest documentation for the external library/API
+   - Use web search and fetch tools to get current information
+   - Focus on: authentication, API endpoints, rate limits, configuration options
+   - Document key findings in `.context/notes.md`
+
+2. **Prototype locally**: Create a standalone test script (e.g., `.context/test-{feature}.ts`). Log all outputs to verify functionality:
+   - API responses (status codes, headers, body)
+   - Return values and data structures
+   - Errors and edge cases
+   Test locally using `bun run .context/test-{feature}.ts`. Debug, fix, and iterate until the script works correctly.
+
+3. **Deploy and verify**: Follow the Manual Verification section above.
