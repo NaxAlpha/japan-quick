@@ -61,16 +61,25 @@ async function writeAssets(
 
       // Use curl to download directly inside the sandbox
       const curlResult = await session.exec(
-        `curl -L -o "${slidePath}" "${slide.url}"`,
+        `curl -v -L -o "${slidePath}" "${slide.url}"`,
         { timeoutMs: VIDEO_RENDERING.ASSET_FETCH_TIMEOUT_MS }
       );
 
       if (!curlResult.success) {
+        log.videoRenderer.error(reqId, `Failed to download slide ${slide.slideIndex}`, undefined, {
+          stderr: curlResult.stderr,
+          stdout: curlResult.stdout?.slice(0, 500),
+          url: slide.url
+        });
         throw new Error(`Failed to download slide ${slide.slideIndex}: ${curlResult.stderr}`);
       }
 
       slidePaths.push(slidePath);
-      log.videoRenderer.debug(reqId, `Downloaded slide ${slide.slideIndex} to ${slidePath}`);
+      log.videoRenderer.debug(reqId, `Downloaded slide ${slide.slideIndex}`, {
+        path: slidePath,
+        stdoutLength: curlResult.stdout?.length || 0,
+        stderrLength: curlResult.stderr?.length || 0
+      });
     }
 
     // Download audio files using curl inside sandbox
@@ -80,16 +89,25 @@ async function writeAssets(
 
       // Use curl to download directly inside the sandbox
       const curlResult = await session.exec(
-        `curl -L -o "${audioPath}" "${aud.url}"`,
+        `curl -v -L -o "${audioPath}" "${aud.url}"`,
         { timeoutMs: VIDEO_RENDERING.ASSET_FETCH_TIMEOUT_MS }
       );
 
       if (!curlResult.success) {
+        log.videoRenderer.error(reqId, `Failed to download audio ${aud.slideIndex}`, undefined, {
+          stderr: curlResult.stderr,
+          stdout: curlResult.stdout?.slice(0, 500),
+          url: aud.url
+        });
         throw new Error(`Failed to download audio ${aud.slideIndex}: ${curlResult.stderr}`);
       }
 
       audioPaths.push(audioPath);
-      log.videoRenderer.debug(reqId, `Downloaded audio ${aud.slideIndex} to ${audioPath}`);
+      log.videoRenderer.debug(reqId, `Downloaded audio ${aud.slideIndex}`, {
+        path: audioPath,
+        stdoutLength: curlResult.stdout?.length || 0,
+        stderrLength: curlResult.stderr?.length || 0
+      });
     }
 
     log.videoRenderer.debug(reqId, 'All assets downloaded successfully', {
@@ -144,7 +162,11 @@ async function executeFfmpeg(
 
     // First slide: zoompan + setpts
     const resolution = input.videoType === 'short' ? '1080x1920' : '1920x1080';
-    filters.push(`[0:v]zoompan=z='min(1.2,zoom+0.002)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps=${fps}:s=${resolution}[v0]`);
+    // Calculate frame count for first slide based on audio duration
+    const firstSlideFrames = Math.ceil(slideDurations[0] * fps);
+    // Calculate zoom step to zoom from 1.0 to 1.2 over the slide duration
+    const firstZoomStep = (0.2 / firstSlideFrames).toFixed(6);
+    filters.push(`[0:v]zoompan=z='min(1.2,zoom+${firstZoomStep})':d=${firstSlideFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps=${fps}:s=${resolution}[v0]`);
     inputs.push('-i', slidePaths[0]);
 
     // Process subsequent slides
@@ -152,10 +174,12 @@ async function executeFfmpeg(
       // Add input
       inputs.push('-i', slidePaths[i]);
 
-      // Apply zoompan to current slide
+      // Apply zoompan to current slide with frame count from audio duration
+      const slideFrames = Math.ceil(slideDurations[i] * fps);
+      const zoomStep = (0.2 / slideFrames).toFixed(6);
       const zoomDir = i % 2 === 0 ? '+' : '-';
-      const zoomFormula = zoomDir === '+' ? 'min(1.2,zoom+0.002)' : 'max(1.0,zoom-0.002)';
-      filters.push(`[${i}:v]zoompan=z='${zoomFormula}':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps=${fps}:s=${resolution}[v${i}]`);
+      const zoomFormula = zoomDir === '+' ? `min(1.2,zoom+${zoomStep})` : `max(1.0,zoom-${zoomStep})`;
+      filters.push(`[${i}:v]zoompan=z='${zoomFormula}':d=${slideFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps=${fps}:s=${resolution}[v${i}]`);
 
       // Calculate offset for xfade (0.5s before current slide ends in timeline)
       const prevSlideEndTime = cumulativeTimes[i];
@@ -227,10 +251,19 @@ async function executeFfmpeg(
       stderrLength: result.stderr?.length || 0
     });
 
+    // Log a sample of ffmpeg stderr output (contains progress info)
+    if (result.stderr) {
+      const stderrSample = result.stderr.slice(-1000); // Last 1000 chars usually has final stats
+      log.videoRenderer.debug(reqId, 'FFmpeg stderr output', {
+        sample: stderrSample.replace(/\n/g, '\\n')
+      });
+    }
+
     if (!result.success) {
       const stderr = result.stderr ?? '';
-      log.videoRenderer.error(reqId, 'FFmpeg failed', new Error(stderr), {
+      log.videoRenderer.error(reqId, 'FFmpeg failed', undefined, {
         command: ffmpegCommand.substring(0, 500),
+        stderr: stderr.slice(0, 2000),
         durationMs: duration
       });
       throw new Error(`FFmpeg failed: ${stderr}`);
@@ -311,7 +344,21 @@ export async function renderVideo(
     while (retries > 0) {
       try {
         session = await sandbox.createSession({
-          cwd: '/workspace'
+          cwd: '/workspace',
+          // Stream sandbox logs to worker logs for debugging
+          logs: {
+            onLog: (logEntry: { timestamp: number; level: string; message: string }) => {
+              const logLevel = logEntry.level?.toLowerCase() || 'info';
+              const message = `[Sandbox] ${logEntry.message}`.trim();
+              if (logLevel === 'error') {
+                log.videoRenderer.error(reqId, message, { source: 'sandbox' });
+              } else if (logLevel === 'warn') {
+                log.videoRenderer.warn(reqId, message, { source: 'sandbox' });
+              } else {
+                log.videoRenderer.debug(reqId, message, { source: 'sandbox' });
+              }
+            }
+          }
         });
         log.videoRenderer.debug(reqId, 'Sandbox session created successfully', {
           sessionId: (session as any).id || 'unknown',

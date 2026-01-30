@@ -204,6 +204,7 @@ export function parseVideo(video: Video): ParsedVideo {
     script: video.script ? JSON.parse(video.script) : null,
     slideImageAssetIds: video.slide_image_asset_ids ? JSON.parse(video.slide_image_asset_ids) : [],
     slideAudioAssetIds: video.slide_audio_asset_ids ? JSON.parse(video.slide_audio_asset_ids) : [],
-    assets: [] // Assets are populated separately in the route handler
+    assets: [], // Assets are populated separately in the route handler
+    renderedVideo: null // Rendered video is populated separately in the route handler
   };
 }
