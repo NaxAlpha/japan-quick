@@ -163,7 +163,37 @@ export class AssetGeneratorService {
         throw new Error(`Failed to decode grid image: ${decodeError}`);
       }
 
-      const { positions } = grid.metadata;
+      // Calculate cell sizes from ACTUAL image dimensions
+      // Gemini may return different dimensions than expected, so we compute dynamically
+      const cellWidth = Math.floor(gridImage.width / 3);
+      const cellHeight = Math.floor(gridImage.height / 3);
+
+      log.assetGen.info(reqId, 'Calculated cell dimensions from actual image', {
+        gridWidth: gridImage.width,
+        gridHeight: gridImage.height,
+        cellWidth,
+        cellHeight
+      });
+
+      // Build positions dynamically based on actual image dimensions
+      const positions = [];
+      for (let cell = 0; cell < 9; cell++) {
+        const row = Math.floor(cell / 3);
+        const col = cell % 3;
+
+        positions.push({
+          cell,
+          slideIndex: cell,
+          isThumbnail: false,
+          isEmpty: false,
+          cropRect: {
+            x: col * cellWidth,
+            y: row * cellHeight,
+            w: cellWidth,
+            h: cellHeight
+          }
+        });
+      }
 
       log.assetGen.info(reqId, `Splitting grid ${grid.metadata.gridIndex}`, {
         ulid: grid.ulid,
