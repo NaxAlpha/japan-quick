@@ -91,6 +91,7 @@ export class AssetGeneratorService {
 
       const startTime = Date.now();
       const gridImage = await this.generateGridImage(
+        reqId,
         prompt,
         aspectRatio,
         model,
@@ -175,25 +176,22 @@ export class AssetGeneratorService {
         cellHeight
       });
 
-      // Build positions dynamically based on actual image dimensions
-      const positions = [];
-      for (let cell = 0; cell < 9; cell++) {
-        const row = Math.floor(cell / 3);
-        const col = cell % 3;
+      // Use positions from grid.metadata (which has correct slide indices)
+      // But update cropRect based on actual image dimensions
+      const positions = grid.metadata.positions.map(pos => {
+        const row = Math.floor(pos.cell / 3);
+        const col = pos.cell % 3;
 
-        positions.push({
-          cell,
-          slideIndex: cell,
-          isThumbnail: false,
-          isEmpty: false,
+        return {
+          ...pos,
           cropRect: {
             x: col * cellWidth,
             y: row * cellHeight,
             w: cellWidth,
             h: cellHeight
           }
-        });
-      }
+        };
+      });
 
       log.assetGen.info(reqId, `Splitting grid ${grid.metadata.gridIndex}`, {
         ulid: grid.ulid,
@@ -376,6 +374,7 @@ export class AssetGeneratorService {
    * Generate a single grid image using Gemini
    */
   private async generateGridImage(
+    reqId: string,
     prompt: string,
     aspectRatio: '9:16' | '16:9',
     model: ImageModelId,
@@ -467,7 +466,10 @@ export class AssetGeneratorService {
     }
 
     // If no image found, log and throw error
-    console.log('No image data found in response. Parts:', JSON.stringify(parts, null, 2));
+    log.assetGen.error(reqId, 'No image data in response', new Error('No image data'), {
+      model,
+      parts: JSON.stringify(parts)
+    });
     throw new Error('No image data in response from model ' + model);
   }
 

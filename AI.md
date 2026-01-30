@@ -302,6 +302,9 @@ All `/api/*` routes require JWT authentication:
 - Japanese date badge overlay (Noto Sans CJK fonts)
 - WebM output (VP9/Opus, 25fps)
 - Assets downloaded via curl inside sandbox (no base64 encoding)
+- Strict 1:1 slide/audio validation - renderer validates counts match before rendering
+- Audio filter indices calculated from slideCount (audioStartIndex = slidePaths.length)
+- Grid splitting uses metadata.positions for correct slide indices (prevents duplicates)
 
 **Dockerfile Requirements:**
 - Base image: `docker.io/cloudflare/sandbox:0.7.0` (must match SDK version)

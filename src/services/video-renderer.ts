@@ -5,7 +5,7 @@
 
 import type { VideoScript, VideoType, RenderedVideoMetadata } from '../types/video.js';
 import { log } from '../lib/logger.js';
-import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
+import { getSandbox, type Sandbox, type Session } from '@cloudflare/sandbox';
 import { VIDEO_RENDERING } from '../lib/constants.js';
 
 interface SlideImageAsset {
@@ -34,7 +34,7 @@ interface RenderOutput {
 
 async function writeAssets(
   reqId: string,
-  session: any,
+  session: Session,
   input: RenderInput
 ): Promise<{ slidePaths: string[]; audioPaths: string[] }> {
   log.videoRenderer.debug(reqId, 'Writing assets to sandbox', {
@@ -106,7 +106,7 @@ async function writeAssets(
 
 async function executeFfmpeg(
   reqId: string,
-  session: any,
+  session: Session,
   slidePaths: string[],
   audioPaths: string[],
   input: RenderInput
@@ -166,14 +166,16 @@ async function executeFfmpeg(
       filters.push(`[${prevOutput}][v${i}]xfade=transition=fade:duration=1:offset=${offset}[xf${i}]`);
     }
 
-    // Build audio concat filter
-    const audioInputs = audioPaths.map((_, i) => `[${i}:a]`).join('');
-    filters.push(`${audioInputs}concat=n=${audioPaths.length}:v=0:a=1[outaudio]`);
-
-    // Add audio inputs to command
+    // Add audio inputs to command BEFORE building the audio filter
+    // This allows us to calculate the correct input indices
+    const audioStartIndex = slidePaths.length;
     for (const audioPath of audioPaths) {
       inputs.push('-i', audioPath);
     }
+
+    // Build audio concat filter with correct input indices
+    const audioInputs = audioPaths.map((_, i) => `[${audioStartIndex + i}:a]`).join('');
+    filters.push(`${audioInputs}concat=n=${audioPaths.length}:v=0:a=1[outaudio]`);
 
     // Date badge filter (Japanese format)
     const date = new Date(input.articleDate);
@@ -274,7 +276,27 @@ export async function renderVideo(
     audioCount: input.audio.length
   });
 
-  let session: any = null;
+  // Validate input before starting render
+  if (input.slideImages.length !== input.audio.length) {
+    throw new Error(
+      `Slide/audio count mismatch: ${input.slideImages.length} slides, ` +
+      `${input.audio.length} audio. Expected 1:1 mapping.`
+    );
+  }
+
+  for (const audio of input.audio) {
+    if (!audio.durationMs || isNaN(audio.durationMs) || audio.durationMs <= 0) {
+      throw new Error(`Invalid durationMs for audio at slideIndex ${audio.slideIndex}: ${audio.durationMs}`);
+    }
+  }
+
+  // Check for duplicate slide indices
+  const slideIndices = new Set(input.slideImages.map(s => s.slideIndex));
+  if (slideIndices.size !== input.slideImages.length) {
+    throw new Error('Duplicate slide indices detected in slideImages');
+  }
+
+  let session: Session | null = null;
 
   try {
     // Create a single session to reuse for all operations
