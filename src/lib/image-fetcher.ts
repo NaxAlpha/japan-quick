@@ -4,6 +4,7 @@
  */
 
 import { IMAGE_FETCHING, SCRAPING } from './constants.js';
+import { log } from './logger.js';
 
 interface FetchedImage {
   mimeType: string;
@@ -13,7 +14,7 @@ interface FetchedImage {
 /**
  * Fetch an image from URL and convert to base64
  */
-export async function fetchImageAsBase64(url: string): Promise<FetchedImage | null> {
+export async function fetchImageAsBase64(reqId: string, url: string): Promise<FetchedImage | null> {
   try {
     const response = await fetch(url, {
       signal: AbortSignal.timeout(IMAGE_FETCHING.TIMEOUT_MS),
@@ -36,7 +37,7 @@ export async function fetchImageAsBase64(url: string): Promise<FetchedImage | nu
     };
   } catch (error) {
     // Log but don't throw - individual image failures shouldn't block generation
-    console.error(`Failed to fetch image from ${url}:`, error);
+    log.imageFetcher.error(reqId, `Failed to fetch image from ${url}`, error as Error);
     return null;
   }
 }
@@ -45,10 +46,10 @@ export async function fetchImageAsBase64(url: string): Promise<FetchedImage | nu
  * Fetch multiple images from URLs
  * Returns array of successfully fetched images
  */
-export async function fetchImagesAsBase64(urls: string[], maxImages = 3): Promise<FetchedImage[]> {
+export async function fetchImagesAsBase64(reqId: string, urls: string[], maxImages = 3): Promise<FetchedImage[]> {
   // Fetch all images in parallel
   const results = await Promise.all(
-    urls.slice(0, maxImages).map(url => fetchImageAsBase64(url))
+    urls.slice(0, maxImages).map(url => fetchImageAsBase64(reqId, url))
   );
 
   // Filter out nulls (failed fetches)

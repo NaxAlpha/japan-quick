@@ -170,6 +170,7 @@ export const log = {
   // Services
   youtubeAuth: createLogger('YouTubeAuth'),
   videoRenderer: createLogger('VideoRenderer'),
+  imageFetcher: createLogger('ImageFetcher'),
 
   // Workflows
   newsScraperWorkflow: createLogger('NewsScraperWorkflow'),

@@ -167,10 +167,17 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
             throw new Error(`Audio asset ${asset.id} missing public_url`);
           }
           const metadata = JSON.parse(asset.metadata || '{}');
+
+          if (metadata.durationMs === undefined || metadata.durationMs === null) {
+            throw new Error(
+              `Audio asset ${asset.id} (slideIndex: ${asset.asset_index}) missing durationMs in metadata`
+            );
+          }
+
           return {
             url: asset.public_url,
             slideIndex: asset.asset_index,
-            durationMs: metadata.durationMs || 10000
+            durationMs: metadata.durationMs
           };
         });
 

@@ -132,7 +132,7 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
             const imageUrls = imagesData.map(img => img.url);
 
             // Fetch images and convert to base64 (max 3 per article)
-            const fetchedImages = await fetchImagesAsBase64(imageUrls, 3);
+            const fetchedImages = await fetchImagesAsBase64(reqId, imageUrls, 3);
 
             // Store as JSON strings for the asset generator
             for (const img of fetchedImages) {
