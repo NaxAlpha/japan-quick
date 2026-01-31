@@ -94,8 +94,10 @@ japan-quick/
 ├── tsconfig.frontend.json      # TypeScript config for frontend (browser)
 ├── vitest.config.ts            # Vitest config with Cloudflare Workers pool
 ├── wrangler.toml               # Cloudflare Workers configuration + auth credentials
-├── Dockerfile.ffmpeg           # FFmpeg container for video rendering (cloudflare/sandbox:0.7.0)
-└── package.json                # Dependencies and scripts
+├── .e2b/                       # E2B sandbox template for video rendering
+│   ├── template.ts             # E2B template definition (ffmpeg, curl, fonts)
+│   └── build.ts                # Template build script (8 CPU, 8GB RAM, 16GB disk)
+└── package.json                # Dependencies and scripts (e2b@^2.11.0)
 ```
 
 ## Architecture
@@ -120,6 +122,7 @@ japan-quick/
 | *_WORKFLOW | Workflow | Durable workflows (8 types) |
 | ADMIN_USERNAME/PASSWORD | Var | Admin credentials (login) |
 | JWT_SECRET | Secret | JWT signing key |
+| E2B_API_KEY | Secret | E2B sandbox API key |
 | GOOGLE_API_KEY | Secret | Gemini API key |
 | YOUTUBE_CLIENT_ID/SECRET/REDIRECT_URI | Secret | YouTube OAuth credentials |
 
@@ -290,11 +293,17 @@ All `/api/*` routes require JWT authentication:
 
 ## Video Rendering
 
-**Architecture:** FFmpeg in Cloudflare Sandbox with ULID-based public assets
+**Architecture:** FFmpeg in e2b sandbox with ULID-based public assets
 - Service: `src/services/video-renderer.ts`
 - Workflow: `src/workflows/video-render.workflow.ts`
-- Container: `Dockerfile.ffmpeg` (based on cloudflare/sandbox:0.7.0)
-- Process: Download slide images/audio → FFmpeg composition → Upload to R2
+- Template: `.e2b/template.ts` (custom e2b template)
+- Process: Download slide images/audio → FFmpeg composition → Read base64 → Upload to R2
+
+**E2B Configuration:**
+- Template: `video-renderer` (8 CPU, 8GB RAM, 16GB disk)
+- Pre-installed: ffmpeg, curl, fonts-noto-cjk-extra
+- Build script: `.e2b/build.ts`
+- Timeout: 10 minutes (600000ms)
 
 **Key Details:**
 - Individual slide images (not grid crops)
@@ -302,14 +311,28 @@ All `/api/*` routes require JWT authentication:
 - Japanese date badge overlay (Noto Sans CJK fonts)
 - WebM output (VP9/Opus, 25fps)
 - Assets downloaded via curl inside sandbox (no base64 encoding)
+- Video content read directly via `sandbox.files.read()` before killing sandbox
+- Base64 encoding for transfer from sandbox to worker
 - Strict 1:1 slide/audio validation - renderer validates counts match before rendering
 - Audio filter indices calculated from slideCount (audioStartIndex = slidePaths.length)
 - Grid splitting uses metadata.positions for correct slide indices (prevents duplicates)
 
-**Dockerfile Requirements:**
-- Base image: `docker.io/cloudflare/sandbox:0.7.0` (must match SDK version)
-- CMD: `["bun", "/container-server/dist/index.js"]` (required for control plane)
-- Instance type: `basic` (4GB disk)
+**Optimized FFmpeg Settings:**
+- `-cpu-used 4`: Maximum encoding speed
+- `-deadline realtime`: Fastest encoding mode
+- `-speed 4`: Faster encoding
+- `-tile-columns 4 -tile-rows 2`: Parallel encoding
+- `-crf 35`: Lower quality for speed
+- Performance: ~4 minute video renders in 3-4 minutes
+
+**E2B Template Management:**
+```bash
+# Build template
+cd .e2b && bun run build.ts
+
+# Or using e2b CLI (if installed)
+e2b templates build
+```
 
 ## YouTube OAuth
 
@@ -352,10 +375,11 @@ All `/api/*` routes require JWT authentication:
 - Always `browser.disconnect()` (NOT `close()`) for session reuse
 - Requires `compatibility_flags = ["nodejs_compat"]` in wrangler.toml
 
-### Sandbox Containers
-- Docker image version MUST match SDK version (0.7.0)
-- Container MUST have CMD to start control plane
-- Wait 2-3 minutes after deployment for provisioning
+### E2B Sandbox
+- Template: `video-renderer` (custom template with ffmpeg, curl, fonts)
+- Build from `.e2b/template.ts` with `cd .e2b && bun run build.ts`
+- Configuration: 8 CPU, 8GB RAM, 16GB disk for optimal video rendering
+- File access: Use `sandbox.files.read()` before killing sandbox (downloadUrl requires live sandbox)
 
 ### Frontend Build
 - Build TypeScript with `bun run build:frontend` before dev
@@ -418,6 +442,7 @@ All `/api/*` routes require JWT authentication:
 - `lit` - Web components
 - `@google/genai` - Gemini AI client
 - `@cloudflare/puppeteer` - Browser scraping
+- `e2b@^2.11.0` - E2B sandbox API for video rendering
 - `cross-image` - Pure JS image processing (grid splitting)
 - `ulid` - ULID generation for asset IDs
 - `vitest` - Testing framework
