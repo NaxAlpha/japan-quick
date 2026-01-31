@@ -1,16 +1,15 @@
 /**
  * VideoRenderWorkflow - Render final video from generated assets using ffmpeg
- * Uses Cloudflare Sandbox with ffmpeg for video processing
+ * Uses e2b sandbox with ffmpeg for video processing
  * Individual slide images are already created by asset generator and stored in R2
  */
 
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
-import { getSandbox } from '@cloudflare/sandbox';
 import { renderVideo } from '../services/video-renderer.js';
 import type { Video, VideoAsset, VideoScript } from '../types/video.js';
 import type { Env } from '../types/env.js';
 import { log, generateRequestId } from '../lib/logger.js';
-import { RETRY_POLICIES, SCRAPING, VIDEO_RENDERING } from '../lib/constants.js';
+import { RETRY_POLICIES, VIDEO_RENDERING } from '../lib/constants.js';
 
 export interface VideoRenderParams {
   videoId: number;
@@ -185,27 +184,24 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
       });
       log.videoRenderWorkflow.info(reqId, 'Step completed', { step: 'prepare-render-inputs' });
 
-      // Step 6: Render video using VideoRendererService
-      log.videoRenderWorkflow.info(reqId, 'Starting video render', {
+      // Step 6: Render video using e2b sandbox
+      // Try both dot and bracket notation for secret access
+      const e2bKey = this.env.E2B_API_KEY || (this.env as any)['E2B_API_KEY'] || '';
+
+      log.videoRenderWorkflow.info(reqId, 'Starting video render with e2b sandbox', {
         videoType: video.video_type,
         slideCount: script.slides.length,
         slideImageCount: slideImages.length,
-        audioCount: audio.length
+        audioCount: audio.length,
+        hasE2BKey: !!e2bKey,
+        e2bKeyLength: e2bKey?.length || 0,
+        e2bKeyPrefix: e2bKey?.substring(0, 10) || 'none'
       });
 
-      const sandboxId = `render-${reqId}`;
-      log.videoRenderWorkflow.debug(reqId, 'Getting sandbox', { sandboxId });
-      const sandbox = getSandbox(this.env.Sandbox, sandboxId, {
-        containerTimeouts: {
-          instanceGetTimeoutMS: VIDEO_RENDERING.INSTANCE_GET_TIMEOUT_MS,
-          portReadyTimeoutMS: VIDEO_RENDERING.PORT_READY_TIMEOUT_MS
-        }
-      });
-
-      log.videoRenderWorkflow.info(reqId, 'Calling renderVideo service');
       const renderStartTime = Date.now();
 
-      const renderResult = await renderVideo(reqId, sandbox, {
+      // Call renderVideo with E2B API key from environment
+      const renderResult = await renderVideo(reqId, e2bKey, {
         script,
         videoType: video.video_type,
         slideImages,
@@ -216,21 +212,21 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
       const renderDuration = Date.now() - renderStartTime;
       log.videoRenderWorkflow.info(reqId, 'Render completed', {
         durationMs: renderDuration,
-        videoDurationMs: renderResult.metadata.durationMs,
-        videoSize: renderResult.videoBase64.length
+        videoDurationMs: renderResult.metadata.durationMs
       });
 
-      // Step 7: Upload video to R2
+      // Step 7: Upload video to R2 using base64 content from e2b
       const { ulid } = await import('ulid');
       const videoUlid = ulid();
       const r2Key = `${videoUlid}.webm`;
       const fileSize = await step.do('upload-video', {
         retries: {
-          limit: RETRY_POLICIES.DEFAULT.limit,
+          limit: RETRY_POLICIES.STORAGE.limit,
           delay: '3 seconds',
           backoff: 'exponential'
         }
       }, async () => {
+        // Convert base64 to bytes
         const binaryString = atob(renderResult.videoBase64);
         const bytes = new Uint8Array(binaryString.length);
         for (let i = 0; i < binaryString.length; i++) {

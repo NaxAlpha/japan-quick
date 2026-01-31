@@ -3,8 +3,6 @@
  * Single source of truth for all runtime bindings
  */
 
-import type { Sandbox } from '@cloudflare/sandbox';
-
 /**
  * Cloudflare Browser binding type
  * Used for Puppeteer-based scraping in production
@@ -46,9 +44,8 @@ export type Env = {
     VIDEO_RENDER_WORKFLOW: Workflow;
     SCRIPT_GENERATION_WORKFLOW: Workflow;
     ASSET_GENERATION_WORKFLOW: Workflow;
-    // Sandbox
-    Sandbox: DurableObjectNamespace<Sandbox>;
     // Secrets
+    E2B_API_KEY: string;
     GOOGLE_API_KEY: string;
     YOUTUBE_CLIENT_ID: string;
     YOUTUBE_CLIENT_SECRET: string;
