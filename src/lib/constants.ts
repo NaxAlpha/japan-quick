@@ -222,8 +222,8 @@ export const VIDEO_RENDERING = {
   INSTANCE_GET_TIMEOUT_MS: 120000 as number, // 2 minutes
   PORT_READY_TIMEOUT_MS: 180000 as number, // 3 minutes
 
-  // FFmpeg execution timeout
-  FFMPEG_TIMEOUT_MS: 600000 as number, // 10 minutes
+  // FFmpeg execution timeout (also used for Remotion render command)
+  FFMPEG_TIMEOUT_MS: 1800000 as number, // 30 minutes - increased for long videos with network overhead
 
   // Asset fetching timeout
   ASSET_FETCH_TIMEOUT_MS: 60000 as number, // 1 minute
