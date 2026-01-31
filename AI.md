@@ -293,46 +293,49 @@ All `/api/*` routes require JWT authentication:
 
 ## Video Rendering
 
-**Architecture:** FFmpeg in e2b sandbox with ULID-based public assets
+**Architecture:** Remotion in E2B sandbox with ULID-based public assets
 - Service: `src/services/video-renderer.ts`
 - Workflow: `src/workflows/video-render.workflow.ts`
-- Template: `.e2b/template.ts` (custom e2b template)
-- Process: Download slide images/audio → FFmpeg composition → Read base64 → Upload to R2
+- Template: `.e2b/template.ts` (Bun + Remotion template)
+- Process: Write inputProps JSON → Execute `remotion render` → Read base64 → Upload to R2
 
 **E2B Configuration:**
 - Template: `video-renderer` (8 CPU, 8GB RAM, 16GB disk)
-- Pre-installed: ffmpeg, curl, fonts-noto-cjk-extra
+- Base: Bun 1.3 image via `.fromBunImage('1.3')`
+- Pre-installed: Remotion 4.0.414, FFmpeg, Chromium, fonts-noto-cjk-extra
+- Remotion project: `/home/user/remotion` with all dependencies
 - Build script: `.e2b/build.ts`
 - Timeout: 10 minutes (600000ms)
 
-**Key Details:**
-- Individual slide images (not grid crops)
-- Ken Burns zoom (alternating in/out), xfade transitions
-- Japanese date badge overlay (Noto Sans CJK fonts)
-- WebM output (VP9/Opus, 25fps)
-- Assets downloaded via curl inside sandbox (no base64 encoding)
-- Video content read directly via `sandbox.files.read()` before killing sandbox
-- Base64 encoding for transfer from sandbox to worker
-- Strict 1:1 slide/audio validation - renderer validates counts match before rendering
-- Audio filter indices calculated from slideCount (audioStartIndex = slidePaths.length)
-- Grid splitting uses metadata.positions for correct slide indices (prevents duplicates)
+**Remotion Project:**
+- Location: `.e2b/remotion-template/`
+- Components: Slide, BackgroundAnimation, DateBadge, SlideTitle
+- Dynamic composition: DynamicVideo accepts inputProps (slides[], videoType, articleDate)
+- Remote assets: Fetches images/audio directly from public URLs (no download to sandbox)
 
-**Optimized FFmpeg Settings:**
-- `-cpu-used 4`: Maximum encoding speed
-- `-deadline realtime`: Fastest encoding mode
-- `-speed 4`: Faster encoding
-- `-tile-columns 4 -tile-rows 2`: Parallel encoding
-- `-crf 35`: Lower quality for speed
-- Performance: ~4 minute video renders in 3-4 minutes
+**Key Details:**
+- WebM output (VP8/Opus, 30fps) - upgraded from 25fps
+- Ken Burns zoom (alternating in/out)
+- 30-frame cross-fade transitions (1s at 30 FPS)
+- Date badge overlay (DD MMM YYYY format)
+- Headline overlays with fade-underline animation
+- Video content read via `sandbox.files.read()` before killing sandbox
+- Base64 encoding for transfer from sandbox to worker
+- Strict 1:1 slide/audio validation
 
 **E2B Template Management:**
 ```bash
-# Build template
+# Build template (from .e2b directory)
 cd .e2b && bun run build.ts
 
-# Or using e2b CLI (if installed)
-e2b templates build
+# Rebuilds on template.ts changes
 ```
+
+**Performance:**
+- Template build: ~100s (cached after first build)
+- Sandbox creation: ~1-2s
+- First render includes Chromium download (~109MB)
+- Subsequent renders use cached browser
 
 ## YouTube OAuth
 

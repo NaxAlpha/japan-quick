@@ -9,7 +9,6 @@ import { frontendRoutes } from './routes/frontend.js';
 import { renderPageTemplate } from './lib/html-template.js';
 import type { Env } from './types/env.js';
 import { log } from './lib/logger.js';
-import { Sandbox } from '@cloudflare/sandbox';
 
 // Export workflow classes for Cloudflare Workers
 export {
@@ -22,9 +21,6 @@ export {
   ScriptGenerationWorkflow,
   AssetGenerationWorkflow
 } from './workflows/index.js';
-
-// Export Sandbox class for Cloudflare Workers (SQLite DO for containers)
-export { Sandbox };
 
 const app = new Hono<Env>();
 
