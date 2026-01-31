@@ -75,3 +75,8 @@ class_name = "AssetGenerationWorkflow"
 # Cron triggers for scheduled news refresh (hourly)
 [triggers]
 crons = ["0 * * * *"]
+
+# Migrations to remove old Cloudflare Sandbox Durable Object
+[[migrations]]
+tag = "v4"
+deleted_classes = ["Sandbox"]
