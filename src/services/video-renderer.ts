@@ -116,7 +116,7 @@ async function executeRemotion(
   const transitionOverlapMs = (input.audio.length - 1) * 1000; // 1s overlap per transition
   const totalFrames = Math.ceil(((totalDurationMs - transitionOverlapMs) / 1000) * 30);
 
-  // Build remotion render command
+  // Build remotion render command with memory optimizations for long videos
   const remotionCommand = [
     'cd /home/user/remotion &&',
     'bunx remotion render',
@@ -125,7 +125,11 @@ async function executeRemotion(
     '--props', inputPropsPath,
     '--overwrite',
     '--codec', 'vp8',
-    '--audio-codec', 'opus'
+    '--audio-codec', 'opus',
+    '--concurrency', '1',              // Single thread to avoid Chrome crashes
+    '--gl', 'swangle',                  // Software renderer (stable for long renders)
+    '--scale', '0.5',                   // Render at 540p to prevent memory issues
+    '--disallow-parallel-encoding'      // Memory-efficient: don't render+encode simultaneously
   ].join(' ');
 
   log.videoRenderer.info(reqId, 'Remotion command', {

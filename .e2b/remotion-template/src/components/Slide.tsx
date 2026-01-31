@@ -86,16 +86,20 @@ export const Slide: React.FC<SlideProps> = ({
         zoomDirection={zoomDirection}
         durationInFrames={durationInFrames}
       >
-        <Img src={imageUrl} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        <Img
+          src={imageUrl}
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          delayRenderTimeoutInMilliseconds={60000}
+        />
       </BackgroundAnimation>
 
       {/* Audio narration - delayed for non-first scenes to create silence during transition */}
       {audioStartFrame > 0 ? (
         <Sequence from={audioStartFrame} durationInFrames={audioEndFrame - audioStartFrame}>
-          <Audio src={audioUrl} />
+          <Audio src={audioUrl} delayRenderTimeoutInMilliseconds={60000} />
         </Sequence>
       ) : (
-        <Audio src={audioUrl} endAt={audioEndFrame} />
+        <Audio src={audioUrl} endAt={audioEndFrame} delayRenderTimeoutInMilliseconds={60000} />
       )}
 
       {/* Headline overlay with fade-underline animation */}

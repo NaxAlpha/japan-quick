@@ -11,9 +11,9 @@ async function main() {
 
   await Template.build(template, {
     alias: 'video-renderer',
-    cpuCount: 2,  // Sufficient for video encoding
-    memoryMB: 4096,  // 4GB RAM for video processing
-    diskSizeMB: { value: 10 * 1024 },  // 10GB disk (max on current plan)
+    cpuCount: 4,  // 4 CPU for parallel rendering
+    memoryMB: 6144,  // 6GB RAM (Chrome + video processing needs more for long videos)
+    diskSizeMB: { value: 12 * 1024 },  // 12GB disk for temporary files
     onBuildLogs: defaultBuildLogger(),
   });
 
