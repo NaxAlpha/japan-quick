@@ -22,4 +22,5 @@ export const template = Template()
   // Set up Remotion project
   .setWorkdir('/home/user/remotion')
   .copy('./remotion-template', '/home/user/remotion')
-  .runCmd('bun install');
+  .runCmd('bun install')
+  .runCmd('bunx remotion browser ensure');  // Pre-download Chromium during build

@@ -257,7 +257,7 @@ export async function renderVideo(
 
     sandbox = await Sandbox.create('video-renderer', {
       apiKey: e2bApiKey,
-      timeoutMs: 600000 // 10 minutes - for longer videos (up to ~10min output)
+      timeoutMs: 900000 // 15 minutes - for longer videos with Chromium download buffer
     });
 
     log.videoRenderer.info(reqId, 'E2B sandbox created', {

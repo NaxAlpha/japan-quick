@@ -223,7 +223,7 @@ export const VIDEO_RENDERING = {
   PORT_READY_TIMEOUT_MS: 180000 as number, // 3 minutes
 
   // FFmpeg execution timeout
-  FFMPEG_TIMEOUT_MS: 300000 as number, // 5 minutes
+  FFMPEG_TIMEOUT_MS: 600000 as number, // 10 minutes
 
   // Asset fetching timeout
   ASSET_FETCH_TIMEOUT_MS: 60000 as number, // 1 minute
