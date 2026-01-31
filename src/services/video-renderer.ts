@@ -51,41 +51,44 @@ async function downloadAssetsToSandbox(
   const imageMap = new Map<number, string>();
   const audioMap = new Map<number, string>();
 
-  // Create assets directory
-  await sandbox.commands.run('mkdir -p /tmp/assets');
+  // Create assets directory inside Remotion's public folder
+  // Remotion serves files from public/ via its dev server at http://localhost:3000/
+  await sandbox.commands.run('mkdir -p /home/user/remotion/public/assets');
 
   // Download all images
   for (const image of slideImages) {
     const filename = `slide-${image.slideIndex}.png`;
-    const localPath = `/tmp/assets/${filename}`;
+    const filePath = `/home/user/remotion/public/assets/${filename}`;
+    const publicUrl = `/assets/${filename}`;  // URL path for Remotion
 
     log.videoRenderer.debug(reqId, `Downloading image ${image.slideIndex}`, { url: image.url });
 
-    const downloadCmd = `curl -sS --max-time 120 -o ${localPath} "${image.url}"`;
+    const downloadCmd = `curl -sS --max-time 120 -o ${filePath} "${image.url}"`;
     const result = await sandbox.commands.run(downloadCmd, { timeoutMs: 150000 });
 
     if (result.exitCode !== 0) {
       throw new Error(`Failed to download image ${image.slideIndex}: ${result.stderr}`);
     }
 
-    imageMap.set(image.slideIndex, localPath);
+    imageMap.set(image.slideIndex, publicUrl);
   }
 
   // Download all audio files
   for (const aud of audio) {
     const filename = `audio-${aud.slideIndex}.wav`;
-    const localPath = `/tmp/assets/${filename}`;
+    const filePath = `/home/user/remotion/public/assets/${filename}`;
+    const publicUrl = `/assets/${filename}`;  // URL path for Remotion
 
     log.videoRenderer.debug(reqId, `Downloading audio ${aud.slideIndex}`, { url: aud.url });
 
-    const downloadCmd = `curl -sS --max-time 120 -o ${localPath} "${aud.url}"`;
+    const downloadCmd = `curl -sS --max-time 120 -o ${filePath} "${aud.url}"`;
     const result = await sandbox.commands.run(downloadCmd, { timeoutMs: 150000 });
 
     if (result.exitCode !== 0) {
       throw new Error(`Failed to download audio ${aud.slideIndex}: ${result.stderr}`);
     }
 
-    audioMap.set(aud.slideIndex, localPath);
+    audioMap.set(aud.slideIndex, publicUrl);
   }
 
   log.videoRenderer.info(reqId, 'All assets downloaded to sandbox', {
@@ -133,8 +136,8 @@ async function writeRemotionInputProps(
     const durationInFrames = Math.ceil((audio.durationMs / 1000) * 30);
 
     return {
-      imageUrl: `file://${imagePath}`,  // file:// URL for local access
-      audioUrl: `file://${audioPath}`,  // file:// URL for local access
+      imageUrl: imagePath,  // Relative path served by Remotion dev server
+      audioUrl: audioPath,  // Relative path served by Remotion dev server
       headline: slide.headline || undefined,
       durationInFrames
     };
