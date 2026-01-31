@@ -129,7 +129,8 @@ async function executeRemotion(
     '--concurrency', '1',              // Single thread to avoid Chrome crashes
     '--gl', 'swangle',                  // Software renderer (stable for long renders)
     '--scale', '0.5',                   // Render at 540p to prevent memory issues
-    '--disallow-parallel-encoding'      // Memory-efficient: don't render+encode simultaneously
+    '--disallow-parallel-encoding',     // Memory-efficient: don't render+encode simultaneously
+    '--delay-render-timeout-in-milliseconds', '60000'  // Increase timeout for asset downloads from R2
   ].join(' ');
 
   log.videoRenderer.info(reqId, 'Remotion command', {
