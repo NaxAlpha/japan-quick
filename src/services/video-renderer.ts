@@ -34,24 +34,94 @@ interface RenderOutput {
 }
 
 /**
+ * Pre-download all assets (images and audio) to E2B sandbox
+ * This eliminates network timeouts during Remotion render
+ */
+async function downloadAssetsToSandbox(
+  reqId: string,
+  sandbox: Sandbox,
+  slideImages: SlideImageAsset[],
+  audio: AudioAsset[]
+): Promise<{ imageMap: Map<number, string>; audioMap: Map<number, string> }> {
+  log.videoRenderer.info(reqId, 'Pre-downloading assets to sandbox', {
+    imageCount: slideImages.length,
+    audioCount: audio.length
+  });
+
+  const imageMap = new Map<number, string>();
+  const audioMap = new Map<number, string>();
+
+  // Create assets directory
+  await sandbox.commands.run('mkdir -p /tmp/assets');
+
+  // Download all images
+  for (const image of slideImages) {
+    const filename = `slide-${image.slideIndex}.png`;
+    const localPath = `/tmp/assets/${filename}`;
+
+    log.videoRenderer.debug(reqId, `Downloading image ${image.slideIndex}`, { url: image.url });
+
+    const downloadCmd = `curl -sS --max-time 120 -o ${localPath} "${image.url}"`;
+    const result = await sandbox.commands.run(downloadCmd, { timeoutMs: 150000 });
+
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to download image ${image.slideIndex}: ${result.stderr}`);
+    }
+
+    imageMap.set(image.slideIndex, localPath);
+  }
+
+  // Download all audio files
+  for (const aud of audio) {
+    const filename = `audio-${aud.slideIndex}.wav`;
+    const localPath = `/tmp/assets/${filename}`;
+
+    log.videoRenderer.debug(reqId, `Downloading audio ${aud.slideIndex}`, { url: aud.url });
+
+    const downloadCmd = `curl -sS --max-time 120 -o ${localPath} "${aud.url}"`;
+    const result = await sandbox.commands.run(downloadCmd, { timeoutMs: 150000 });
+
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to download audio ${aud.slideIndex}: ${result.stderr}`);
+    }
+
+    audioMap.set(aud.slideIndex, localPath);
+  }
+
+  log.videoRenderer.info(reqId, 'All assets downloaded to sandbox', {
+    images: imageMap.size,
+    audio: audioMap.size
+  });
+
+  return { imageMap, audioMap };
+}
+
+/**
  * Build inputProps JSON for Remotion and write to sandbox
- * Remotion will fetch assets directly from public URLs
+ * Uses local file paths instead of URLs to avoid network timeouts
  */
 async function writeRemotionInputProps(
   reqId: string,
   sandbox: Sandbox,
-  input: RenderInput
+  input: RenderInput,
+  imageMap: Map<number, string>,
+  audioMap: Map<number, string>
 ): Promise<string> {
   log.videoRenderer.info(reqId, 'Building Remotion inputProps', {
     slideCount: input.slideImages.length,
     audioCount: input.audio.length
   });
 
-  // Build slides array for Remotion with URLs and durations
+  // Build slides array for Remotion with local file paths and durations
   const slides = input.audio.map((audio) => {
-    const slideImage = input.slideImages.find(s => s.slideIndex === audio.slideIndex);
-    if (!slideImage) {
-      throw new Error(`No slide image found for audio at slideIndex ${audio.slideIndex}`);
+    const imagePath = imageMap.get(audio.slideIndex);
+    const audioPath = audioMap.get(audio.slideIndex);
+
+    if (!imagePath) {
+      throw new Error(`No image file found for slideIndex ${audio.slideIndex}`);
+    }
+    if (!audioPath) {
+      throw new Error(`No audio file found for slideIndex ${audio.slideIndex}`);
     }
 
     const slide = input.script.slides[audio.slideIndex];
@@ -63,8 +133,8 @@ async function writeRemotionInputProps(
     const durationInFrames = Math.ceil((audio.durationMs / 1000) * 30);
 
     return {
-      imageUrl: slideImage.url,
-      audioUrl: audio.url,
+      imageUrl: imagePath,  // Local path instead of URL
+      audioUrl: audioPath,  // Local path instead of URL
       headline: slide.headline || undefined,
       durationInFrames
     };
@@ -269,16 +339,25 @@ export async function renderVideo(
       sandboxId: sandbox.sandboxId
     });
 
-    // Step 1: Write inputProps JSON for Remotion
-    log.videoRenderer.info(reqId, 'Step 1/2: Writing inputProps for Remotion');
-    const inputPropsPath = await writeRemotionInputProps(reqId, sandbox, input);
+    // Step 1: Download all assets to sandbox (eliminates network timeouts during render)
+    log.videoRenderer.info(reqId, 'Step 1/3: Downloading assets to sandbox');
+    const { imageMap, audioMap } = await downloadAssetsToSandbox(
+      reqId,
+      sandbox,
+      input.slideImages,
+      input.audio
+    );
 
-    // Step 2: Execute Remotion render
-    log.videoRenderer.info(reqId, 'Step 2/2: Rendering video with Remotion');
+    // Step 2: Write inputProps JSON for Remotion with local file paths
+    log.videoRenderer.info(reqId, 'Step 2/3: Writing inputProps for Remotion');
+    const inputPropsPath = await writeRemotionInputProps(reqId, sandbox, input, imageMap, audioMap);
+
+    // Step 3: Execute Remotion render
+    log.videoRenderer.info(reqId, 'Step 3/3: Rendering video with Remotion');
     const outputPath = await executeRemotion(reqId, sandbox, inputPropsPath, input);
 
-    // Step 3: Verify output video is valid using ffprobe
-    log.videoRenderer.info(reqId, 'Verifying output video with ffprobe');
+    // Step 4: Verify output video is valid using ffprobe
+    log.videoRenderer.info(reqId, 'Step 4/5: Verifying output video with ffprobe');
     try {
       const ffprobeResult = await sandbox.commands.run(
         `ffprobe -v error -show_entries format=duration,size:stream=codec_name,width,height,r_frame_rate -of default=noprint_wrappers=1 ${outputPath}`
@@ -291,8 +370,8 @@ export async function renderVideo(
       throw new Error(`Output video verification failed: ${(ffprobeError as Error).message}`);
     }
 
-    // Step 4: Read video file content directly (before killing sandbox)
-    log.videoRenderer.info(reqId, 'Reading video file content from sandbox');
+    // Step 5: Read video file content directly (before killing sandbox)
+    log.videoRenderer.info(reqId, 'Step 5/5: Reading video file content from sandbox');
     const fileContentRaw = await sandbox.files.read(outputPath);
 
     log.videoRenderer.debug(reqId, 'File read from sandbox', {
