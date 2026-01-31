@@ -133,8 +133,8 @@ async function writeRemotionInputProps(
     const durationInFrames = Math.ceil((audio.durationMs / 1000) * 30);
 
     return {
-      imageUrl: imagePath,  // Local path instead of URL
-      audioUrl: audioPath,  // Local path instead of URL
+      imageUrl: `file://${imagePath}`,  // file:// URL for local access
+      audioUrl: `file://${audioPath}`,  // file:// URL for local access
       headline: slide.headline || undefined,
       durationInFrames
     };
