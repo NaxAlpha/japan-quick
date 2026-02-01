@@ -3,7 +3,7 @@
  */
 
 import React from 'react';
-import { useCurrentFrame, interpolate, AbsoluteFill, Audio, Img, Sequence } from 'remotion';
+import { useCurrentFrame, interpolate, AbsoluteFill, Audio, Img, Sequence, staticFile } from 'remotion';
 import { SlideTitle } from './SlideTitle';
 import { DateBadge } from './DateBadge';
 import { BackgroundAnimation } from './BackgroundAnimation';
@@ -41,6 +41,19 @@ export const Slide: React.FC<SlideProps> = ({
   fadeOut,
 }) => {
   const frame = useCurrentFrame();
+
+  // Helper: Wrap local filenames with staticFile(), leave URLs as-is
+  const resolveAssetUrl = (url: string) => {
+    // If URL starts with http:// or https://, it's a remote URL - use as-is
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      return url;
+    }
+    // Otherwise, it's a local filename in public/ directory - use staticFile()
+    return staticFile(url);
+  };
+
+  const resolvedImageUrl = resolveAssetUrl(imageUrl);
+  const resolvedAudioUrl = resolveAssetUrl(audioUrl);
 
   // Audio delay: For scenes that fade in (all except first), delay audio by FADE_DURATION_FRAMES
   // This creates 1 second of silence during the cross-fade transition
@@ -87,7 +100,7 @@ export const Slide: React.FC<SlideProps> = ({
         durationInFrames={durationInFrames}
       >
         <Img
-          src={imageUrl}
+          src={resolvedImageUrl}
           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
           delayRenderTimeoutInMilliseconds={60000}
         />
@@ -96,10 +109,10 @@ export const Slide: React.FC<SlideProps> = ({
       {/* Audio narration - delayed for non-first scenes to create silence during transition */}
       {audioStartFrame > 0 ? (
         <Sequence from={audioStartFrame} durationInFrames={audioEndFrame - audioStartFrame}>
-          <Audio src={audioUrl} delayRenderTimeoutInMilliseconds={60000} />
+          <Audio src={resolvedAudioUrl} delayRenderTimeoutInMilliseconds={60000} />
         </Sequence>
       ) : (
-        <Audio src={audioUrl} endAt={audioEndFrame} delayRenderTimeoutInMilliseconds={60000} />
+        <Audio src={resolvedAudioUrl} endAt={audioEndFrame} delayRenderTimeoutInMilliseconds={60000} />
       )}
 
       {/* Headline overlay with fade-underline animation */}
