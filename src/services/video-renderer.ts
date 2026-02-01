@@ -56,41 +56,53 @@ async function downloadAssetsToSandbox(
   await sandbox.commands.run('mkdir -p /home/user/remotion/public');
   log.videoRenderer.debug(reqId, 'Created public directory');
 
-  // Download all images directly to public/ directory
+  // Download all assets in parallel (faster than sequential)
+  const downloadPromises: Promise<void>[] = [];
+
+  // Queue all image downloads
   for (const image of slideImages) {
     const filename = `slide-${image.slideIndex}.png`;
     const filePath = `/home/user/remotion/public/${filename}`;
 
-    log.videoRenderer.debug(reqId, `Downloading image ${image.slideIndex}`, { url: image.url });
+    const promise = (async () => {
+      log.videoRenderer.debug(reqId, `Downloading image ${image.slideIndex}`, { url: image.url });
 
-    const downloadCmd = `curl -sS --max-time 120 -o "${filePath}" "${image.url}"`;
-    const result = await sandbox.commands.run(downloadCmd, { timeoutMs: 150000 });
+      const downloadCmd = `curl -sS --max-time 60 -o "${filePath}" "${image.url}"`;
+      const result = await sandbox.commands.run(downloadCmd, { timeoutMs: 90000 });
 
-    if (result.exitCode !== 0) {
-      throw new Error(`Failed to download image ${image.slideIndex}: ${result.stderr}`);
-    }
+      if (result.exitCode !== 0) {
+        throw new Error(`Failed to download image ${image.slideIndex}: ${result.stderr}`);
+      }
 
-    // Remotion serves public/ files at root, so just use the filename
-    imageMap.set(image.slideIndex, filename);
+      imageMap.set(image.slideIndex, filename);
+    })();
+
+    downloadPromises.push(promise);
   }
 
-  // Download all audio files directly to public/ directory
+  // Queue all audio downloads
   for (const aud of audio) {
     const filename = `audio-${aud.slideIndex}.wav`;
     const filePath = `/home/user/remotion/public/${filename}`;
 
-    log.videoRenderer.debug(reqId, `Downloading audio ${aud.slideIndex}`, { url: aud.url });
+    const promise = (async () => {
+      log.videoRenderer.debug(reqId, `Downloading audio ${aud.slideIndex}`, { url: aud.url });
 
-    const downloadCmd = `curl -sS --max-time 120 -o "${filePath}" "${aud.url}"`;
-    const result = await sandbox.commands.run(downloadCmd, { timeoutMs: 150000 });
+      const downloadCmd = `curl -sS --max-time 60 -o "${filePath}" "${aud.url}"`;
+      const result = await sandbox.commands.run(downloadCmd, { timeoutMs: 90000 });
 
-    if (result.exitCode !== 0) {
-      throw new Error(`Failed to download audio ${aud.slideIndex}: ${result.stderr}`);
-    }
+      if (result.exitCode !== 0) {
+        throw new Error(`Failed to download audio ${aud.slideIndex}: ${result.stderr}`);
+      }
 
-    // Remotion serves public/ files at root, so just use the filename
-    audioMap.set(aud.slideIndex, filename);
+      audioMap.set(aud.slideIndex, filename);
+    })();
+
+    downloadPromises.push(promise);
   }
+
+  // Wait for all downloads to complete in parallel
+  await Promise.all(downloadPromises);
 
   log.videoRenderer.info(reqId, 'All assets downloaded to public directory', {
     images: imageMap.size,
