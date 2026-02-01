@@ -200,13 +200,21 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
 
       const renderStartTime = Date.now();
 
-      // Call renderVideo with E2B API key from environment
-      const renderResult = await renderVideo(reqId, e2bKey, {
-        script,
-        videoType: video.video_type,
-        slideImages,
-        audio,
-        articleDate
+      // Step 6: Render video with E2B (moved to step to avoid workflow timeout)
+      const renderResult = await step.do('render-video', {
+        retries: {
+          limit: 1, // Rendering is expensive, don't retry automatically
+          delay: '30 seconds',
+          backoff: 'constant'
+        }
+      }, async () => {
+        return await renderVideo(reqId, e2bKey, {
+          script,
+          videoType: video.video_type,
+          slideImages,
+          audio,
+          articleDate
+        });
       });
 
       const renderDuration = Date.now() - renderStartTime;
@@ -215,7 +223,7 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
         videoDurationMs: renderResult.metadata.durationMs
       });
 
-      // Step 7: Upload video to R2 using base64 content from e2b
+      // Step 7: Upload video to R2 using base64 content from E2B
       const { ulid } = await import('ulid');
       const videoUlid = ulid();
       const r2Key = `${videoUlid}.webm`;
