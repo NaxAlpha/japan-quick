@@ -52,6 +52,10 @@ async function downloadAssetsToSandbox(
   const imageMap = new Map<number, string>();
   const audioMap = new Map<number, string>();
 
+  // Ensure public/ directory exists
+  await sandbox.commands.run('mkdir -p /home/user/remotion/public');
+  log.videoRenderer.debug(reqId, 'Created public directory');
+
   // Download all images directly to public/ directory
   for (const image of slideImages) {
     const filename = `slide-${image.slideIndex}.png`;
