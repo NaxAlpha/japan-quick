@@ -233,7 +233,7 @@ async function executeRemotion(
 
   try {
     const result = await sandbox.commands.run(remotionCommand, {
-      timeoutMs: VIDEO_RENDERING.FFMPEG_TIMEOUT_MS, // Use same timeout as FFmpeg
+      timeoutMs: 0, // Disable timeout - let render run as long as needed
       onStdout: (data) => {
         stdoutOutput += data + '\n';
         log.videoRenderer.info(reqId, 'remotion stdout: ' + data.trim());
