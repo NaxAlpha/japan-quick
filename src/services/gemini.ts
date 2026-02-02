@@ -3,10 +3,10 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
-import type { AISelectionOutput, VideoType, VideoScript } from '../types/video.js';
+import type { AISelectionOutput, VideoType, VideoScript, AIArticleInputWithContent, EnhancedAISelectionOutput, PastVideoContext, AIArticleInput } from '../types/video.js';
 import type { Article } from '../types/article.js';
 import { log } from '../lib/logger.js';
-import { buildSelectionPrompt, buildScriptPrompt } from '../lib/prompts.js';
+import { buildSelectionPrompt, buildScriptPrompt, buildEnhancedSelectionPrompt } from '../lib/prompts.js';
 
 interface TokenUsage {
   inputTokens: number;
@@ -93,6 +93,45 @@ export class GeminiService {
   }
 
   /**
+   * Create 4-digit indices from pick_id and track mapping (with content)
+   */
+  formatArticlesForAIWithContent(articles: AIArticleInputWithContent[]): { formatted: AIArticleInputWithContent[]; mapping: Map<string, string> } {
+    const mapping = new Map<string, string>();
+    const usedIndices = new Set<string>();
+
+    const formatted = articles.map(article => {
+      // Extract first 4 digits of index, use last 4 if duplicate
+      let index = article.index.substring(0, 4);
+      if (usedIndices.has(index)) {
+        index = article.index.substring(article.index.length - 4);
+      }
+
+      // Ensure uniqueness
+      let counter = 1;
+      let finalIndex = index;
+      while (usedIndices.has(finalIndex)) {
+        finalIndex = `${index.substring(0, 3)}${counter}`;
+        counter++;
+      }
+
+      usedIndices.add(finalIndex);
+      mapping.set(finalIndex, article.index);
+
+      return {
+        index: finalIndex,
+        title: article.title,
+        dateTime: article.dateTime,
+        source: article.source,
+        content: article.content,
+        contentLength: article.contentLength,
+        status: article.status
+      };
+    });
+
+    return { formatted, mapping };
+  }
+
+  /**
    * Call Gemini AI to select articles
    */
   async selectArticles(reqId: string, articles: Article[]): Promise<SelectionResult> {
@@ -163,6 +202,119 @@ export class GeminiService {
       return result;
     } catch (error) {
       log.gemini.error(reqId, 'Article selection failed', error as Error);
+      throw error;
+    }
+  }
+
+  /**
+   * Call Gemini AI to select articles with enhanced context
+   */
+  async selectArticlesEnhanced(
+    reqId: string,
+    articles: AIArticleInputWithContent[],
+    pastVideos: PastVideoContext[],
+    schedulingContext: {
+      currentTimeJST: string;
+      videosCreatedToday: number;
+      totalDailyTarget: number;
+    }
+  ): Promise<{
+    notes: string;
+    shortTitle: string;
+    articles: string[];
+    videoFormat: string;
+    urgency: string;
+    skipForMultiStory?: string[];
+    tokenUsage: TokenUsage;
+    prompt: string;
+  }> {
+    log.gemini.info(reqId, 'Enhanced article selection started', {
+      articleCount: articles.length,
+      pastVideosCount: pastVideos.length,
+      videosCreatedToday: schedulingContext.videosCreatedToday
+    });
+    const startTime = Date.now();
+
+    try {
+      // Format articles and create index mapping
+      const { formatted, mapping } = this.formatArticlesForAIWithContent(articles);
+
+      // Build enhanced prompt
+      const prompt = buildEnhancedSelectionPrompt(formatted, pastVideos, schedulingContext);
+
+      // Call Gemini API using the correct format
+      const response = await this.genai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: prompt
+      });
+
+      // Extract token usage
+      const usageMetadata = response.usageMetadata;
+      const tokenUsage: TokenUsage = {
+        inputTokens: usageMetadata?.promptTokenCount || 0,
+        outputTokens: usageMetadata?.candidatesTokenCount || 0
+      };
+
+      const durationMs = Date.now() - startTime;
+      log.gemini.info(reqId, 'Gemini API call completed', {
+        durationMs,
+        inputTokens: tokenUsage.inputTokens,
+        outputTokens: tokenUsage.outputTokens
+      });
+
+      // Parse JSON response
+      const text = response.text;
+      if (!text) {
+        throw new Error('No text in Gemini response');
+      }
+      const cleanText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
+      const parsed: EnhancedAISelectionOutput = JSON.parse(cleanText);
+
+      // Map AI indices back to original indices (pick_ids)
+      const originalIndices = parsed.articles.map(index => {
+        const originalIndex = mapping.get(index);
+        if (!originalIndex) {
+          throw new Error(`Invalid article index from AI: ${index}`);
+        }
+        return originalIndex;
+      });
+
+      // Map skip_for_multi_story indices if present
+      let skipForMultiStory: string[] | undefined;
+      if (parsed.skip_for_multi_story && parsed.skip_for_multi_story.length > 0) {
+        skipForMultiStory = parsed.skip_for_multi_story.map(index => {
+          const originalIndex = mapping.get(index);
+          if (!originalIndex) {
+            throw new Error(`Invalid skip article index from AI: ${index}`);
+          }
+          return originalIndex;
+        });
+      }
+
+      // Convert notes array to newline-joined string
+      const notesString = parsed.notes.join('\n');
+
+      const result = {
+        notes: notesString,
+        shortTitle: parsed.short_title,
+        articles: originalIndices,
+        videoFormat: parsed.video_format,
+        urgency: parsed.urgency,
+        skipForMultiStory,
+        tokenUsage,
+        prompt
+      };
+
+      log.gemini.info(reqId, 'Enhanced article selection completed', {
+        selectedCount: result.articles.length,
+        videoFormat: result.videoFormat,
+        urgency: result.urgency
+      });
+
+      return result;
+    } catch (error) {
+      log.gemini.error(reqId, 'Enhanced article selection failed', error as Error);
       throw error;
     }
   }

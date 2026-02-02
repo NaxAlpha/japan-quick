@@ -72,7 +72,7 @@ export interface RenderedVideoMetadata {
 // Parsed asset for frontend (with URL)
 export interface ParsedVideoAsset {
   id: number;
-  assetType: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video';
+  assetType: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video' | 'selection_prompt';
   assetIndex: number;
   url: string;
   mimeType: string;

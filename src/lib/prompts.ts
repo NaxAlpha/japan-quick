@@ -3,6 +3,8 @@
  * Provides consistent, maintainable prompt strings for AI operations
  */
 
+import type { AIArticleInputWithContent, PastVideoContext } from '../types/video.js';
+
 export interface AIArticleInput {
   index: string;
   title: string;
@@ -75,6 +77,133 @@ RULES:
 - Provide 2-5 clear, concise reasons in the "notes" array
 - short_title must be in English and under 50 characters
 - Select "short" for urgent/trending, "long" for in-depth/analysis
+- You MUST select at least one article from the list
+
+Respond with ONLY the JSON object, no other text.`;
+}
+
+/**
+ * Build enhanced article selection prompt with scheduling context
+ * @param articles Formatted articles array with content
+ * @param pastVideos Past 24h video history
+ * @param schedulingContext Scheduling information
+ * @returns Complete prompt string for enhanced article selection
+ */
+export function buildEnhancedSelectionPrompt(
+  articles: AIArticleInputWithContent[],
+  pastVideos: PastVideoContext[],
+  schedulingContext: {
+    currentTimeJST: string;
+    videosCreatedToday: number;
+    totalDailyTarget: number;
+  }
+): string {
+  const { currentTimeJST, videosCreatedToday, totalDailyTarget } = schedulingContext;
+  const videosRemaining = totalDailyTarget - videosCreatedToday;
+
+  // Format past videos section
+  const pastVideosText = pastVideos.length > 0
+    ? pastVideos.map(v => `- [${v.videoFormat}] ${v.title} (${v.articles.join(', ')})`).join('\n')
+    : 'None';
+
+  // Format articles with content preview and status indicators
+  const articleList = articles.map(a => {
+    // Strip HTML tags and clean up the content
+    const strippedContent = a.content
+      .replace(/<[^>]*>/g, ' ')  // Remove HTML tags
+      .replace(/\s+/g, ' ')       // Normalize whitespace
+      .trim();
+    const contentPreview = strippedContent.substring(0, 800);
+    const isShort = a.contentLength < 500;
+    const statusIndicator = a.status === 'scraped_v1' ? '[V1]' : '[V2]';
+    const shortMarker = isShort ? '[SHORT ARTICLE] ' : '';
+
+    return `[${a.index}] ${statusIndicator} ${shortMarker}${a.title}
+${a.dateTime}, ${a.source}
+Content (${a.contentLength} chars): ${contentPreview}${strippedContent.length > 800 ? '...' : ''}`;
+  }).join('\n\n---\n\n');
+
+  return `You are an AI video editor for "Japan Quick", selecting important Japanese news articles for video generation.
+
+CONTEXT:
+- Current Time (JST): ${currentTimeJST}
+- Videos Created Today: ${videosCreatedToday}/${totalDailyTarget}
+- Videos Remaining: ${videosRemaining}
+- NOTE: You are selecting content for IMMEDIATE upload, not future scheduling
+
+PAST 24H VIDEO HISTORY:
+${pastVideosText}
+
+ARTICLES:
+${articleList}
+
+TASK:
+Analyze these articles and select the MOST IMPORTANT article(s) for video generation. Consider scheduling context and avoid duplicating recent topics.
+
+VIDEO FORMAT OPTIONS:
+- "single_short" (60-90s, 1080x1920 vertical): Single breaking news story, urgent update, trending topic
+  Examples: Earthquake warning, market crash, policy announcement
+- "multi_short" (90-120s, 1080x1920 vertical): 2-3 related short stories combined
+  Examples: Multiple tech updates, related policy changes, trending topic roundup
+- "long" (4-6 min, 1920x1080 horizontal): In-depth analysis, complex story, detailed explanation
+  Examples: Technology breakdown, historical context, policy analysis
+
+URGENCY GUIDANCE:
+- "urgent": Breaking news requiring immediate coverage (earthquakes, major incidents, market crashes)
+- "developing": Trending topics, time-sensitive updates, evolving stories
+- "regular": Informative content, analysis, educational material
+
+TIMING CONTEXT (for content selection, NOT scheduling):
+Consider what content is appropriate for the current time slot when selecting:
+- 6-9 AM JST: Breaking overnight news, morning market updates, commuter-friendly shorts
+- 9 AM-12 PM JST: Business news, policy updates, educational content
+- 12-2 PM JST: Lunch-hour trending topics, lighter content, entertainment
+- 2-6 PM JST: Afternoon analysis, developing stories, in-depth content
+- 6-9 PM JST: Evening roundup, day's highlights, engaging stories
+- 9 PM-12 AM JST: Late news, international coverage, relaxed content
+
+CONTENT QUALITY NOTES:
+- [V1] articles: Basic scraping, may have incomplete content
+- [V2] articles: Enhanced scraping with better content extraction
+- [SHORT ARTICLE]: Less than 500 chars, may need multiple articles for good video
+
+PREFERENCES:
+- PREFER: Useful, helpful, educational, story-like content
+- PREFER: Combining multiple short articles into multi_short format
+- PREFER: V2 articles over V1 when quality matters
+
+EXCLUSIONS:
+- EXCLUDE: Celebrity gossip, death-related incidents, personal life of famous people
+- EXCLUDE: Topics covered in past 24h videos (check history above)
+
+SELECTION CRITERIA:
+1. IMPORTANCE: Impact on society, public interest, significance
+2. TIMELINESS: Breaking news, trending topics, time-sensitive updates
+3. CLARITY: Story is clear and can be explained effectively
+4. ENGAGEMENT: Likely to capture viewer attention
+5. NOVELTY: Not recently covered (check past 24h history)
+6. APPROPRIATENESS: Content suitable for current time slot (will be uploaded immediately)
+
+RESPONSE FORMAT (JSON only):
+{
+  "notes": ["reason 1", "reason 2", "reason 3"],
+  "short_title": "English title for the video (max 50 chars)",
+  "articles": ["XXXX", "YYYY"],
+  "video_format": "single_short" | "multi_short" | "long",
+  "urgency": "urgent" | "developing" | "regular",
+  "skip_for_multi_story": ["XXXX"] (optional, for multi_short: articles to skip certain stories from)
+}
+
+RULES:
+- Use the 4-digit indices (e.g., ["1234", "5678"]) in the "articles" field
+- Provide 2-5 clear, concise reasons in the "notes" array
+- short_title must be in English and under 50 characters
+- For single_short: select 1 article only
+- For multi_short: select 2-3 related articles
+- For long: select 1-2 articles with substantial content
+- Set urgency based on story nature and timing needs
+- Select content appropriate for the current time slot (video will be uploaded immediately)
+- Check past 24h history to avoid repetition
 - You MUST select at least one article from the list
 
 Respond with ONLY the JSON object, no other text.`;
