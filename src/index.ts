@@ -19,7 +19,8 @@ export {
   VideoSelectionWorkflow,
   VideoRenderWorkflow,
   ScriptGenerationWorkflow,
-  AssetGenerationWorkflow
+  AssetGenerationWorkflow,
+  TestChunkedWorkflow
 } from './workflows/index.js';
 
 const app = new Hono<Env>();

@@ -11,6 +11,7 @@ export { VideoSelectionWorkflow } from './video-selection.workflow.js';
 export { VideoRenderWorkflow } from './video-render.workflow.js';
 export { ScriptGenerationWorkflow } from './script-generation.workflow.js';
 export { AssetGenerationWorkflow } from './asset-generation.workflow.js';
+export { TestChunkedWorkflow } from './test-chunked.workflow.js';
 export type {
   NewsScraperParams,
   NewsScraperResult,
