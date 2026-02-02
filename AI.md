@@ -31,7 +31,7 @@ japan-quick/
 │   │   ├── retry-helper.ts     # Retry logic with exponential backoff (withRetry, sleep, getRetryStatus)
 │   │   ├── comment-parser.ts   # Comment extraction utilities (JSON/HTML parsing, nested replies)
 │   │   ├── workflow-helper.ts  # AI workflow utilities (index mapping, cost calculation, prompt building)
-│   │   ├── prompts.ts          # Centralized AI prompt templates (buildSelectionPrompt, buildScriptPrompt, buildGridImagePrompt)
+│   │   ├── prompts.ts          # Centralized AI prompt templates (buildSelectionPrompt, buildEnhancedSelectionPrompt, buildScriptPrompt, buildGridImagePrompt)
 │   │   ├── dimensions.ts       # Grid dimension calculations for 1K/2K resolutions
 │   │   ├── image-fetcher.ts    # Fetch images from URLs and convert to base64
 │   │   ├── audio-helper.ts     # Audio conversion utilities (pcmToWav, calculatePcmDuration)
@@ -57,7 +57,7 @@ japan-quick/
 │   │   ├── scheduled-refresh.workflow.ts # ScheduledNewsRefreshWorkflow (cron-triggered)
 │   │   ├── article-scraper.workflow.ts   # ArticleScraperWorkflow (article content scraping)
 │   │   ├── article-rescrape.workflow.ts  # ArticleRescrapeWorkflow (cron-triggered rescrape)
-│   │   ├── video-selection.workflow.ts   # VideoSelectionWorkflow (AI video selection, cron-triggered)
+│   │   ├── video-selection.workflow.ts   # VideoSelectionWorkflow (AI video selection with prompt storage, cron-triggered)
 │   │   ├── script-generation.workflow.ts # ScriptGenerationWorkflow (async script generation)
 │   │   ├── asset-generation.workflow.ts  # AssetGenerationWorkflow (async asset generation)
 │   │   ├── video-render.workflow.ts      # VideoRenderWorkflow (FFmpeg video composition)
@@ -225,12 +225,14 @@ All `/api/*` routes require JWT authentication:
 - **article_comments** - Comments with reactions (empathized, understood, questioning) and nested replies
 - **videos** - Video metadata, scripts, assets, status tracking
   - video_type: short (60-120s, 1080x1920) | long (4-6min, 1920x1080)
+  - video_format: single_short | multi_short | long
+  - urgency: urgent | developing | regular
   - script_status: pending | generating | generated | error
   - asset_status: pending | generating | generated | error
   - render_status: pending | rendering | rendered | error
 - **cost_logs** - AI operation cost tracking
 - **video_assets** - R2 asset storage records (ULID-based)
-  - asset_type: grid_image | slide_image | slide_audio | rendered_video
+  - asset_type: grid_image | slide_image | slide_audio | rendered_video | selection_prompt
 - **models** - AI model pricing configuration
 - **youtube_auth** - YouTube OAuth tokens
 
@@ -261,8 +263,12 @@ All `/api/*` routes require JWT authentication:
 - TTS: `gemini-2.5-flash-preview-tts` or `gemini-2.5-pro-preview-tts`
 
 **Article Selection:**
-- Criteria: Importance, Timeliness, Clarity, Visual Potential, Engagement
-- Output: notes, short_title, articles (pick_ids), video_type
+- Basic: buildSelectionPrompt() - Simple article selection with basic criteria
+- Enhanced: buildEnhancedSelectionPrompt() - Advanced selection with scheduling context, past 24h history, content previews, video format options (single_short/multi_short/long), urgency levels (video uploaded immediately)
+- Criteria: Importance, Timeliness, Clarity, Visual Potential, Engagement, Novelty
+- Output: notes, short_title, articles (pick_ids), video_format, urgency
+- Token usage: ~500-1000 (basic) vs ~35k-40k (enhanced with content)
+- **Prompt Storage**: Enhanced selection prompt saved to R2 as selection_prompt asset (viewable in UI via "View Selection Prompt" button)
 - AI must select at least one article
 
 **Script Generation:**
@@ -498,3 +504,4 @@ Remotion components require React performance patterns to avoid memory leaks dur
 - 007: video_assets
 - 008: video_render
 - 009: public_assets (ULID-based system)
+- 010: video_selection_v2 (video_format, urgency)

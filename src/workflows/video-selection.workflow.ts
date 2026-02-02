@@ -5,11 +5,13 @@
 
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
 import { GeminiService } from '../services/gemini.js';
+import { R2StorageService } from '../services/r2-storage.js';
 import type { Article } from '../types/article.js';
-import type { Video } from '../types/video.js';
+import type { Video, AIArticleInputWithContent, PastVideoContext } from '../types/video.js';
 import type { Env } from '../types/env.js';
 import { log, generateRequestId } from '../lib/logger.js';
 import { RETRY_POLICIES, SCRAPING, VIDEO_RENDERING } from '../lib/constants.js';
+import { ulid } from 'ulid';
 
 export interface VideoSelectionParams {
   // Empty - cron triggered
@@ -31,7 +33,7 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
     let videoId: number | null = null;
 
     try {
-      // Step 1: Fetch eligible articles
+      // Step 1: Fetch eligible articles (both v1 and v2) with content
       const fetchStart = Date.now();
       const articles = await step.do('fetch-eligible-articles', {
         retries: {
@@ -42,34 +44,30 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
       }, async () => {
         const result = await this.env.DB.prepare(`
           SELECT
-            id,
-            pick_id as pickId,
-            article_id as articleId,
-            article_url as articleUrl,
-            status,
-            title,
-            source,
-            thumbnail_url as thumbnailUrl,
-            published_at as publishedAt,
-            modified_at as modifiedAt,
-            detected_at as detectedAt,
-            first_scraped_at as firstScrapedAt,
-            second_scraped_at as secondScrapedAt,
-            scheduled_rescrape_at as scheduledRescrapeAt,
-            created_at as createdAt,
-            updated_at as updatedAt
-          FROM articles
-          WHERE status = 'scraped_v2'
-            AND second_scraped_at IS NOT NULL
-            AND datetime(second_scraped_at) >= datetime('now', '-24 hours')
-            AND pick_id NOT IN (
+            a.pick_id as "index",
+            a.title,
+            a.published_at as dateTime,
+            a.source,
+            a.status,
+            av.content,
+            LENGTH(av.content_text) as contentLength
+          FROM articles a
+          JOIN article_versions av ON a.id = av.article_id
+          WHERE (a.status = 'scraped_v1' OR a.status = 'scraped_v2')
+            AND (
+              (a.status = 'scraped_v1' AND av.version = 1 AND datetime(a.first_scraped_at) >= datetime('now', '-24 hours'))
+              OR
+              (a.status = 'scraped_v2' AND av.version = 2 AND datetime(a.second_scraped_at) >= datetime('now', '-24 hours'))
+            )
+            AND a.pick_id NOT IN (
               SELECT json_each.value FROM videos, json_each(videos.articles)
               WHERE videos.articles IS NOT NULL
             )
-          ORDER BY second_scraped_at DESC
+          ORDER BY
+            CASE WHEN a.status = 'scraped_v2' THEN a.second_scraped_at ELSE a.first_scraped_at END DESC
         `).all();
 
-        return result.results as Article[];
+        return result.results as AIArticleInputWithContent[];
       });
       log.videoSelectionWorkflow.info(reqId, 'Step completed', { step: 'fetch-eligible-articles', durationMs: Date.now() - fetchStart, articleCount: articles.length });
 
@@ -81,7 +79,87 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
         };
       }
 
-      // Step 2: Create video entry with status 'doing'
+      // Step 2: Fetch past videos from last 24 hours
+      const fetchPastStart = Date.now();
+      const pastVideos = await step.do('fetch-past-videos', {
+        retries: {
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: RETRY_POLICIES.DEFAULT.delay,
+          backoff: RETRY_POLICIES.DEFAULT.backoff
+        }
+      }, async () => {
+        const result = await this.env.DB.prepare(`
+          SELECT
+            v.id,
+            v.short_title as title,
+            v.articles,
+            v.video_type as videoType,
+            v.video_format as videoFormat,
+            v.created_at as createdAt,
+            GROUP_CONCAT(a.title, '|') as articleTitles
+          FROM videos v
+          LEFT JOIN json_each(v.articles) je
+          LEFT JOIN articles a ON a.pick_id = je.value
+          WHERE datetime(v.created_at) >= datetime('now', '-24 hours')
+          GROUP BY v.id
+          ORDER BY v.created_at DESC
+        `).all();
+
+        return (result.results as any[]).map(row => ({
+          id: row.id,
+          title: row.title || '',
+          articles: row.articleTitles ? row.articleTitles.split('|') : [],
+          videoType: row.videoType || 'short',
+          videoFormat: row.videoFormat || 'single_short',
+          createdAt: row.createdAt
+        })) as PastVideoContext[];
+      });
+      log.videoSelectionWorkflow.info(reqId, 'Step completed', { step: 'fetch-past-videos', durationMs: Date.now() - fetchPastStart, pastVideoCount: pastVideos.length });
+
+      // Step 3: Calculate scheduling context
+      const schedulingStart = Date.now();
+      const schedulingContext = await step.do('calculate-scheduling-context', {
+        retries: {
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: RETRY_POLICIES.DEFAULT.delay,
+          backoff: RETRY_POLICIES.DEFAULT.backoff
+        }
+      }, async () => {
+        // Get current time in JST
+        const now = new Date();
+        const jstOffset = 9 * 60; // JST is UTC+9
+        const jstTime = new Date(now.getTime() + jstOffset * 60 * 1000);
+        const currentTimeJST = jstTime.toISOString().replace('T', ' ').substring(0, 19) + ' JST';
+
+        // Count videos created today (8am-8pm JST)
+        const jstDateString = jstTime.toISOString().split('T')[0]; // YYYY-MM-DD
+        const todayStart = `${jstDateString} 08:00:00`;
+        const todayEnd = `${jstDateString} 20:00:00`;
+
+        const countResult = await this.env.DB.prepare(`
+          SELECT COUNT(*) as count
+          FROM videos
+          WHERE datetime(created_at, '+9 hours') >= datetime(?)
+            AND datetime(created_at, '+9 hours') <= datetime(?)
+        `).bind(todayStart, todayEnd).first<{ count: number }>();
+
+        const videosCreatedToday = countResult?.count || 0;
+        const totalDailyTarget = 11;
+
+        return {
+          currentTimeJST,
+          videosCreatedToday,
+          totalDailyTarget
+        };
+      });
+      log.videoSelectionWorkflow.info(reqId, 'Step completed', {
+        step: 'calculate-scheduling-context',
+        durationMs: Date.now() - schedulingStart,
+        videosCreatedToday: schedulingContext.videosCreatedToday,
+        remainingQuota: schedulingContext.totalDailyTarget - schedulingContext.videosCreatedToday
+      });
+
+      // Step 4: Create video entry with status 'doing'
       const createStart = Date.now();
       videoId = await step.do('create-video-entry', {
         retries: {
@@ -104,9 +182,9 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
       });
       log.videoSelectionWorkflow.info(reqId, 'Step completed', { step: 'create-video-entry', durationMs: Date.now() - createStart, videoId });
 
-      // Step 3: Call Gemini AI
+      // Step 5: Call Gemini AI with enhanced selection
       const geminiStart = Date.now();
-      const selectionResult = await step.do('call-gemini-ai', {
+      const selectionResult = await step.do('call-gemini-ai-enhanced', {
         retries: {
           limit: RETRY_POLICIES.DEFAULT.limit,
           delay: RETRY_POLICIES.AI_CALL.delay,
@@ -114,11 +192,63 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
         }
       }, async () => {
         const geminiService = new GeminiService(this.env.GOOGLE_API_KEY);
-        return await geminiService.selectArticles(reqId, articles);
+        return await geminiService.selectArticlesEnhanced(reqId, articles, pastVideos, schedulingContext);
       });
-      log.videoSelectionWorkflow.info(reqId, 'Step completed', { step: 'call-gemini-ai', durationMs: Date.now() - geminiStart, selectedArticleCount: selectionResult.articles.length, inputTokens: selectionResult.tokenUsage.inputTokens, outputTokens: selectionResult.tokenUsage.outputTokens });
+      log.videoSelectionWorkflow.info(reqId, 'Step completed', {
+        step: 'call-gemini-ai-enhanced',
+        durationMs: Date.now() - geminiStart,
+        selectedArticleCount: selectionResult.articles.length,
+        videoFormat: selectionResult.videoFormat,
+        urgency: selectionResult.urgency,
+        inputTokens: selectionResult.tokenUsage.inputTokens,
+        outputTokens: selectionResult.tokenUsage.outputTokens
+      });
 
-      // Step 4: Log cost
+      // Step 6: Save selection prompt to R2
+      const promptStart = Date.now();
+      await step.do('save-selection-prompt', {
+        retries: {
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: RETRY_POLICIES.DEFAULT.delay,
+          backoff: RETRY_POLICIES.DEFAULT.backoff
+        }
+      }, async () => {
+        // Generate ULID for prompt file
+        const promptUlid = ulid();
+
+        // Convert prompt to buffer
+        const promptBuffer = new TextEncoder().encode(selectionResult.prompt);
+
+        // Upload to R2
+        const r2 = new R2StorageService(this.env.ASSETS_BUCKET, this.env.ASSETS_PUBLIC_URL);
+        const uploadResult = await r2.uploadAsset(promptUlid, promptBuffer, 'text/plain; charset=utf-8');
+
+        // Create video_assets record
+        await this.env.DB.prepare(`
+          INSERT INTO video_assets (
+            video_id, asset_type, asset_index, r2_key,
+            public_url, mime_type, file_size, generation_type
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          videoId,
+          'selection_prompt',
+          0,
+          uploadResult.key,
+          uploadResult.publicUrl,
+          'text/plain; charset=utf-8',
+          uploadResult.size,
+          'individual'
+        ).run();
+
+        log.videoSelectionWorkflow.info(reqId, 'Selection prompt saved', {
+          promptUlid,
+          fileSize: uploadResult.size,
+          publicUrl: uploadResult.publicUrl
+        });
+      });
+      log.videoSelectionWorkflow.info(reqId, 'Step completed', { step: 'save-selection-prompt', durationMs: Date.now() - promptStart });
+
+      // Step 7: Log cost
       const costStart = Date.now();
       const costData = await step.do('log-cost', {
         retries: {
@@ -144,7 +274,7 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
       });
       log.videoSelectionWorkflow.info(reqId, 'Step completed', { step: 'log-cost', durationMs: Date.now() - costStart, cost: costData.totalCost });
 
-      // Step 5: Update video entry with AI results
+      // Step 8: Update video entry with AI results
       const updateStart = Date.now();
       await step.do('update-video-entry', {
         retries: {
@@ -160,13 +290,18 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
 
         const totalCost = costResult?.total_cost || 0;
 
-        // Update video with AI results
+        // Determine video_type from video_format
+        const videoType = selectionResult.videoFormat === 'long' ? 'long' : 'short';
+
+        // Update video with AI results including new fields
         await this.env.DB.prepare(`
           UPDATE videos
           SET notes = ?,
               short_title = ?,
               articles = ?,
               video_type = ?,
+              video_format = ?,
+              urgency = ?,
               selection_status = 'todo',
               total_cost = ?,
               updated_at = datetime('now')
@@ -175,14 +310,23 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
           selectionResult.notes,
           selectionResult.shortTitle,
           JSON.stringify(selectionResult.articles),
-          selectionResult.videoType,
+          videoType,
+          selectionResult.videoFormat,
+          selectionResult.urgency,
           totalCost,
           videoId
         ).run();
       });
       log.videoSelectionWorkflow.info(reqId, 'Step completed', { step: 'update-video-entry', durationMs: Date.now() - updateStart });
 
-      log.videoSelectionWorkflow.info(reqId, 'Workflow completed', { durationMs: Date.now() - startTime, videoId, articlesProcessed: articles.length, selectedArticles: selectionResult.articles.length });
+      log.videoSelectionWorkflow.info(reqId, 'Workflow completed', {
+        durationMs: Date.now() - startTime,
+        videoId,
+        articlesProcessed: articles.length,
+        selectedArticles: selectionResult.articles.length,
+        videoFormat: selectionResult.videoFormat,
+        urgency: selectionResult.urgency
+      });
 
       return {
         success: true,

@@ -1,6 +1,8 @@
 // Video type definitions
 
 export type VideoType = 'short' | 'long';
+export type VideoFormat = 'single_short' | 'multi_short' | 'long';
+export type UrgencyLevel = 'urgent' | 'developing' | 'regular';
 export type VideoSelectionStatus = 'todo' | 'doing' | 'done' | 'error';
 export type ScriptStatus = 'pending' | 'generating' | 'generated' | 'error';
 export type AssetStatus = 'pending' | 'generating' | 'generated' | 'error';
@@ -94,7 +96,7 @@ export interface RenderedVideoMetadata {
 export interface VideoAsset {
   id: number;
   video_id: number;
-  asset_type: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video';
+  asset_type: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video' | 'selection_prompt';
   asset_index: number;
   r2_key: string;
   mime_type: string;
@@ -108,7 +110,7 @@ export interface VideoAsset {
 // Parsed asset for frontend (with URL)
 export interface ParsedVideoAsset {
   id: number;
-  assetType: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video';
+  assetType: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video' | 'selection_prompt';
   assetIndex: number;
   url: string;                    // Public URL or API route
   mimeType: string;
@@ -187,12 +189,36 @@ export interface AIArticleInput {
   source: string;
 }
 
+// AI article input with content
+export interface AIArticleInputWithContent extends AIArticleInput {
+  content: string;
+  contentLength: number;
+  status: string;
+}
+
+// Past video context for AI selection
+export interface PastVideoContext {
+  id: number;
+  title: string;
+  articles: string[];                // Array of article titles
+  videoType: string;
+  videoFormat: string;
+  createdAt: string;
+}
+
 // AI selection output format
 export interface AISelectionOutput {
   notes: string[];                   // Array of selection rationale
   short_title: string;               // English title for video
   articles: string[];                // Array of 4-digit indices from AI
   video_type: VideoType;             // "short" | "long"
+}
+
+// Enhanced AI selection output format
+export interface EnhancedAISelectionOutput extends AISelectionOutput {
+  video_format: VideoFormat;         // "single_short" | "multi_short" | "long"
+  urgency: UrgencyLevel;             // "urgent" | "developing" | "regular"
+  skip_for_multi_story?: string[];   // Optional array of article indices to skip for multi-story videos
 }
 
 // Helper function to parse video from DB to frontend format

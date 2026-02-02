@@ -85,6 +85,26 @@ export class VideoSelectionCard extends LitElement {
       background: #e63946;
       color: #ffffff;
     }
+
+    .prompt-button {
+      display: inline-block;
+      margin-top: 1rem;
+      padding: 0.625rem 0.875rem;
+      background: #78746c;
+      border: 2px solid #0a0a0a;
+      color: #ffffff;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      text-decoration: none;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.15s ease-out;
+    }
+
+    .prompt-button:hover {
+      background: #0a0a0a;
+      color: #ffffff;
+    }
   `];
 
   @property({ type: Object })
@@ -122,8 +142,30 @@ export class VideoSelectionCard extends LitElement {
               </div>
             </div>
           ` : ''}
+
+          ${this.renderPromptButton()}
         </div>
       </div>
+    `;
+  }
+
+  private renderPromptButton() {
+    // Find the selection_prompt asset
+    const promptAsset = this.video?.assets?.find(
+      asset => asset.assetType === 'selection_prompt'
+    );
+
+    if (!promptAsset) {
+      return null;
+    }
+
+    return html`
+      <button
+        class="prompt-button"
+        @click=${() => window.open(promptAsset.url, '_blank')}
+      >
+        📄 View Selection Prompt
+      </button>
     `;
   }
 }
