@@ -26,32 +26,147 @@ interface RenderInput {
   slideImages: SlideImageAsset[];
   audio: AudioAsset[];
   articleDate: string; // ISO date string for date badge
+  r2Bucket?: any; // R2 bucket binding for direct upload
+  r2Key?: string; // R2 key for upload
 }
 
 interface RenderOutput {
-  videoBase64: string;  // Base64 encoded video content (read from sandbox before killing)
-  metadata: RenderedVideoMetadata;
+  r2Key?: string;  // R2 key where video was uploaded (if r2Bucket provided)
+  fileSize?: number;  // File size in bytes
+  metadata: RenderedVideoMetadata & { fileSize?: number };
+}
+
+/**
+ * Pre-download all assets (images and audio) to Remotion's public directory
+ * Per Remotion docs: files in public/ are accessible during render via their filename
+ * Reference: https://www.remotion.dev/docs/assets
+ */
+async function downloadAssetsToSandbox(
+  reqId: string,
+  sandbox: Sandbox,
+  slideImages: SlideImageAsset[],
+  audio: AudioAsset[]
+): Promise<{ imageMap: Map<number, string>; audioMap: Map<number, string> }> {
+  log.videoRenderer.info(reqId, 'Pre-downloading assets to Remotion public directory', {
+    imageCount: slideImages.length,
+    audioCount: audio.length
+  });
+
+  const imageMap = new Map<number, string>();
+  const audioMap = new Map<number, string>();
+
+  // Ensure public/ directory exists
+  await sandbox.commands.run('mkdir -p /home/user/remotion/public');
+  log.videoRenderer.debug(reqId, 'Created public directory');
+
+  // Download all assets in parallel (faster than sequential)
+  const downloadPromises: Promise<void>[] = [];
+
+  // Queue all image downloads
+  for (const image of slideImages) {
+    const filename = `slide-${image.slideIndex}.png`;
+    const filePath = `/home/user/remotion/public/${filename}`;
+
+    const promise = (async () => {
+      log.videoRenderer.debug(reqId, `Downloading image ${image.slideIndex}`, { url: image.url });
+
+      const downloadCmd = `curl -sS --max-time 60 -o "${filePath}" "${image.url}"`;
+      const result = await sandbox.commands.run(downloadCmd, { timeoutMs: 90000 });
+
+      if (result.exitCode !== 0) {
+        throw new Error(`Failed to download image ${image.slideIndex}: ${result.stderr}`);
+      }
+
+      imageMap.set(image.slideIndex, filename);
+    })();
+
+    downloadPromises.push(promise);
+  }
+
+  // Queue all audio downloads
+  for (const aud of audio) {
+    const filename = `audio-${aud.slideIndex}.wav`;
+    const filePath = `/home/user/remotion/public/${filename}`;
+
+    const promise = (async () => {
+      log.videoRenderer.debug(reqId, `Downloading audio ${aud.slideIndex}`, { url: aud.url });
+
+      const downloadCmd = `curl -sS --max-time 60 -o "${filePath}" "${aud.url}"`;
+      const result = await sandbox.commands.run(downloadCmd, { timeoutMs: 90000 });
+
+      if (result.exitCode !== 0) {
+        throw new Error(`Failed to download audio ${aud.slideIndex}: ${result.stderr}`);
+      }
+
+      audioMap.set(aud.slideIndex, filename);
+    })();
+
+    downloadPromises.push(promise);
+  }
+
+  // Wait for all downloads to complete in parallel
+  await Promise.all(downloadPromises);
+
+  log.videoRenderer.info(reqId, 'All assets downloaded to public directory', {
+    images: imageMap.size,
+    audio: audioMap.size
+  });
+
+  // Convert PNG images to JPEG at 90% quality for memory efficiency
+  // ffmpeg q:v 2 = ~90% quality (higher number = lower quality)
+  log.videoRenderer.info(reqId, 'Converting PNG images to JPEG at 90% quality');
+  const convertPromises = slideImages.map(async (image) => {
+    const pngFilename = `slide-${image.slideIndex}.png`;
+    const jpgFilename = `slide-${image.slideIndex}.jpg`;
+    const pngPath = `/home/user/remotion/public/${pngFilename}`;
+    const jpgPath = `/home/user/remotion/public/${jpgFilename}`;
+
+    const convertCmd = `ffmpeg -y -i "${pngPath}" -q:v 2 "${jpgPath}" && rm "${pngPath}"`;
+    const result = await sandbox.commands.run(convertCmd, { timeoutMs: 30000 });
+
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to convert image ${image.slideIndex}: ${result.stderr}`);
+    }
+
+    // Update imageMap to use JPEG filename
+    imageMap.set(image.slideIndex, jpgFilename);
+  });
+
+  await Promise.all(convertPromises);
+
+  log.videoRenderer.info(reqId, 'All images converted to JPEG', {
+    count: slideImages.length
+  });
+
+  return { imageMap, audioMap };
 }
 
 /**
  * Build inputProps JSON for Remotion and write to sandbox
- * Remotion will fetch assets directly from public URLs
+ * Uses local filenames from public/ directory (pre-downloaded assets)
  */
 async function writeRemotionInputProps(
   reqId: string,
   sandbox: Sandbox,
-  input: RenderInput
+  input: RenderInput,
+  imageMap: Map<number, string>,
+  audioMap: Map<number, string>
 ): Promise<string> {
-  log.videoRenderer.info(reqId, 'Building Remotion inputProps', {
+  log.videoRenderer.info(reqId, 'Building Remotion inputProps with local files', {
     slideCount: input.slideImages.length,
     audioCount: input.audio.length
   });
 
-  // Build slides array for Remotion with URLs and durations
+  // Build slides array for Remotion with local filenames
   const slides = input.audio.map((audio) => {
-    const slideImage = input.slideImages.find(s => s.slideIndex === audio.slideIndex);
-    if (!slideImage) {
-      throw new Error(`No slide image found for audio at slideIndex ${audio.slideIndex}`);
+    const imageFile = imageMap.get(audio.slideIndex);
+    const audioFile = audioMap.get(audio.slideIndex);
+
+    if (!imageFile) {
+      throw new Error(`No image file found for slideIndex ${audio.slideIndex}`);
+    }
+    if (!audioFile) {
+      throw new Error(`No audio file found for slideIndex ${audio.slideIndex}`);
     }
 
     const slide = input.script.slides[audio.slideIndex];
@@ -63,8 +178,8 @@ async function writeRemotionInputProps(
     const durationInFrames = Math.ceil((audio.durationMs / 1000) * 30);
 
     return {
-      imageUrl: slideImage.url,
-      audioUrl: audio.url,
+      imageUrl: imageFile,  // Local filename from public/ (e.g., "slide-0.png")
+      audioUrl: audioFile,  // Local filename from public/ (e.g., "audio-0.wav")
       headline: slide.headline || undefined,
       durationInFrames
     };
@@ -100,23 +215,28 @@ async function executeRemotion(
   inputPropsPath: string,
   input: RenderInput
 ): Promise<string> {
-  log.videoRenderer.info(reqId, 'Starting Remotion render', {
+  log.videoRenderer.info(reqId, 'Starting Remotion render at 720p', {
     videoType: input.videoType,
     slideCount: input.slideImages.length
   });
 
-  const outputPath = '/tmp/output.webm';
+  // Use MP4 output with H.264 codec, render at 720p
+  const outputPath = '/tmp/output.mp4';
 
   // Resolution and dimensions based on video type
-  const width = input.videoType === 'short' ? 1080 : 1920;
-  const height = input.videoType === 'short' ? 1920 : 1080;
+  const width = input.videoType === 'short' ? 720 : 1280;
+  const height = input.videoType === 'short' ? 1280 : 720;
 
   // Calculate total duration in frames (30 FPS)
   const totalDurationMs = input.audio.reduce((sum, a) => sum + a.durationMs, 0);
   const transitionOverlapMs = (input.audio.length - 1) * 1000; // 1s overlap per transition
   const totalFrames = Math.ceil(((totalDurationMs - transitionOverlapMs) / 1000) * 30);
 
-  // Build remotion render command
+  // Scale factor for 720p (from 1080p base)
+  const scaleFactor = 0.667;
+
+  // Build remotion render command optimized for 720p output with chunking
+  // 720p produces ~40-50MB files - will be transferred in chunks
   const remotionCommand = [
     'cd /home/user/remotion &&',
     'bunx remotion render',
@@ -124,8 +244,17 @@ async function executeRemotion(
     outputPath,
     '--props', inputPropsPath,
     '--overwrite',
-    '--codec', 'vp8',
-    '--audio-codec', 'opus'
+    '--codec', 'h264',                    // H.264 for better compatibility
+    '--audio-codec', 'aac',               // AAC audio codec
+    '--scale', scaleFactor.toString(),   // 720p resolution (0.667 scale)
+    '--concurrency', '1',                 // Single thread to avoid Chrome crashes
+    '--gl', 'swangle',                     // Software renderer (stable for long renders)
+    '--disallow-parallel-encoding',       // Memory-efficient: don't render+encode simultaneously
+    '--media-cache-size-in-bytes', '536870912',   // 512MB media cache
+    '--offthreadvideo-cache-size-in-bytes', '536870912',  // 512MB offthread cache
+    '--offthreadvideo-video-threads', '1',         // Single thread for video processing
+    '--log', 'verbose',                    // Verbose logging for debugging
+    '--delay-render-timeout-in-milliseconds', '300000'  // 5 minute timeout for slow asset downloads from R2
   ].join(' ');
 
   log.videoRenderer.info(reqId, 'Remotion command', {
@@ -133,7 +262,8 @@ async function executeRemotion(
     width,
     height,
     totalFrames,
-    totalDurationMs
+    totalDurationMs,
+    resolution: '720p (0.667 scale from 1080p with JPEG 90% quality, chunked transfer)'
   });
 
   const startTime = Date.now();
@@ -142,14 +272,26 @@ async function executeRemotion(
 
   try {
     const result = await sandbox.commands.run(remotionCommand, {
-      timeoutMs: VIDEO_RENDERING.FFMPEG_TIMEOUT_MS, // Use same timeout as FFmpeg
+      timeoutMs: 0, // Disable timeout - let render run as long as needed
       onStdout: (data) => {
         stdoutOutput += data + '\n';
-        log.videoRenderer.info(reqId, 'remotion stdout: ' + data.trim());
+        // Log progress updates (frame counts)
+        const frameMatch = data.trim().match(/Rendered\s+(\d+)\/(\d+)/);
+        if (frameMatch) {
+          const current = parseInt(frameMatch[1]);
+          const total = parseInt(frameMatch[2]);
+          const progress = ((current / total) * 100).toFixed(1);
+          log.videoRenderer.info(reqId, `Render progress: ${current}/${total} (${progress}%)`);
+        }
       },
       onStderr: (data) => {
         stderrOutput += data + '\n';
-        log.videoRenderer.info(reqId, 'remotion stderr: ' + data.trim());
+        // Log errors immediately
+        if (data.includes('ERROR') || data.includes('Failed') || data.includes('failed')) {
+          log.videoRenderer.error(reqId, 'Remotion stderr error: ' + data.trim());
+        } else {
+          log.videoRenderer.debug(reqId, 'remotion stderr: ' + data.trim());
+        }
       }
     });
 
@@ -165,16 +307,19 @@ async function executeRemotion(
   } catch (remotionError) {
     const errorMsg = `Remotion failed: ${(remotionError as Error).message}`;
     log.videoRenderer.error(reqId, 'Remotion error output', {
-      fullStderr: stderrOutput,
-      fullStdout: stdoutOutput
+      fullStderr: stderrOutput.slice(-5000), // Last 5000 chars of stderr
+      fullStdout: stdoutOutput.slice(-1000), // Last 1000 chars of stdout
     });
     throw new Error(`${errorMsg}\nStderr: ${stderrOutput.slice(-2000)}`);
   }
 
   const duration = Date.now() - startTime;
-  log.videoRenderer.info(reqId, 'Remotion render completed', { durationMs: duration });
+  log.videoRenderer.info(reqId, 'Remotion render completed', {
+    durationMs: duration,
+    durationMinutes: (duration / 60000).toFixed(2)
+  });
 
-  // Verify output file
+  // Verify output file exists and get size
   const checkResult = await sandbox.commands.run(`ls -lh ${outputPath} 2>&1`);
   log.videoRenderer.info(reqId, 'Output check', { output: checkResult.stdout || checkResult.stderr });
 
@@ -190,14 +335,48 @@ function getMetadata(outputPath: string, input: RenderInput): RenderedVideoMetad
   const transitionOverlap = (input.audio.length - 1) * VIDEO_RENDERING.TRANSITION_DURATION_S;
   const totalDuration = totalAudioDuration - transitionOverlap;
 
+  // 720p resolution with chunked transfer
   return {
-    width: input.videoType === 'short' ? 1080 : 1920,
-    height: input.videoType === 'short' ? 1920 : 1080,
+    width: input.videoType === 'short' ? 720 : 1280,
+    height: input.videoType === 'short' ? 1280 : 720,
     durationMs: Math.round(totalDuration * 1000),
     fps: 30, // Remotion uses 30 FPS
-    videoCodec: 'VP8',
-    audioCodec: 'Opus',
-    format: 'webm'
+    videoCodec: 'H.264',
+    audioCodec: 'AAC',
+    format: 'mp4'
+  };
+}
+
+/**
+ * Get video metadata with actual file size from ffprobe
+ */
+async function getMetadataWithSize(
+  reqId: string,
+  sandbox: Sandbox,
+  outputPath: string,
+  input: RenderInput
+): Promise<RenderedVideoMetadata & { fileSize: number }> {
+  const totalAudioDuration = input.audio.reduce((sum, a) => sum + a.durationMs, 0) / 1000;
+  const transitionOverlap = (input.audio.length - 1) * VIDEO_RENDERING.TRANSITION_DURATION_S;
+  const totalDuration = totalAudioDuration - transitionOverlap;
+
+  // Get file size and metadata from ffprobe
+  const ffprobeResult = await sandbox.commands.run(
+    `ffprobe -v error -show_entries format=size:stream=codec_name,width,height -of json ${outputPath}`
+  );
+
+  const ffprobeData = JSON.parse(ffprobeResult.stdout || '{}');
+  const fileSize = parseInt(ffprobeData.format?.size || '0');
+
+  return {
+    width: input.videoType === 'short' ? 720 : 1280,
+    height: input.videoType === 'short' ? 1280 : 720,
+    durationMs: Math.round(totalDuration * 1000),
+    fps: 30,
+    videoCodec: 'H.264',
+    audioCodec: 'AAC',
+    format: 'mp4',
+    fileSize
   };
 }
 
@@ -205,8 +384,8 @@ function getMetadata(outputPath: string, input: RenderInput): RenderedVideoMetad
  * Main render function using e2b sandbox
  * @param reqId - Request ID for logging
  * @param e2bApiKey - E2B API key
- * @param input - Render input with script, images, audio, etc.
- * @returns Download URL and metadata
+ * @param input - Render input with script, images, audio, r2Bucket, r2Key
+ * @returns R2 key and metadata (video uploaded directly to R2)
  */
 export async function renderVideo(
   reqId: string,
@@ -257,23 +436,32 @@ export async function renderVideo(
 
     sandbox = await Sandbox.create('video-renderer', {
       apiKey: e2bApiKey,
-      timeoutMs: 600000 // 10 minutes - for longer videos (up to ~10min output)
+      timeoutMs: 2400000 // 40 minutes - allow extra time for long renders with network overhead
     });
 
     log.videoRenderer.info(reqId, 'E2B sandbox created', {
       sandboxId: sandbox.sandboxId
     });
 
-    // Step 1: Write inputProps JSON for Remotion
-    log.videoRenderer.info(reqId, 'Step 1/2: Writing inputProps for Remotion');
-    const inputPropsPath = await writeRemotionInputProps(reqId, sandbox, input);
+    // Step 1: Download all assets to Remotion's public/ directory
+    log.videoRenderer.info(reqId, 'Step 1/3: Downloading assets to public directory');
+    const { imageMap, audioMap } = await downloadAssetsToSandbox(
+      reqId,
+      sandbox,
+      input.slideImages,
+      input.audio
+    );
 
-    // Step 2: Execute Remotion render
-    log.videoRenderer.info(reqId, 'Step 2/2: Rendering video with Remotion');
+    // Step 2: Write inputProps JSON for Remotion with local filenames
+    log.videoRenderer.info(reqId, 'Step 2/3: Writing inputProps with local files');
+    const inputPropsPath = await writeRemotionInputProps(reqId, sandbox, input, imageMap, audioMap);
+
+    // Step 3: Execute Remotion render
+    log.videoRenderer.info(reqId, 'Step 3/3: Rendering video with Remotion');
     const outputPath = await executeRemotion(reqId, sandbox, inputPropsPath, input);
 
-    // Step 3: Verify output video is valid using ffprobe
-    log.videoRenderer.info(reqId, 'Verifying output video with ffprobe');
+    // Step 4: Verify output video is valid using ffprobe
+    log.videoRenderer.info(reqId, 'Step 4/5: Verifying output with ffprobe');
     try {
       const ffprobeResult = await sandbox.commands.run(
         `ffprobe -v error -show_entries format=duration,size:stream=codec_name,width,height,r_frame_rate -of default=noprint_wrappers=1 ${outputPath}`
@@ -286,54 +474,138 @@ export async function renderVideo(
       throw new Error(`Output video verification failed: ${(ffprobeError as Error).message}`);
     }
 
-    // Step 4: Read video file content directly (before killing sandbox)
-    log.videoRenderer.info(reqId, 'Reading video file content from sandbox');
-    const fileContentRaw = await sandbox.files.read(outputPath);
+    // Get video metadata (including actual file size)
+    const metadata = await getMetadataWithSize(reqId, sandbox, outputPath, input);
 
-    log.videoRenderer.debug(reqId, 'File read from sandbox', {
-      contentType: typeof fileContentRaw,
-      isArrayBuffer: fileContentRaw instanceof ArrayBuffer,
-      isUint8Array: fileContentRaw instanceof Uint8Array,
-      hasLength: 'length' in fileContentRaw ? (fileContentRaw as any).length : 'N/A'
+    // Step 5: Upload video directly to R2 (if bucket provided)
+    const fileSize = metadata.fileSize;
+    const fileSizeMB = fileSize / 1024 / 1024;
+
+    log.videoRenderer.info(reqId, 'Step 5/5: Uploading video to R2', {
+      fileSizeMB: fileSizeMB.toFixed(2),
+      resolution: `${metadata.width}x${metadata.height}`,
+      hasR2Bucket: !!input.r2Bucket,
+      r2Key: input.r2Key
     });
 
-    // Convert to Uint8Array if it's not already
-    const fileBytes = fileContentRaw instanceof Uint8Array
-      ? fileContentRaw
-      : new Uint8Array(fileContentRaw);
-
-    log.videoRenderer.debug(reqId, 'Converted to Uint8Array', {
-      byteLength: fileBytes.byteLength,
-      firstByte: fileBytes[0],
-      lastByte: fileBytes[fileBytes.byteLength - 1]
-    });
-
-    // Convert Uint8Array to base64 string properly
-    let binary = '';
-    for (let i = 0; i < fileBytes.byteLength; i++) {
-      binary += String.fromCharCode(fileBytes[i]);
+    if (!input.r2Bucket || !input.r2Key) {
+      log.videoRenderer.info(reqId, 'No R2 bucket provided, returning metadata only');
+      return { metadata };
     }
-    const fileBase64 = btoa(binary);
 
-    log.videoRenderer.info(reqId, 'Video file read successfully', {
-      byteLength: fileBytes.byteLength,
-      base64Length: fileBase64.length,
-      base64Preview: fileBase64.substring(0, 100)
+    // For small files (< 25MB), single upload
+    // For larger files, use chunked multipart upload
+    const SINGLE_FILE_THRESHOLD = 25 * 1024 * 1024; // 25MB
+
+    if (fileSize < SINGLE_FILE_THRESHOLD) {
+      log.videoRenderer.info(reqId, 'Small file detected, using single upload');
+      const fileContentRaw = await sandbox.files.read(outputPath);
+      const fileBytes = fileContentRaw instanceof Uint8Array
+        ? fileContentRaw
+        : new Uint8Array(fileContentRaw);
+
+      log.videoRenderer.info(reqId, 'Uploading to R2', {
+        byteLength: fileBytes.byteLength,
+        fileSizeMB: fileSizeMB.toFixed(2)
+      });
+
+      await input.r2Bucket.put(input.r2Key, fileBytes, {
+        customMetadata: {
+          contentType: 'video/mp4'
+        },
+        httpMetadata: {
+          contentType: 'video/mp4'
+        }
+      });
+
+      log.videoRenderer.info(reqId, 'Single file upload complete', {
+        r2Key: input.r2Key,
+        fileSize
+      });
+
+      return { r2Key: input.r2Key, fileSize, metadata };
+    }
+
+    // Large file: Chunked multipart upload
+    const CHUNK_SIZE = 15 * 1024 * 1024; // 15MB chunks
+    const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
+
+    log.videoRenderer.info(reqId, 'Large file detected, using chunked multipart upload', {
+      fileSizeMB: fileSizeMB.toFixed(2),
+      chunkCount: totalChunks,
+      chunkSizeMB: (CHUNK_SIZE / 1024 / 1024).toFixed(2)
     });
 
-    // Get video metadata
-    const metadata = getMetadata(outputPath, input);
-
-    log.videoRenderer.info(reqId, 'Video render completed successfully', {
-      fileSize: fileBase64.length,
-      durationMs: metadata.durationMs,
-      resolution: `${metadata.width}x${metadata.height}`
+    // Create multipart upload
+    const multipartUpload = await input.r2Bucket.createMultipartUpload(input.r2Key, {
+      customMetadata: {
+        contentType: 'video/mp4'
+      },
+      httpMetadata: {
+        contentType: 'video/mp4'
+      }
     });
 
-    return {
-      videoBase64: fileBase64,
-      metadata
-    };
+    const uploadId = multipartUpload.uploadId;
+    log.videoRenderer.info(reqId, 'Multipart upload created', { uploadId, r2Key: input.r2Key });
+
+    const uploadedParts: Array<{ partNumber: number; etag: string }> = [];
+
+    // Process chunks ONE AT A TIME - read, upload, discard
+    for (let i = 0; i < totalChunks; i++) {
+      const offset = i * CHUNK_SIZE;
+      const remainingBytes = fileSize - offset;
+      const chunkSize = Math.min(CHUNK_SIZE, remainingBytes);
+      const partNumber = i + 1;
+
+      log.videoRenderer.info(reqId, `Processing chunk ${partNumber}/${totalChunks}`, {
+        chunkSizeMB: (chunkSize / 1024 / 1024).toFixed(2)
+      });
+
+      // Use dd to extract chunk from file
+      const chunkCmd = `dd if=${outputPath} bs=1 skip=${offset} count=${chunkSize} 2>/dev/null | base64`;
+      const chunkResult = await sandbox.commands.run(chunkCmd, { timeoutMs: 120000 });
+
+      if (chunkResult.exitCode !== 0) {
+        throw new Error(`Failed to read chunk ${partNumber}: ${chunkResult.stderr}`);
+      }
+
+      const chunkBase64 = chunkResult.stdout?.trim() || '';
+
+      // Convert chunk base64 to bytes (only this chunk in memory)
+      const chunkBytes = Buffer.from(chunkBase64, 'base64');
+
+      log.videoRenderer.info(reqId, `Uploading chunk ${partNumber}/${totalChunks}`, {
+        chunkSizeMB: (chunkSize / 1024 / 1024).toFixed(2),
+        base64SizeMB: (chunkBase64.length / 1024 / 1024).toFixed(2)
+      });
+
+      // Upload this part
+      const uploadedPart = await multipartUpload.uploadPart(partNumber, chunkBytes);
+      uploadedParts.push({ partNumber, etag: uploadedPart.etag });
+
+      log.videoRenderer.info(reqId, `Chunk ${partNumber} uploaded`, {
+        etag: uploadedPart.etag
+      });
+
+      // chunkBytes goes out of scope here - garbage collected
+    }
+
+    // Complete multipart upload
+    log.videoRenderer.info(reqId, 'Completing multipart upload', {
+      partCount: uploadedParts.length,
+      fileSizeMB: fileSizeMB.toFixed(2)
+    });
+
+    const object = await multipartUpload.complete(uploadedParts);
+
+    log.videoRenderer.info(reqId, 'Multipart upload complete', {
+      httpEtag: object.httpEtag,
+      r2Key: input.r2Key,
+      fileSize
+    });
+
+    return { r2Key: input.r2Key, fileSize, metadata };
   } catch (error) {
     log.videoRenderer.error(reqId, 'Video render failed', error as Error, {
       errorType: (error as Error).constructor.name,

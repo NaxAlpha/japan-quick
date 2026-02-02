@@ -200,49 +200,48 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
 
       const renderStartTime = Date.now();
 
-      // Call renderVideo with E2B API key from environment
-      const renderResult = await renderVideo(reqId, e2bKey, {
-        script,
-        videoType: video.video_type,
-        slideImages,
-        audio,
-        articleDate
+      // Generate R2 key for the video
+      const { ulid } = await import('ulid');
+      const videoUlid = ulid();
+      const r2Key = `${videoUlid}.mp4`;
+
+      // Step 6: Render video with E2B (720p with chunked transfer - uploads directly to R2)
+      const renderResult = await step.do('render-video', {
+        retries: {
+          limit: 1, // Rendering is expensive, don't retry automatically
+          delay: '30 seconds',
+          backoff: 'constant'
+        },
+        timeout: 1200000 // 20 minutes for 720p renders
+      }, async () => {
+        return await renderVideo(reqId, e2bKey, {
+          script,
+          videoType: video.video_type,
+          slideImages,
+          audio,
+          articleDate,
+          r2Bucket: this.env.ASSETS_BUCKET, // Pass R2 bucket for direct upload
+          r2Key // Pass R2 key for upload
+        });
       });
 
       const renderDuration = Date.now() - renderStartTime;
-      log.videoRenderWorkflow.info(reqId, 'Render completed', {
+      log.videoRenderWorkflow.info(reqId, 'Render and upload completed', {
         durationMs: renderDuration,
+        r2Key: renderResult.r2Key,
+        fileSize: renderResult.fileSize,
+        fileSizeMB: ((renderResult.fileSize || 0) / 1024 / 1024).toFixed(2),
         videoDurationMs: renderResult.metadata.durationMs
       });
 
-      // Step 7: Upload video to R2 using base64 content from e2b
-      const { ulid } = await import('ulid');
-      const videoUlid = ulid();
-      const r2Key = `${videoUlid}.webm`;
-      const fileSize = await step.do('upload-video', {
-        retries: {
-          limit: RETRY_POLICIES.STORAGE.limit,
-          delay: '3 seconds',
-          backoff: 'exponential'
-        }
-      }, async () => {
-        // Convert base64 to bytes
-        const binaryString = atob(renderResult.videoBase64);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
+      // Verify we got the R2 key back
+      if (!renderResult.r2Key) {
+        throw new Error('Render completed but no R2 key returned');
+      }
 
-        await this.env.ASSETS_BUCKET.put(r2Key, bytes, {
-          customMetadata: {
-            videoId: videoId.toString(),
-            contentType: 'video/webm'
-          }
-        });
+      const fileSize = renderResult.fileSize || 0;
 
-        return bytes.length;
-      });
-      log.videoRenderWorkflow.info(reqId, 'Step completed', { step: 'upload-video', r2Key, fileSize });
+      // Skip the separate upload step since renderVideo now handles it
 
       // Step 8: Create asset record
       const assetId = await step.do('create-asset-record', {
@@ -254,7 +253,7 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
       }, async () => {
         const result = await this.env.DB.prepare(`
           INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, mime_type, file_size, metadata, public_url, generation_type)
-          VALUES (?, 'rendered_video', 0, ?, 'video/webm', ?, ?, ?, 'individual')
+          VALUES (?, 'rendered_video', 0, ?, 'video/mp4', ?, ?, ?, 'individual')
           RETURNING id
         `).bind(
           videoId,

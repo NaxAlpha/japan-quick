@@ -60,7 +60,8 @@ japan-quick/
 │   │   ├── video-selection.workflow.ts   # VideoSelectionWorkflow (AI video selection, cron-triggered)
 │   │   ├── script-generation.workflow.ts # ScriptGenerationWorkflow (async script generation)
 │   │   ├── asset-generation.workflow.ts  # AssetGenerationWorkflow (async asset generation)
-│   │   └── video-render.workflow.ts      # VideoRenderWorkflow (FFmpeg video composition)
+│   │   ├── video-render.workflow.ts      # VideoRenderWorkflow (FFmpeg video composition)
+│   │   └── test-chunked.workflow.ts      # TestChunkedWorkflow (R2 multipart upload test)
 │   ├── services/
 │   │   ├── news-scraper.ts           # Yahoo News Japan scraper (filters pickup URLs only, with thorough logging)
 │   │   ├── article-scraper.ts        # Yahoo News article scraper (full content + comments)
@@ -109,7 +110,9 @@ japan-quick/
 - Public URLs: `https://japan-quick-assets.nauman.im/{ulid}.ext`
 - Asset types: slide_image, slide_audio, rendered_video
 
-**Workflows** (`src/workflows/`): Durable execution with retry policies. Test with `wrangler dev --remote` or deploy to production.
+**Workflows** (`src/workflows/`): Durable execution with retry policies.
+- Test with `wrangler dev --remote` or deploy to production
+- Chunked video transfer via R2 multipart upload (15MB chunks, one at a time)
 
 ## Cloudflare Bindings
 
@@ -136,6 +139,10 @@ wrangler dev --remote       # Remote dev (for workflows)
 bun run test                # Run tests
 bun run deploy              # Deploy to Cloudflare Workers
 wrangler tail --format pretty  # Tail logs
+
+# Test chunked upload
+wrangler workflows trigger test-chunked-workflow --params '{"testSize":75}'
+wrangler workflows instances describe test-chunked-workflow <instance-id>
 ```
 
 ## Logging
@@ -297,7 +304,7 @@ All `/api/*` routes require JWT authentication:
 - Service: `src/services/video-renderer.ts`
 - Workflow: `src/workflows/video-render.workflow.ts`
 - Template: `.e2b/template.ts` (Bun + Remotion template)
-- Process: Write inputProps JSON → Execute `remotion render` → Read base64 → Upload to R2
+- Process: Download assets to public/ → Write inputProps JSON → Execute `remotion render` → Read base64 → Upload to R2
 
 **E2B Configuration:**
 - Template: `video-renderer` (8 CPU, 8GB RAM, 16GB disk)
@@ -305,23 +312,44 @@ All `/api/*` routes require JWT authentication:
 - Pre-installed: Remotion 4.0.414, FFmpeg, Chromium, fonts-noto-cjk-extra
 - Remotion project: `/home/user/remotion` with all dependencies
 - Build script: `.e2b/build.ts`
-- Timeout: 10 minutes (600000ms)
+- Timeout: 40 minutes (2400000ms for sandbox, 20 minutes for workflow step)
 
 **Remotion Project:**
 - Location: `.e2b/remotion-template/`
 - Components: Slide, BackgroundAnimation, DateBadge, SlideTitle
 - Dynamic composition: DynamicVideo accepts inputProps (slides[], videoType, articleDate)
-- Remote assets: Fetches images/audio directly from public URLs (no download to sandbox)
+- Assets: Pre-downloaded to `public/` directory as local files (not remote URLs)
+- Image format: JPEG at 90% quality (memory-efficient, good quality)
+
+**Resolution Settings (Worker Memory Constraints):**
+- **Current: 720p** (scale 0.667 from 1080p) with chunked R2 multipart upload
+- Short videos: 720x1280 (portrait)
+- Long videos: 1280x720 (landscape)
+- Output format: MP4 (H.264/AAC)
+- File size: ~40-45 MB for 3-4 minute video (base64 ~55-60 MB total, split into 15MB chunks)
+- Render time: ~7-10 minutes
+- Transfer: Chunked upload via R2 multipart API (15MB chunks, one at a time)
 
 **Key Details:**
-- WebM output (VP8/Opus, 30fps) - upgraded from 25fps
+- MP4 output (H.264/AAC, 30fps) - better compatibility than WebM
 - Ken Burns zoom (alternating in/out)
 - 30-frame cross-fade transitions (1s at 30 FPS)
 - Date badge overlay (DD MMM YYYY format)
 - Headline overlays with fade-underline animation
-- Video content read via `sandbox.files.read()` before killing sandbox
-- Base64 encoding for transfer from sandbox to worker
+- **Chunked transfer for files > 25MB:** E2B splits video with `dd`, returns chunks as base64
+- **R2 multipart upload:** `createMultipartUpload()` → `uploadPart()` (loop) → `complete()`
 - Strict 1:1 slide/audio validation
+
+**Chunked Transfer Implementation:**
+- Worker memory limit: 128MB
+- Base64 encoding overhead: ~33%
+- Solution: R2 multipart upload with 15MB chunks
+  - E2B splits rendered video using `dd` command
+  - Each chunk (15MB raw → ~20MB base64) fits in Worker memory
+  - Chunks uploaded sequentially via `multipartUpload.uploadPart()`
+  - Workflow completes upload with `multipartUpload.complete()`
+- 720p video: ~40-45 MB → ~55-60 MB base64 (3 chunks ✅)
+- 1080p video: ~70-80 MB → ~95-105 MB base64 (5-6 chunks ✅)
 
 **E2B Template Management:**
 ```bash
@@ -336,6 +364,16 @@ cd .e2b && bun run build.ts
 - Sandbox creation: ~1-2s
 - First render includes Chromium download (~109MB)
 - Subsequent renders use cached browser
+- 270p videos render in ~7 minutes
+
+**Memory Optimization (CRITICAL):**
+Remotion components require React performance patterns to avoid memory leaks during long renders:
+- All components wrapped in `React.memo` to prevent unnecessary re-renders
+- Inline styles replaced with constant style objects (see `src/styles.ts`)
+- Expensive computations (interpolations, URL resolution) wrapped in `useMemo`
+- Binary-to-base64 conversion uses `Buffer.from()` not string concatenation
+
+**Without these optimizations**, memory grows linearly and crashes at ~58% (14-25% complete). **With optimizations**, memory plateaus at ~20% during rendering and completes successfully.
 
 ## YouTube OAuth
 

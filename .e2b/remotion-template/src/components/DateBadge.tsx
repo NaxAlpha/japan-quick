@@ -2,10 +2,12 @@
  * DateBadge Component
  * Displays animated date badge with fade-in effect
  * Format: DD MMM YYYY (e.g., "29 DEC 2025")
+ * OPTIMIZED: Uses React.memo and useMemo to prevent memory leaks during long renders
  */
 
-import React from 'react';
+import React, { useMemo, memo } from 'react';
 import { useCurrentFrame, interpolate, AbsoluteFill } from 'remotion';
+import { dateBadgeContainer, dateBadgeTextBold, dateBadgeTextSemibold, dateBadgeTextMedium } from '../styles';
 
 interface DateBadgeProps {
   date: string; // ISO string or Yahoo format like "12/29(月) 11:03"
@@ -15,109 +17,79 @@ interface DateBadgeProps {
 const ANIMATION_DURATION_FRAMES = 30; // 1 second at 30 FPS
 
 /**
- * DateBadge displays a horizontal date badge with fade-in animation
+ * Parse date once and cache the result
  */
-export const DateBadge: React.FC<DateBadgeProps> = ({
+function parseDate(dateString: string): { day: string; month: string; year: string } {
+  let parsedDate: Date;
+
+  // Try to parse Yahoo format first: "12/29(月) 11:03"
+  const yahooMatch = dateString.match(/^(\d{1,2})\/(\d{1,2})/);
+  if (yahooMatch) {
+    const [, month, day] = yahooMatch;
+    const currentYear = new Date().getFullYear();
+    parsedDate = new Date(currentYear, parseInt(month) - 1, parseInt(day));
+  } else {
+    // Try ISO format
+    parsedDate = new Date(dateString);
+  }
+
+  // Validate date
+  if (isNaN(parsedDate.getTime())) {
+    // Fallback to current date if parsing fails
+    parsedDate = new Date();
+  }
+
+  const day = parsedDate.getDate().toString();
+  const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+  const month = monthNames[parsedDate.getMonth()];
+  const year = parsedDate.getFullYear().toString();
+
+  return { day, month, year };
+}
+
+/**
+ * Memoized date badge to prevent re-renders when props haven't changed
+ */
+export const DateBadge = memo<DateBadgeProps>(({
   date,
   durationInFrames,
 }) => {
   const frame = useCurrentFrame();
 
-  // Parse date and extract day, month, year
-  const parseDate = (dateString: string): { day: string; month: string; year: string } => {
-    let parsedDate: Date;
+  // Parse date once (memoized across renders)
+  const { day, month, year } = useMemo(() => parseDate(date), [date]);
 
-    // Try to parse Yahoo format first: "12/29(月) 11:03"
-    const yahooMatch = dateString.match(/^(\d{1,2})\/(\d{1,2})/);
-    if (yahooMatch) {
-      const [, month, day] = yahooMatch;
-      const currentYear = new Date().getFullYear();
-      parsedDate = new Date(currentYear, parseInt(month) - 1, parseInt(day));
-    } else {
-      // Try ISO format
-      parsedDate = new Date(dateString);
-    }
+  // Memoize fade-in animation
+  const opacity = useMemo(() => {
+    return interpolate(frame, [0, ANIMATION_DURATION_FRAMES], [0, 1], { extrapolateRight: 'clamp' });
+  }, [frame]);
 
-    // Validate date
-    if (isNaN(parsedDate.getTime())) {
-      // Fallback to current date if parsing fails
-      parsedDate = new Date();
-    }
-
-    const day = parsedDate.getDate().toString();
-    const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-    const month = monthNames[parsedDate.getMonth()];
-    const year = parsedDate.getFullYear().toString();
-
-    return { day, month, year };
-  };
-
-  const { day, month, year } = parseDate(date);
-
-  // Fade-in animation
-  const opacity = interpolate(frame, [0, ANIMATION_DURATION_FRAMES], [0, 1], { extrapolateRight: 'clamp' });
+  // Memoize container style with opacity
+  const containerStyle = useMemo(() => ({
+    ...dateBadgeContainer,
+    opacity,
+  }), [opacity]);
 
   return (
     <AbsoluteFill style={{ pointerEvents: 'none' }}>
-      <div
-        style={{
-          position: 'absolute',
-          top: '32px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          opacity,
-          backgroundColor: 'rgba(0, 0, 0, 0.75)',
-          border: '2px solid rgba(255, 255, 255, 0.3)',
-          borderRadius: '8px',
-          padding: '12px 24px',
-          display: 'flex',
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: '12px',
-        }}
-      >
+      <div style={containerStyle}>
         {/* Day */}
-        <div
-          style={{
-            fontSize: '28px',
-            lineHeight: '1',
-            fontWeight: 'bold',
-            color: 'white',
-            textAlign: 'center',
-          }}
-        >
+        <div style={dateBadgeTextBold}>
           {day}
         </div>
 
         {/* Month */}
-        <div
-          style={{
-            fontSize: '28px',
-            lineHeight: '1',
-            fontWeight: '600',
-            color: 'white',
-            textAlign: 'center',
-            letterSpacing: '1px',
-          }}
-        >
+        <div style={dateBadgeTextSemibold}>
           {month}
         </div>
 
         {/* Year */}
-        <div
-          style={{
-            fontSize: '28px',
-            lineHeight: '1',
-            fontWeight: '500',
-            color: 'white',
-            textAlign: 'center',
-            opacity: 0.9,
-          }}
-        >
+        <div style={dateBadgeTextMedium}>
           {year}
         </div>
       </div>
     </AbsoluteFill>
   );
-};
+});
+
+DateBadge.displayName = 'DateBadge';

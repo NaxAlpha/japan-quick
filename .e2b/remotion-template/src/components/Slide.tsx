@@ -1,12 +1,14 @@
 /**
  * Slide component - Complete scene with background, audio, headline, and date badge
+ * OPTIMIZED: Uses React.memo and useMemo to prevent memory leaks during long renders
  */
 
-import React from 'react';
-import { useCurrentFrame, interpolate, AbsoluteFill, Audio, Img, Sequence } from 'remotion';
+import React, { useMemo, useCallback, memo } from 'react';
+import { useCurrentFrame, interpolate, AbsoluteFill, Audio, Img, Sequence, staticFile } from 'remotion';
 import { SlideTitle } from './SlideTitle';
 import { DateBadge } from './DateBadge';
 import { BackgroundAnimation } from './BackgroundAnimation';
+import { absoluteFillHidden, fullCoverImage } from '../styles';
 import type { ZoomDirection } from '../types';
 
 interface SlideProps {
@@ -23,14 +25,9 @@ interface SlideProps {
 const FADE_DURATION_FRAMES = 30; // 1 second at 30 FPS
 
 /**
- * Slide component wraps a complete scene with:
- * - Background image with zoom animation
- * - Audio narration
- * - Animated headline (if provided)
- * - Date badge
- * - Fade in/out transitions
+ * Memoized slide wrapper to prevent re-renders when props haven't changed
  */
-export const Slide: React.FC<SlideProps> = ({
+export const Slide = memo<SlideProps>(({
   imageUrl,
   audioUrl,
   headline,
@@ -42,60 +39,81 @@ export const Slide: React.FC<SlideProps> = ({
 }) => {
   const frame = useCurrentFrame();
 
-  // Audio delay: For scenes that fade in (all except first), delay audio by FADE_DURATION_FRAMES
-  // This creates 1 second of silence during the cross-fade transition
-  const audioStartFrame = fadeIn ? FADE_DURATION_FRAMES : 0;
+  // Memoize URL resolution to avoid string operations on every render
+  const resolvedImageUrl = useMemo(() => {
+    if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+      return imageUrl;
+    }
+    return staticFile(imageUrl);
+  }, [imageUrl]);
 
-  // Audio end frame: Stop audio before fade-out to ensure silence during transition
-  // For scenes that fade out, audio should end FADE_DURATION_FRAMES before scene ends
-  const audioEndFrame = fadeOut ? durationInFrames - FADE_DURATION_FRAMES : durationInFrames;
+  const resolvedAudioUrl = useMemo(() => {
+    if (audioUrl.startsWith('http://') || audioUrl.startsWith('https://')) {
+      return audioUrl;
+    }
+    return staticFile(audioUrl);
+  }, [audioUrl]);
 
-  // Fade opacity calculation
-  const fadeOutStart = durationInFrames - FADE_DURATION_FRAMES;
-  let opacity: number;
+  // Memoize audio timing calculations
+  const { audioStartFrame, audioEndFrame } = useMemo(() => {
+    return {
+      audioStartFrame: fadeIn ? FADE_DURATION_FRAMES : 0,
+      audioEndFrame: fadeOut ? durationInFrames - FADE_DURATION_FRAMES : durationInFrames,
+    };
+  }, [fadeIn, fadeOut, durationInFrames]);
 
-  if (fadeIn && fadeOut) {
-    // Middle scenes: fade in and fade out
-    opacity =
-      frame < FADE_DURATION_FRAMES
+  // Memoize fade opacity calculation (only recalculates when frame crosses boundaries)
+  const opacity = useMemo(() => {
+    const fadeOutStart = durationInFrames - FADE_DURATION_FRAMES;
+
+    if (fadeIn && fadeOut) {
+      // Middle scenes: fade in and fade out
+      return frame < FADE_DURATION_FRAMES
         ? interpolate(frame, [0, FADE_DURATION_FRAMES], [0, 1], { extrapolateRight: 'clamp' })
         : frame < fadeOutStart
         ? 1
         : interpolate(frame, [fadeOutStart, durationInFrames], [1, 0], { extrapolateRight: 'clamp' });
-  } else if (fadeIn) {
-    // Last scene: only fade in
-    opacity =
-      frame < FADE_DURATION_FRAMES
+    } else if (fadeIn) {
+      // Last scene: only fade in
+      return frame < FADE_DURATION_FRAMES
         ? interpolate(frame, [0, FADE_DURATION_FRAMES], [0, 1], { extrapolateRight: 'clamp' })
         : 1;
-  } else if (fadeOut) {
-    // First scene: only fade out
-    opacity =
-      frame < fadeOutStart
+    } else if (fadeOut) {
+      // First scene: only fade out
+      return frame < fadeOutStart
         ? 1
         : interpolate(frame, [fadeOutStart, durationInFrames], [1, 0], { extrapolateRight: 'clamp' });
-  } else {
-    // No fades (edge case)
-    opacity = 1;
-  }
+    }
+    return 1; // No fades
+  }, [frame, fadeIn, fadeOut, durationInFrames]);
+
+  // Memoize container style with opacity (only creates new object when opacity changes)
+  const containerStyle = useMemo(() => ({
+    ...absoluteFillHidden,
+    opacity,
+  }), [opacity]);
 
   return (
-    <AbsoluteFill style={{ opacity, overflow: 'hidden', backgroundColor: 'black' }}>
+    <AbsoluteFill style={containerStyle}>
       {/* Background image with Ken Burns zoom animation */}
       <BackgroundAnimation
         zoomDirection={zoomDirection}
         durationInFrames={durationInFrames}
       >
-        <Img src={imageUrl} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        <Img
+          src={resolvedImageUrl}
+          style={fullCoverImage}
+          delayRenderTimeoutInMilliseconds={60000}
+        />
       </BackgroundAnimation>
 
       {/* Audio narration - delayed for non-first scenes to create silence during transition */}
       {audioStartFrame > 0 ? (
         <Sequence from={audioStartFrame} durationInFrames={audioEndFrame - audioStartFrame}>
-          <Audio src={audioUrl} />
+          <Audio src={resolvedAudioUrl} delayRenderTimeoutInMilliseconds={60000} />
         </Sequence>
       ) : (
-        <Audio src={audioUrl} endAt={audioEndFrame} />
+        <Audio src={resolvedAudioUrl} endAt={audioEndFrame} delayRenderTimeoutInMilliseconds={60000} />
       )}
 
       {/* Headline overlay with fade-underline animation */}
@@ -113,4 +131,6 @@ export const Slide: React.FC<SlideProps> = ({
       />
     </AbsoluteFill>
   );
-};
+});
+
+Slide.displayName = 'Slide';

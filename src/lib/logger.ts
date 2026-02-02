@@ -181,6 +181,7 @@ export const log = {
   videoRenderWorkflow: createLogger('VideoRenderWorkflow'),
   scriptGenerationWorkflow: createLogger('ScriptGenerationWorkflow'),
   assetGenerationWorkflow: createLogger('AssetGenerationWorkflow'),
+  testChunked: createLogger('TestChunked'),
 };
 
 export default log;
