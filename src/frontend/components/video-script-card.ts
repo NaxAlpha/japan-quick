@@ -5,7 +5,7 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { baseStyles, buttonStyles, badgeStyles, loadingStyles } from '../styles/shared-styles.js';
-import type { ParsedVideo, ScriptStatus } from '../types/video.js';
+import type { ParsedVideo, ScriptStatus, ScriptPrompt } from '../types/video.js';
 
 @customElement('video-script-card')
 export class VideoScriptCard extends LitElement {
@@ -177,6 +177,11 @@ export class VideoScriptCard extends LitElement {
   @property({ type: Boolean })
   generating = false;
 
+  private getScriptPromptUrl(): string | null {
+    if (!this.video || !this.video.scriptPrompt) return null;
+    return this.video.scriptPrompt.public_url || null;
+  }
+
   private getStatusLabel(status: ScriptStatus): string {
     const labels: Record<ScriptStatus, string> = {
       'pending': 'WAIT',
@@ -240,6 +245,19 @@ export class VideoScriptCard extends LitElement {
               <div class="script-title">${script.title}</div>
               <div class="script-description">${script.description}</div>
               <div class="script-thumbnail">📷 ${script.thumbnailDescription}</div>
+              ${this.getScriptPromptUrl() ? html`
+                <div style="margin-top: 1rem;">
+                  <a
+                    href=${this.getScriptPromptUrl()!}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="btn"
+                    style="display: inline-block; text-decoration: none; font-size: 0.75rem; padding: 0.5rem 0.75rem;"
+                  >
+                    [ View Script Prompt ]
+                  </a>
+                </div>
+              ` : ''}
             </div>
 
             <div class="slides-header">

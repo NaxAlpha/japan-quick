@@ -3,7 +3,7 @@
  * Provides consistent, maintainable prompt strings for AI operations
  */
 
-import type { AIArticleInputWithContent, PastVideoContext } from '../types/video.js';
+import type { AIArticleInputWithContent, PastVideoContext, VideoFormat, UrgencyLevel, AIArticleForScript } from '../types/video.js';
 
 export interface AIArticleInput {
   index: string;
@@ -309,6 +309,151 @@ RULES:
 - Description should summarize the video and include keywords
 - Each slide's audioNarration should match the estimatedDuration (10-20 seconds of speech)
 - Ensure smooth information flow across all slides
+
+Respond with ONLY the JSON object, no other text.`;
+}
+
+/**
+ * Enhanced script generation input with full context
+ */
+export interface ScriptGenerationInputEnhanced {
+  videoFormat: VideoFormat;
+  urgency: UrgencyLevel;
+  timeContext?: string;
+  articles: AIArticleForScript[];
+}
+
+/**
+ * Build enhanced script generation prompt with full context awareness
+ * Single consistent prompt structure with context provided for AI to follow
+ */
+export function buildScriptPromptEnhanced(input: ScriptGenerationInputEnhanced): string {
+  const { videoFormat, urgency, timeContext, articles } = input;
+
+  // Format-specific context (provided to AI, not changing prompt structure)
+  const formatContext = {
+    single_short: {
+      duration: '60-90 seconds',
+      aspectRatio: '1080x1920 (vertical)',
+      slideCount: '6-8 slides',
+      structure: 'Hook/intro → Core facts → Context/impact → Optional: Public reaction → Conclusion/CTA'
+    },
+    multi_short: {
+      duration: '90-120 seconds',
+      aspectRatio: '1080x1920 (vertical)',
+      slideCount: '6-8 slides',
+      structure: 'Combined hook → Story 1 (2-3 slides) → Story 2 (2-3 slides) → [Optional: Story 3] → Combined conclusion'
+    },
+    long: {
+      duration: '4-6 minutes',
+      aspectRatio: '1920x1080 (horizontal)',
+      slideCount: '15-17 slides',
+      structure: 'Intro/Context → Background → Main story details → Public reaction → Analysis → Conclusion/Takeaways'
+    }
+  };
+
+  // Urgency context (provided to AI)
+  const urgencyContext = {
+    urgent: {
+      tone: 'Breaking, immediate, urgent',
+      hooks: ['"Breaking right now:"', '"Just in:"', '"Alert:"'],
+      cta: '"Follow for breaking updates - subscribe to J-Quick"'
+    },
+    developing: {
+      tone: 'Trending, evolving, updates-focused',
+      hooks: ['"Trending now in Japan:"', '"Here\'s what everyone\'s talking about:"', '"The story developing:"'],
+      cta: '"Follow this developing story - see updates on J-Quick"'
+    },
+    regular: {
+      tone: 'Informative, calm, educational',
+      hooks: ['"Here\'s what you need to know:"', '"Understanding [topic]:"', '"The story behind:"'],
+      cta: '"Subscribe for more Japanese news on J-Quick"'
+    }
+  };
+
+  // Time context (provided to AI)
+  const timeContextInfo = timeContext === 'morning' ? 'Morning update: overnight news, quick updates'
+    : timeContext === 'lunch' ? 'Lunchtime: trending topics, lighter content'
+    : timeContext === 'evening' ? 'Evening: day\'s highlights, recap'
+    : 'General: no specific time context';
+
+  // Format articles for the prompt
+  const articlesText = articles.map((article, idx) => {
+    let text = `### Article ${idx + 1}: ${article.title}\n\n`;
+    text += `Content:\n${article.contentText || article.content}\n\n`;
+
+    if (article.images.length > 0) {
+      text += `Reference Images:\n${article.images.join('\n')}\n\n`;
+    }
+
+    if (article.comments.length > 0) {
+      const highEngagementComments = article.comments.filter(c => c.likes >= 10);
+      const commentsToUse = highEngagementComments.length > 0
+        ? highEngagementComments.slice(0, 5)
+        : article.comments.slice(0, 5);
+
+      if (commentsToUse.length > 0) {
+        text += `Top Comments (for public reaction):\n`;
+        commentsToUse.forEach(comment => {
+          text += `- [${comment.likes} likes] ${comment.content}\n`;
+          if (comment.replies && comment.replies.length > 0) {
+            comment.replies.forEach(reply => { text += `  └ ${reply.content}\n`; });
+          }
+        });
+        text += '\n';
+      }
+    }
+
+    return text;
+  }).join('\n---\n\n');
+
+  const hasHighEngagementComments = articles.some(a => a.comments.some(c => c.likes >= 10));
+
+  const format = formatContext[videoFormat];
+  const urg = urgencyContext[urgency];
+
+  return `You are an AI video script writer for "J-Quick", creating structured video scripts for Japanese news content.
+
+CONTEXT FOR THIS VIDEO:
+- Video Format: ${videoFormat} (${format.duration}, ${format.aspectRatio})
+- Target Slides: ${format.slideCount}
+- Narrative Structure: ${format.structure}
+- Urgency: ${urgency} (${urg.tone})
+- Time Context: ${timeContextInfo}
+- Suggested Hooks: ${urg.hooks.join(', ')}
+- Suggested CTA: ${urg.cta}
+- Channel Name: "J-Quick" (not "Japan Quick")
+
+ARTICLES:
+${articlesText}
+
+TASK:
+Create a compelling video script following the format structure above.
+
+REQUIREMENTS:
+1. Slide Count: Create ${format.slideCount}, each 10-20 seconds
+2. Opening: Use urgency-appropriate hook, make it attention-grabbing
+3. Language: Use article language for all text (title, description, narration), English for image descriptions
+4. Images: Precise and detailed, reference provided images, prefer male unless story requires female, avoid showing faces when possible, match story location
+5. Comments${hasHighEngagementComments ? ': Include 1-2 slides on public reaction (attribute generally, don\'t quote verbatim)' : ': Focus on story facts (no high-engagement comments)'}
+6. Thumbnail: Compelling, matches story, includes title overlay
+7. CTA: Mention "${urg.cta}" at the END of the LAST slide's narration (do NOT create a separate CTA slide, just mention it at the end)
+8. FACT INTEGRITY: ONLY use information from provided articles - never add facts not in source
+
+RESPONSE FORMAT (JSON only):
+{
+  "title": "SEO-optimized YouTube title in article language",
+  "description": "SEO-optimized description in article language",
+  "thumbnailDescription": "Detailed thumbnail image prompt in English",
+  "slides": [
+    {
+      "headline": "Short slide title",
+      "imageDescription": "Detailed image prompt in English",
+      "audioNarration": "Narration text in article language",
+      "estimatedDuration": 15
+    }
+  ]
+}
 
 Respond with ONLY the JSON object, no other text.`;
 }

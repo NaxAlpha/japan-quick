@@ -42,8 +42,12 @@ export class R2StorageService {
 
   /**
    * Get file extension from MIME type
+   * Handles MIME types with charset parameters (e.g., "text/plain; charset=utf-8")
    */
   private getExtension(mimeType: string): string {
+    // Strip charset and other parameters for extension lookup
+    const baseMimeType = mimeType.split(';')[0].trim();
+
     const mimeToExt: Record<string, string> = {
       'image/png': 'png',
       'image/jpeg': 'jpg',
@@ -51,9 +55,10 @@ export class R2StorageService {
       'audio/wav': 'wav',
       'audio/mpeg': 'mp3',
       'video/mp4': 'mp4',
-      'video/webm': 'webm'
+      'video/webm': 'webm',
+      'text/plain': 'txt'
     };
-    return mimeToExt[mimeType] || 'bin';
+    return mimeToExt[baseMimeType] || 'bin';
   }
 
   /**
