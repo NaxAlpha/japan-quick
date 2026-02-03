@@ -480,7 +480,22 @@ GRID LAYOUT:
 - The output is ONE image divided into a 3x3 grid
 - Each cell is ${cellSize} pixels
 - Cells are numbered left-to-right, top-to-bottom: positions 0-8
-- Grid lines, borders, gaps, or spaces MUST NOT be visible - images must tile seamlessly with ZERO pixels between cells
+
+GRID SEPARATION (CRITICAL):
+- Use EXACTLY 1-3 pixels of visual separation between cells
+- DO NOT create wide margins (20-100 pixels) - cells should be close together
+- A thin 1-3 pixel divider line or gap is sufficient
+
+FRAME ISOLATION (CRITICAL):
+- Each cell's content must stay STRICTLY within its boundaries
+- No text may cross cell borders
+- No object edges (people, items) may extend beyond their cell's area
+- Cell 0, Cell 1, Cell 2 etc. are separate frames - content must not bleed between them
+
+CHARACTER CONSISTENCY:
+- While frames are isolated, shared characters should maintain visual consistency
+- If the same person appears in multiple cells, they should look the same (clothing, appearance)
+- This is about visual consistency, NOT about objects crossing boundaries
 
 STYLE REQUIREMENTS:
 - Consistent visual style across ALL cells
@@ -489,11 +504,42 @@ STYLE REQUIREMENTS:
 - Clear focal points in each cell
 - Modern, polished aesthetic
 
-CRITICAL: No borders, gaps, or spaces between grid cells - cells must merge perfectly with zero separation
-
 CELL CONTENTS:
 ${cellDescriptions}${thumbnailSection}${emptySection}
 
 CRITICAL: Generate exactly ONE image with all cells combined. Do NOT generate separate images.
+`.trim();
+}
+
+/**
+ * Build individual slide image generation prompt
+ * Used for non-pro model (gemini-2.5-flash-image) with individual slide generation
+ * @param options Individual slide prompt options
+ * @returns Complete prompt string for individual slide generation
+ */
+export function buildIndividualSlidePrompt(options: {
+  slideHeadline: string;
+  imageDescription: string;
+  width: number;
+  height: number;
+  aspectRatio: string;
+}): string {
+  const { slideHeadline, imageDescription, width, height, aspectRatio } = options;
+
+  return `
+TASK: Generate a single ${width}x${height} pixel image (${aspectRatio} aspect ratio).
+
+SUBJECT: ${slideHeadline}
+
+DESCRIPTION: ${imageDescription}
+
+STYLE REQUIREMENTS:
+- High quality, detailed image
+- High contrast, vibrant colors
+- Clear focal point
+- Modern, polished aesthetic
+- ${aspectRatio === '9:16' ? 'Vertical composition optimized for mobile viewing' : 'Horizontal composition optimized for desktop viewing'}
+
+Generate exactly ONE image.
 `.trim();
 }

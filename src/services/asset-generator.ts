@@ -1,6 +1,9 @@
 /**
  * Asset Generator Service
  * Handles generation of grid images, individual slide images, and slide audio using Gemini AI
+ *
+ * Pro Model (gemini-3-pro-image-preview): Grid generation with 4K resolution
+ * Non-Pro Model (gemini-2.5-flash-image): Individual slide generation with 1K resolution
  */
 
 import { GoogleGenAI } from '@google/genai';
@@ -8,9 +11,9 @@ import { Image, decodeBase64, encodeBase64 } from 'cross-image';
 import { ulid } from 'ulid';
 import type { VideoScript, ImageModelId, TTSModelId, TTSVoice, GridImageMetadata, SlideAudioMetadata, ImageSize } from '../types/video.js';
 import { log } from '../lib/logger.js';
-import { buildGridImagePrompt } from '../lib/prompts.js';
+import { buildGridImagePrompt, buildIndividualSlidePrompt } from '../lib/prompts.js';
 import { pcmToWav, calculatePcmDuration } from '../lib/audio-helper.js';
-import { calculateGridDimensions, getModelImageSize } from '../lib/dimensions.js';
+import { calculateGridDimensions, getModelImageSize, getIndividualSlideDimensions } from '../lib/dimensions.js';
 
 interface GridImageResult {
   base64: string;
@@ -33,6 +36,17 @@ interface SlideAudioResult {
   ulid: string;
 }
 
+interface PromptResult {
+  gridIndex: number;
+  prompt: string;
+}
+
+interface TokenUsageInfo {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
 
 export class AssetGeneratorService {
   private genai: GoogleGenAI;
@@ -42,7 +56,38 @@ export class AssetGeneratorService {
   }
 
   /**
-   * Generate all grid images and individual slide images for a video
+   * Generate all images for a video - branches based on model
+   * Pro model: Grid generation (4K)
+   * Non-pro model: Individual slide generation (1K)
+   */
+  async generateImages(
+    reqId: string,
+    script: VideoScript,
+    videoType: 'short' | 'long',
+    model: ImageModelId,
+    referenceImages: string[] = []
+  ): Promise<{ grids: GridImageResult[]; slides: SlideImageResult[]; prompts: PromptResult[]; tokenUsage: TokenUsageInfo[] }> {
+    const isProModel = model === 'gemini-3-pro-image-preview';
+
+    log.assetGen.info(reqId, 'Starting image generation', {
+      videoType,
+      model,
+      isProModel,
+      slideCount: script.slides.length,
+      referenceImageCount: referenceImages.length
+    });
+
+    if (isProModel) {
+      // Pro model: Use grid generation
+      return await this.generateGridImages(reqId, script, videoType, model, referenceImages);
+    } else {
+      // Non-pro model: Use individual slide generation
+      return await this.generateIndividualSlides(reqId, script, videoType, model, referenceImages);
+    }
+  }
+
+  /**
+   * Generate all grid images and individual slide images for a video (Pro model only)
    * Uses cross-image (pure JS) to split grids into individual slides
    */
   async generateGridImages(
@@ -51,11 +96,13 @@ export class AssetGeneratorService {
     videoType: 'short' | 'long',
     model: ImageModelId,
     referenceImages: string[] = []
-  ): Promise<{ grids: GridImageResult[]; slides: SlideImageResult[] }> {
+  ): Promise<{ grids: GridImageResult[]; slides: SlideImageResult[]; prompts: PromptResult[]; tokenUsage: TokenUsageInfo[] }> {
     const isShort = videoType === 'short';
     const aspectRatio = isShort ? '9:16' : '16:9';
     const gridCount = isShort ? 1 : 2;
     const grids: GridImageResult[] = [];
+    const prompts: PromptResult[] = [];
+    const tokenUsage: TokenUsageInfo[] = [];
 
     log.assetGen.info(reqId, 'Starting grid image generation', {
       videoType,
@@ -90,7 +137,7 @@ export class AssetGeneratorService {
       });
 
       const startTime = Date.now();
-      const gridImage = await this.generateGridImage(
+      const { image: gridImage, tokenUsage: tokens } = await this.generateGridImage(
         reqId,
         prompt,
         aspectRatio,
@@ -100,6 +147,10 @@ export class AssetGeneratorService {
         previousGrid
       );
       const durationMs = Date.now() - startTime;
+
+      // Store prompt for this grid
+      prompts.push({ gridIndex, prompt });
+      tokenUsage.push(tokens);
 
       const metadata = this.buildGridMetadata(
         gridIndex,
@@ -119,13 +170,83 @@ export class AssetGeneratorService {
         ulid: gridUlid
       });
 
-      log.assetGen.info(reqId, `Grid ${gridIndex} generated`, { durationMs, ulid: gridUlid });
+      log.assetGen.info(reqId, `Grid ${gridIndex} generated`, { durationMs, ulid: gridUlid, tokens });
     }
 
     // Split grids into individual slide images using ImageScript
     const allSlides: SlideImageResult[] = await this.splitGridsIntoSlides(reqId, grids);
 
-    return { grids, slides: allSlides };
+    return { grids, slides: allSlides, prompts, tokenUsage };
+  }
+
+  /**
+   * Generate individual slide images for each slide (Non-pro model only)
+   * No grid generation - each slide is generated separately
+   */
+  async generateIndividualSlides(
+    reqId: string,
+    script: VideoScript,
+    videoType: 'short' | 'long',
+    model: ImageModelId,
+    referenceImages: string[] = []
+  ): Promise<{ grids: GridImageResult[]; slides: SlideImageResult[]; prompts: PromptResult[]; tokenUsage: TokenUsageInfo[] }> {
+    const isShort = videoType === 'short';
+    const aspectRatio = isShort ? '9:16' : '16:9';
+    const dimensions = getIndividualSlideDimensions(videoType);
+    const slides: SlideImageResult[] = [];
+    const tokenUsage: TokenUsageInfo[] = [];
+
+    log.assetGen.info(reqId, 'Starting individual slide generation', {
+      videoType,
+      model,
+      slideCount: script.slides.length,
+      referenceImageCount: referenceImages.length,
+      dimensions: dimensions.gridSize
+    });
+
+    for (let slideIndex = 0; slideIndex < script.slides.length; slideIndex++) {
+      const slide = script.slides[slideIndex];
+
+      const prompt = buildIndividualSlidePrompt({
+        slideHeadline: slide.headline,
+        imageDescription: slide.imageDescription,
+        width: dimensions.width,
+        height: dimensions.height,
+        aspectRatio
+      });
+
+      log.assetGen.info(reqId, `Generating slide ${slideIndex}`, {
+        headline: slide.headline,
+        dimensions: dimensions.gridSize
+      });
+
+      const startTime = Date.now();
+      const { image: slideImage, tokenUsage: tokens } = await this.generateSlideImage(
+        reqId,
+        prompt,
+        aspectRatio,
+        model,
+        dimensions,
+        referenceImages
+      );
+      const durationMs = Date.now() - startTime;
+
+      tokenUsage.push(tokens);
+
+      const slideUlid = ulid();
+
+      slides.push({
+        base64: slideImage.base64,
+        mimeType: slideImage.mimeType,
+        metadata: { slideIndex },
+        ulid: slideUlid
+      });
+
+      log.assetGen.info(reqId, `Slide ${slideIndex} generated`, { durationMs, ulid: slideUlid, tokens });
+    }
+
+    // No grids for individual slide generation
+    return { grids: [], slides, prompts: [], tokenUsage };
   }
 
   /**
@@ -371,6 +492,93 @@ export class AssetGeneratorService {
   }
 
   /**
+   * Generate a single slide image using Gemini (for non-pro model individual slide generation)
+   */
+  private async generateSlideImage(
+    reqId: string,
+    prompt: string,
+    aspectRatio: '9:16' | '16:9',
+    model: ImageModelId,
+    dimensions: { width: number; height: number },
+    referenceImages?: string[]
+  ): Promise<{ image: { base64: string; mimeType: string }; tokenUsage: TokenUsageInfo }> {
+    // Build contents array with reference images and prompt
+    const contents: Array<{ inlineData: { mimeType: string; data: string } } | { text: string }> = [];
+
+    // Add reference images as inline data (parsed from JSON strings)
+    if (referenceImages && referenceImages.length > 0) {
+      for (const refImgStr of referenceImages) {
+        try {
+          const refImg = JSON.parse(refImgStr) as { mimeType: string; data: string };
+          contents.push({
+            inlineData: {
+              mimeType: refImg.mimeType,
+              data: refImg.data
+            }
+          });
+        } catch {
+          // Skip invalid reference image data
+          continue;
+        }
+      }
+    }
+
+    // Add text prompt with reference images context
+    let textPrompt = prompt;
+    if (referenceImages && referenceImages.length > 0) {
+      textPrompt += '\n\nREFERENCE IMAGES: The images above show the actual subjects, people, locations, and visual elements from the news article. Use them as visual reference to accurately depict the story content.';
+    }
+    contents.push({ text: textPrompt });
+
+    // Non-pro model doesn't support imageSize, only aspectRatio
+    const config: {
+      responseModalities: string[];
+      imageConfig: {
+        aspectRatio: string;
+      };
+    } = {
+      responseModalities: ['TEXT', 'IMAGE'],
+      imageConfig: {
+        aspectRatio
+      }
+    };
+
+    const response = await this.genai.models.generateContent({
+      model,
+      contents,
+      config
+    });
+
+    // Extract token usage
+    const tokenUsage = this.extractTokenUsage(response);
+
+    if (!response.candidates || !response.candidates[0]) {
+      throw new Error('No candidates in image generation response');
+    }
+
+    // Iterate through parts to find the image data
+    const parts = response.candidates[0].content.parts;
+    for (const part of parts) {
+      if (part.inlineData && part.inlineData.data) {
+        return {
+          image: {
+            base64: part.inlineData.data,
+            mimeType: part.inlineData.mimeType || 'image/png'
+          },
+          tokenUsage
+        };
+      }
+    }
+
+    // If no image found, log and throw error
+    log.assetGen.error(reqId, 'No image data in response', new Error('No image data'), {
+      model,
+      parts: JSON.stringify(parts)
+    });
+    throw new Error('No image data in response from model ' + model);
+  }
+
+  /**
    * Generate a single grid image using Gemini
    */
   private async generateGridImage(
@@ -381,7 +589,7 @@ export class AssetGeneratorService {
     imageSize: ImageSize,
     referenceImages?: string[],
     previousGrid?: string
-  ): Promise<{ base64: string; mimeType: string }> {
+  ): Promise<{ image: { base64: string; mimeType: string }; tokenUsage: TokenUsageInfo }> {
     // Build contents array with reference images and prompt
     // Reference images come first, then text prompt
     const contents: Array<{ inlineData: { mimeType: string; data: string } } | { text: string }> = [];
@@ -450,6 +658,9 @@ export class AssetGeneratorService {
       config
     });
 
+    // Extract token usage
+    const tokenUsage = this.extractTokenUsage(response);
+
     if (!response.candidates || !response.candidates[0]) {
       throw new Error('No candidates in image generation response');
     }
@@ -459,8 +670,11 @@ export class AssetGeneratorService {
     for (const part of parts) {
       if (part.inlineData && part.inlineData.data) {
         return {
-          base64: part.inlineData.data,
-          mimeType: part.inlineData.mimeType || 'image/png'
+          image: {
+            base64: part.inlineData.data,
+            mimeType: part.inlineData.mimeType || 'image/png'
+          },
+          tokenUsage
         };
       }
     }
@@ -471,6 +685,29 @@ export class AssetGeneratorService {
       parts: JSON.stringify(parts)
     });
     throw new Error('No image data in response from model ' + model);
+  }
+
+  /**
+   * Extract token usage from Gemini response
+   */
+  private extractTokenUsage(response: any): TokenUsageInfo {
+    // Gemini API response may contain usage metadata
+    // For image generation, tokens are typically 0 input, fixed output based on resolution
+    const usageMetadata = response.usageMetadata;
+    if (usageMetadata) {
+      return {
+        inputTokens: usageMetadata.promptTokenCount || 0,
+        outputTokens: usageMetadata.candidatesTokenCount || 0,
+        totalTokens: usageMetadata.totalTokenCount || 0
+      };
+    }
+
+    // Default fallback (image generation typically uses 0 input, estimated output)
+    return {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0
+    };
   }
 
   /**

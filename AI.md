@@ -261,7 +261,7 @@ All `/api/*` routes require JWT authentication:
 - Selection: `gemini-3-flash-preview` ($0.50 input/$3.00 output per 1M tokens)
 - Enhanced Script: `gemini-3-pro-preview` ($2.00 input/$12.00 output per 1M tokens)
 - Basic Script: `gemini-3-flash-preview` ($0.50 input/$3.00 output per 1M tokens)
-- Images: `gemini-2.5-flash-image` ($0.039 each) or `gemini-3-pro-image-preview` ($0.134 each)
+- Images: `gemini-2.5-flash-image` ($0.039 each, 1K individual slides) or `gemini-3-pro-image-preview` ($0.24 each, 4K grids)
 - TTS: `gemini-2.5-flash-preview-tts` or `gemini-2.5-pro-preview-tts`
 
 **Article Selection:**
@@ -292,12 +292,22 @@ All `/api/*` routes require JWT authentication:
 
 ## Video Asset Generation
 
-**Grid Images:**
+**Model-Based Generation:**
+- Pro Model (gemini-3-pro-image-preview): Grid generation with 4K resolution by default
+- Non-Pro Model (gemini-2.5-flash-image): Individual slide generation with 1K resolution
+- Frontend defaults to pro model when assets are pending
+
+**Grid Images (Pro Model):**
 - 3×3 grids containing slide images + thumbnail
-- Resolutions: 1K (Flash model) or 2K (Pro model)
-- Short: 1 grid (1080×1920 or 2048×3658)
-- Long: 2 grids (1920×1080 or 3658×2048 each)
+- 4K resolution: 3072×5504 (9:16) or 5504×3072 (16:9)
+- Short: 1 grid, Long: 2 grids
 - Reference images included for AI context
+- Prompts stored as `image_generation_prompt` assets for viewing
+
+**Individual Slides (Non-Pro Model):**
+- Each slide generated separately
+- 1K resolution: 768×1344 (9:16) or 1344×768 (16:9)
+- No grid generation, no prompt storage
 
 **Grid Splitting:**
 - Individual slides extracted using `cross-image` library (pure JavaScript, zero dependencies)

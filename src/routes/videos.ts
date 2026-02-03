@@ -301,10 +301,14 @@ videoRoutes.post('/:id/generate-assets', async (c) => {
   log.videoRoutes.info(reqId, 'Request received', { method: 'POST', path: `/:id/generate-assets`, id });
 
   try {
+    // Parse request body for optional model overrides
+    const body = await c.req.json().catch(() => ({}));
+    const { image_model, tts_model } = body as { image_model?: string; tts_model?: string };
+
     // 1. Validate video exists and can generate
     const video = await c.env.DB.prepare(`
-      SELECT script_status, asset_status FROM videos WHERE id = ?
-    `).bind(id).first<{ script_status: string; asset_status: string }>();
+      SELECT script_status, asset_status, image_model, tts_model FROM videos WHERE id = ?
+    `).bind(id).first<{ script_status: string; asset_status: string; image_model: string; tts_model: string }>();
 
     if (!video) {
       log.videoRoutes.warn(reqId, 'Video not found', { id });
@@ -319,6 +323,21 @@ videoRoutes.post('/:id/generate-assets', async (c) => {
     if (video.asset_status === 'generating') {
       log.videoRoutes.warn(reqId, 'Asset generation already in progress', { id });
       return conflictResponse('Asset generation in progress');
+    }
+
+    // 1.5. Update model selection if provided
+    if (image_model && image_model !== video.image_model) {
+      await c.env.DB.prepare(`
+        UPDATE videos SET image_model = ?, updated_at = datetime('now') WHERE id = ?
+      `).bind(image_model, id).run();
+      log.videoRoutes.info(reqId, 'Image model updated', { id, oldModel: video.image_model, newModel: image_model });
+    }
+
+    if (tts_model && tts_model !== video.tts_model) {
+      await c.env.DB.prepare(`
+        UPDATE videos SET tts_model = ?, updated_at = datetime('now') WHERE id = ?
+      `).bind(tts_model, id).run();
+      log.videoRoutes.info(reqId, 'TTS model updated', { id, oldModel: video.tts_model, newModel: tts_model });
     }
 
     // 2. Trigger AssetGenerationWorkflow

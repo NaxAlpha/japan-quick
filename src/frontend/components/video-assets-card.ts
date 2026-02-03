@@ -171,7 +171,12 @@ export class VideoAssetsCard extends LitElement {
 
   willUpdate(changedProperties: Map<string, unknown>) {
     if (changedProperties.has('video') && this.video) {
-      this.selectedImageModel = this.video.image_model;
+      // If assets are not generated yet, default to pro model
+      if (this.video.asset_status === 'pending' || this.video.asset_status === 'error') {
+        this.selectedImageModel = 'gemini-3-pro-image-preview';
+      } else {
+        this.selectedImageModel = this.video.image_model;
+      }
       this.selectedTTSModel = this.video.tts_model;
     }
   }
@@ -309,6 +314,25 @@ export class VideoAssetsCard extends LitElement {
                       <div class="grid-preview">
                         <img src="${asset.url}" alt="Grid ${idx}" />
                       </div>
+                    `)}
+                  </div>
+                </div>
+              ` : ''}
+
+              ${assets && assets.filter(a => a.assetType === 'image_generation_prompt').length > 0 ? html`
+                <div style="margin-top: 1rem;">
+                  <h4 style="font-family: 'Space Mono', monospace; font-size: 0.6875rem; color: #78746c; margin: 0 0 0.75rem 0; text-transform: uppercase;">Grid Generation Prompts</h4>
+                  <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    ${assets.filter(a => a.assetType === 'image_generation_prompt').sort((a, b) => a.assetIndex - b.assetIndex).map((asset) => html`
+                      <a
+                        href="${asset.publicUrl || asset.url}"
+                        target="_blank"
+                        rel="noopener"
+                        class="btn"
+                        style="font-size: 0.75rem; padding: 0.5rem 0.75rem; text-decoration: none;"
+                      >
+                        [ Show Prompt ${asset.assetIndex + 1} ]
+                      </a>
                     `)}
                   </div>
                 </div>

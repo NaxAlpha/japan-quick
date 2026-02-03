@@ -22,6 +22,7 @@ export interface AssetGenerationResult {
   videoId?: number;
   gridCount?: number;
   slideCount?: number;
+  promptCount?: number;
   error?: string;
 }
 
@@ -153,8 +154,8 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
 
       // Step 4: Generate grid images and individual slides
       // Uploads everything directly to R2 to avoid 1MiB step output limit
-      // Returns only grid count (not the actual image data)
-      const gridCount = await step.do('generate-grid-images', {
+      // Returns grid count, prompts, and token usage for cost logging
+      const { gridCount, prompts, tokenUsage } = await step.do('generate-images', {
         retries: {
           limit: RETRY_POLICIES.DEFAULT.limit,
           delay: '5 seconds',
@@ -162,7 +163,7 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
         }
       }, async () => {
         const assetGen = new AssetGeneratorService(this.env.GOOGLE_API_KEY);
-        const result = await assetGen.generateGridImages(
+        const result = await assetGen.generateImages(
           reqId, script, video.video_type, video.image_model, referenceImages
         );
 
@@ -170,7 +171,7 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
 
         // Delete existing slide_image and grid_image assets
         await this.env.DB.prepare(`
-          DELETE FROM video_assets WHERE video_id = ? AND asset_type IN ('slide_image', 'grid_image')
+          DELETE FROM video_assets WHERE video_id = ? AND asset_type IN ('slide_image', 'grid_image', 'image_generation_prompt')
         `).bind(videoId).run();
         log.assetGenerationWorkflow.info(reqId, 'Deleted existing image assets', { videoId });
 
@@ -193,7 +194,7 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
           });
         }
 
-        // Upload grids
+        // Upload grids (if any - pro model only)
         for (const grid of result.grids) {
           const data = Uint8Array.from(atob(grid.base64), c => c.charCodeAt(0));
           const { key, size, publicUrl } = await r2.uploadAsset(grid.ulid, data.buffer, grid.mimeType);
@@ -212,12 +213,67 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
           });
         }
 
-        // Return only count to minimize step output size
-        return result.grids.length;
+        // Return counts, prompts, and token usage for next steps
+        return {
+          gridCount: result.grids.length,
+          prompts: result.prompts,
+          tokenUsage: result.tokenUsage
+        };
       });
-      log.assetGenerationWorkflow.info(reqId, 'Step completed', { step: 'generate-grid-images', gridCount });
+      log.assetGenerationWorkflow.info(reqId, 'Step completed', { step: 'generate-images', gridCount });
 
-      // Step 5: Collect ULIDs from uploaded assets
+      // Step 5: Store image generation prompts (pro model only)
+      const promptCount = await step.do('store-prompts', {
+        retries: {
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: '2 seconds',
+          backoff: 'constant'
+        }
+      }, async () => {
+        // Only store prompts for pro model (grid generation)
+        const isProModel = video.image_model === 'gemini-3-pro-image-preview';
+        if (!isProModel || prompts.length === 0) {
+          log.assetGenerationWorkflow.info(reqId, 'Skipping prompt storage (non-pro model or no prompts)', {
+            isProModel,
+            promptCount: prompts.length
+          });
+          return 0;
+        }
+
+        const r2 = new R2StorageService(this.env.ASSETS_BUCKET);
+        const imageSize = video.video_type === 'short' ? '4K' : '4K'; // Pro model always uses 4K
+
+        for (const promptData of prompts) {
+          const promptUlid = ulid();
+          const promptBytes = new TextEncoder().encode(promptData.prompt);
+          const { key, size, publicUrl } = await r2.uploadAsset(promptUlid, promptBytes.buffer, 'text/plain');
+
+          const metadata = JSON.stringify({
+            gridIndex: promptData.gridIndex,
+            model: video.image_model,
+            resolution: imageSize
+          });
+
+          await this.env.DB.prepare(`
+            INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, public_url, mime_type, file_size, metadata)
+            VALUES (?, 'image_generation_prompt', ?, ?, ?, ?, ?, ?)
+          `).bind(videoId, promptData.gridIndex, key, publicUrl, 'text/plain', size, metadata).run();
+
+          log.assetGenerationWorkflow.info(reqId, `Image generation prompt stored`, {
+            videoId,
+            gridIndex: promptData.gridIndex,
+            ulid: promptUlid,
+            key,
+            size,
+            publicUrl
+          });
+        }
+
+        return prompts.length;
+      });
+      log.assetGenerationWorkflow.info(reqId, 'Step completed', { step: 'store-prompts', promptCount });
+
+      // Step 6: Collect ULIDs from uploaded assets
       const { gridImageAssetIds, slideImageAssetIds } = await step.do('collect-ulids', async () => {
         // Collect grid_image ULIDs
         const gridResult = await this.env.DB.prepare(`
@@ -256,7 +312,7 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
         return { gridImageAssetIds, slideImageAssetIds };
       });
 
-      // Step 6: Generate and upload audio for each slide
+      // Step 7: Generate and upload audio for each slide
       // CRITICAL: Generate and upload each slide individually to avoid 1MiB step output limit
       const { audioCount, slideAudioAssetIds } = await step.do('generate-and-upload-audio', {
         retries: {
@@ -303,7 +359,7 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
       });
       log.assetGenerationWorkflow.info(reqId, 'Step completed', { step: 'generate-and-upload-audio', audioCount });
 
-      // Step 7: Log costs
+      // Step 8: Log costs
       await step.do('log-costs', {
         retries: {
           limit: RETRY_POLICIES.DEFAULT.limit,
@@ -311,17 +367,50 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
           backoff: 'constant'
         }
       }, async () => {
-        const imageCost = gridCount * (video.image_model === 'gemini-2.5-flash-image' ? 0.039 : 0.134);
+        // Log each generation separately with actual token usage
+        for (let i = 0; i < tokenUsage.length; i++) {
+          const tokens = tokenUsage[i];
+          const isProModel = video.image_model === 'gemini-3-pro-image-preview';
 
-        await this.env.DB.prepare(`
-          INSERT INTO cost_logs (video_id, log_type, model_id, input_tokens, output_tokens, cost)
-          VALUES (?, 'image-generation', ?, 0, 0, ?)
-        `).bind(videoId, video.image_model, imageCost).run();
+          // For image generation, use estimated output tokens if API doesn't return them
+          // Pro model (4K): ~2000 tokens per generation
+          // Non-pro model (1K): ~1290 tokens per generation
+          const outputTokens = tokens.outputTokens > 0
+            ? tokens.outputTokens
+            : (isProModel ? 2000 : 1290);
 
-        log.assetGenerationWorkflow.info(reqId, 'Costs logged', { imageCost });
+          // Calculate cost: image generation uses flat rate per generation
+          // Pro model: $0.24 per grid (4K), non-pro $0.039 per slide (1K)
+          const cost = isProModel ? 0.24 : 0.039;
+
+          await this.env.DB.prepare(`
+            INSERT INTO cost_logs (video_id, log_type, model_id, input_tokens, output_tokens, cost)
+            VALUES (?, 'image-generation', ?, ?, ?, ?)
+          `).bind(
+            videoId,
+            video.image_model,
+            tokens.inputTokens,
+            outputTokens,
+            cost
+          ).run();
+
+          log.assetGenerationWorkflow.info(reqId, `Cost logged for generation ${i}`, {
+            videoId,
+            model: video.image_model,
+            inputTokens: tokens.inputTokens,
+            outputTokens,
+            cost
+          });
+        }
+
+        const totalImageCost = tokenUsage.length * (video.image_model === 'gemini-3-pro-image-preview' ? 0.24 : 0.039);
+        log.assetGenerationWorkflow.info(reqId, 'All image generation costs logged', {
+          generationCount: tokenUsage.length,
+          totalImageCost
+        });
       });
 
-      // Step 8: Update status to 'generated' with ULID asset IDs
+      // Step 9: Update status to 'generated' with ULID asset IDs
       await step.do('complete', {
         retries: {
           limit: RETRY_POLICIES.DEFAULT.limit,
@@ -363,14 +452,16 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
         durationMs: Date.now() - startTime,
         videoId,
         gridCount,
-        slideCount: script.slides.length
+        slideCount: script.slides.length,
+        promptCount
       });
 
       return {
         success: true,
         videoId,
         gridCount,
-        slideCount: script.slides.length
+        slideCount: script.slides.length,
+        promptCount
       };
     } catch (error) {
       log.assetGenerationWorkflow.error(reqId, 'Workflow failed', error as Error, { videoId });
