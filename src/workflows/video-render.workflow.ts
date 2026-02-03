@@ -47,7 +47,8 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
             asset_status,
             video_type,
             articles,
-            slide_audio_asset_ids
+            slide_audio_asset_ids,
+            image_model
           FROM videos
           WHERE id = ?
         `).bind(videoId).first();
@@ -205,14 +206,14 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
       const videoUlid = ulid();
       const r2Key = `${videoUlid}.mp4`;
 
-      // Step 6: Render video with E2B (720p with chunked transfer - uploads directly to R2)
+      // Step 6: Render video with E2B (resolution based on model - uploads directly to R2)
       const renderResult = await step.do('render-video', {
         retries: {
           limit: 1, // Rendering is expensive, don't retry automatically
           delay: '30 seconds',
           backoff: 'constant'
         },
-        timeout: 1200000 // 20 minutes for 720p renders
+        timeout: 1200000 // 20 minutes for renders
       }, async () => {
         return await renderVideo(reqId, e2bKey, {
           script,
@@ -220,6 +221,7 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
           slideImages,
           audio,
           articleDate,
+          imageModel: video.image_model,
           r2Bucket: this.env.ASSETS_BUCKET, // Pass R2 bucket for direct upload
           r2Key // Pass R2 key for upload
         });

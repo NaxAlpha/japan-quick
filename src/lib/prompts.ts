@@ -284,8 +284,11 @@ Create a compelling video script that tells this story effectively. Follow these
 4. THUMBNAIL:
    - Create a compelling thumbnail matching story content
    - Include main characters if any (following same image description rules)
-   - Include text overlay matching the video title
-   - Make it attention-grabbing and clickable
+   - Include BOLD text overlay that COMPLIMENTS the video title to maximize click-through
+   - Describe BOTH: catchy background image AND specific text to place on thumbnail
+   - Make it attention-grabbing and clickable (especially critical for long videos)
+   - Use high contrast, bold, readable text style
+   - NO BRANDING IN IMAGES: Do NOT include channel logos, watermarks, branding elements, subscribe buttons, social media icons, or visual CTAs in any image descriptions (including thumbnail and last slide)
 
 RESPONSE FORMAT (JSON only):
 {
@@ -436,9 +439,19 @@ REQUIREMENTS:
 3. Language: Use article language for all text (title, description, narration), English for image descriptions
 4. Images: Precise and detailed, reference provided images, prefer male unless story requires female, avoid showing faces when possible, match story location
 5. Comments${hasHighEngagementComments ? ': Include 1-2 slides on public reaction (attribute generally, don\'t quote verbatim)' : ': Focus on story facts (no high-engagement comments)'}
-6. Thumbnail: Compelling, matches story, includes title overlay
+6. Thumbnail: Compelling, matches story, includes bold text overlay that compliments the video title to maximize click-through rate
+   - Describe BOTH: (1) catchy background image AND (2) specific text overlay to place on thumbnail
+   - Thumbnail text should work WITH video title to make viewers want to click
+   - Especially critical for long videos (4-6 min) - must be attention-grabbing
+   - Use high contrast, bold, readable text style
 7. CTA: Mention "${urg.cta}" at the END of the LAST slide's narration (do NOT create a separate CTA slide, just mention it at the end)
 8. FACT INTEGRITY: ONLY use information from provided articles - never add facts not in source
+9. NO BRANDING IN IMAGES: Image descriptions must NOT include:
+   - Channel logos or watermarks (including "J-Quick" or any channel name text)
+   - Branding elements or visual CTAs
+   - Subscribe buttons or social media icons
+   - Any text overlays except the title on the thumbnail
+   This applies to ALL slides including the thumbnail and last slide.
 
 RESPONSE FORMAT (JSON only):
 {
