@@ -4,7 +4,7 @@
  * Remotion project is pre-bundled in E2B template, uses remotion render CLI
  */
 
-import type { VideoScript, VideoType, RenderedVideoMetadata } from '../types/video.js';
+import type { VideoScript, VideoType, RenderedVideoMetadata, ImageModelId } from '../types/video.js';
 import { log } from '../lib/logger.js';
 import { Sandbox } from 'e2b';
 import { VIDEO_RENDERING } from '../lib/constants.js';
@@ -26,6 +26,7 @@ interface RenderInput {
   slideImages: SlideImageAsset[];
   audio: AudioAsset[];
   articleDate: string; // ISO date string for date badge
+  imageModel?: ImageModelId; // Image model used for generating slide images
   r2Bucket?: any; // R2 bucket binding for direct upload
   r2Key?: string; // R2 key for upload
 }
@@ -215,28 +216,32 @@ async function executeRemotion(
   inputPropsPath: string,
   input: RenderInput
 ): Promise<string> {
-  log.videoRenderer.info(reqId, 'Starting Remotion render at 720p', {
+  // Determine resolution based on image model
+  const isProModel = input.imageModel === 'gemini-3-pro-image-preview';
+  const scaleFactor = isProModel ? 1.0 : 0.667;  // 1080p for pro, 720p for non-pro
+  const resolution = isProModel ? '1080p (pro model)' : '720p (non-pro model)';
+
+  log.videoRenderer.info(reqId, `Starting Remotion render at ${resolution}`, {
     videoType: input.videoType,
-    slideCount: input.slideImages.length
+    slideCount: input.slideImages.length,
+    imageModel: input.imageModel || 'not specified'
   });
 
-  // Use MP4 output with H.264 codec, render at 720p
+  // Use MP4 output with H.264 codec
   const outputPath = '/tmp/output.mp4';
 
-  // Resolution and dimensions based on video type
-  const width = input.videoType === 'short' ? 720 : 1280;
-  const height = input.videoType === 'short' ? 1280 : 720;
+  // Resolution and dimensions based on video type AND model
+  const baseWidth = input.videoType === 'short' ? 1080 : 1920;
+  const baseHeight = input.videoType === 'short' ? 1920 : 1080;
+  const width = Math.round(baseWidth * scaleFactor);
+  const height = Math.round(baseHeight * scaleFactor);
 
   // Calculate total duration in frames (30 FPS)
   const totalDurationMs = input.audio.reduce((sum, a) => sum + a.durationMs, 0);
   const transitionOverlapMs = (input.audio.length - 1) * 1000; // 1s overlap per transition
   const totalFrames = Math.ceil(((totalDurationMs - transitionOverlapMs) / 1000) * 30);
 
-  // Scale factor for 720p (from 1080p base)
-  const scaleFactor = 0.667;
-
-  // Build remotion render command optimized for 720p output with chunking
-  // 720p produces ~40-50MB files - will be transferred in chunks
+  // Build remotion render command optimized for output with chunking
   const remotionCommand = [
     'cd /home/user/remotion &&',
     'bunx remotion render',
@@ -246,7 +251,7 @@ async function executeRemotion(
     '--overwrite',
     '--codec', 'h264',                    // H.264 for better compatibility
     '--audio-codec', 'aac',               // AAC audio codec
-    '--scale', scaleFactor.toString(),   // 720p resolution (0.667 scale)
+    '--scale', scaleFactor.toString(),   // Scale based on model (1.0 for pro, 0.667 for non-pro)
     '--concurrency', '1',                 // Single thread to avoid Chrome crashes
     '--gl', 'swangle',                     // Software renderer (stable for long renders)
     '--disallow-parallel-encoding',       // Memory-efficient: don't render+encode simultaneously
@@ -263,7 +268,8 @@ async function executeRemotion(
     height,
     totalFrames,
     totalDurationMs,
-    resolution: '720p (0.667 scale from 1080p with JPEG 90% quality, chunked transfer)'
+    resolution: `${resolution} with JPEG 90% quality, chunked transfer`,
+    imageModel: input.imageModel
   });
 
   const startTime = Date.now();
@@ -335,10 +341,13 @@ function getMetadata(outputPath: string, input: RenderInput): RenderedVideoMetad
   const transitionOverlap = (input.audio.length - 1) * VIDEO_RENDERING.TRANSITION_DURATION_S;
   const totalDuration = totalAudioDuration - transitionOverlap;
 
-  // 720p resolution with chunked transfer
+  // Resolution based on image model
+  const isProModel = input.imageModel === 'gemini-3-pro-image-preview';
+  const scaleFactor = isProModel ? 1.0 : 0.667;  // 1080p for pro, 720p for non-pro
+
   return {
-    width: input.videoType === 'short' ? 720 : 1280,
-    height: input.videoType === 'short' ? 1280 : 720,
+    width: input.videoType === 'short' ? Math.round(1080 * scaleFactor) : Math.round(1920 * scaleFactor),
+    height: input.videoType === 'short' ? Math.round(1920 * scaleFactor) : Math.round(1080 * scaleFactor),
     durationMs: Math.round(totalDuration * 1000),
     fps: 30, // Remotion uses 30 FPS
     videoCodec: 'H.264',
@@ -368,9 +377,13 @@ async function getMetadataWithSize(
   const ffprobeData = JSON.parse(ffprobeResult.stdout || '{}');
   const fileSize = parseInt(ffprobeData.format?.size || '0');
 
+  // Resolution based on image model
+  const isProModel = input.imageModel === 'gemini-3-pro-image-preview';
+  const scaleFactor = isProModel ? 1.0 : 0.667;  // 1080p for pro, 720p for non-pro
+
   return {
-    width: input.videoType === 'short' ? 720 : 1280,
-    height: input.videoType === 'short' ? 1280 : 720,
+    width: input.videoType === 'short' ? Math.round(1080 * scaleFactor) : Math.round(1920 * scaleFactor),
+    height: input.videoType === 'short' ? Math.round(1920 * scaleFactor) : Math.round(1080 * scaleFactor),
     durationMs: Math.round(totalDuration * 1000),
     fps: 30,
     videoCodec: 'H.264',
