@@ -13,7 +13,7 @@ export type ImageModelId = 'gemini-2.5-flash-image' | 'gemini-3-pro-image-previe
 export type TTSModelId = 'gemini-2.5-flash-preview-tts' | 'gemini-2.5-pro-preview-tts';
 
 // Image size types
-export type ImageSize = '1K' | '2K';
+export type ImageSize = '1K' | '2K' | '4K';
 
 // TTS voice type (30 voices)
 export type TTSVoice = 'Zephyr' | 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Leda' |
@@ -91,10 +91,10 @@ export interface ScriptGenerationResultEnhanced {
 export interface GridImageMetadata {
   gridIndex: number;              // 0 or 1
   aspectRatio: '9:16' | '16:9';
-  width: number;                  // 1080 or 1920
-  height: number;                 // 1920 or 1080
-  cellWidth: number;              // 360 or 640
-  cellHeight: number;             // 640 or 360
+  width: number;                  // 768, 1536, 3072 (9:16) or 1376, 2752, 5504 (16:9)
+  height: number;                 // 1376, 2752, 5504 (9:16) or 768, 1536, 3072 (16:9)
+  cellWidth: number;              // 256, 512, 1024 (9:16) or 459, 917, 1835 (16:9)
+  cellHeight: number;             // 459, 917, 1835 (9:16) or 256, 512, 1024 (16:9)
   positions: Array<{
     cell: number;                 // 0-8
     slideIndex: number | null;    // null for thumbnail or empty
@@ -102,6 +102,12 @@ export interface GridImageMetadata {
     isEmpty: boolean;
     cropRect: { x: number; y: number; w: number; h: number };
   }>;
+}
+
+export interface ImageGenerationPromptMetadata {
+  gridIndex: number;              // 0 or 1
+  model: ImageModelId;            // Store which model was used
+  resolution: ImageSize;          // Store resolution used
 }
 
 export interface SlideAudioMetadata {
@@ -127,7 +133,7 @@ export interface RenderedVideoMetadata {
 export interface VideoAsset {
   id: number;
   video_id: number;
-  asset_type: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video' | 'selection_prompt' | 'script_prompt';
+  asset_type: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video' | 'selection_prompt' | 'script_prompt' | 'image_generation_prompt';
   asset_index: number;
   r2_key: string;
   mime_type: string;
@@ -141,7 +147,7 @@ export interface VideoAsset {
 // Parsed asset for frontend (with URL)
 export interface ParsedVideoAsset {
   id: number;
-  assetType: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video' | 'selection_prompt' | 'script_prompt';
+  assetType: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video' | 'selection_prompt' | 'script_prompt' | 'image_generation_prompt';
   assetIndex: number;
   url: string;                    // Public URL or API route
   mimeType: string;
