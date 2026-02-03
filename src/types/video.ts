@@ -56,6 +56,37 @@ export interface VideoScript {
   slides: Slide[];
 }
 
+// Enhanced article comment structure for script generation
+export interface AIArticleComment {
+  content: string;
+  likes: number;
+  replies?: Array<{ content: string }>;
+}
+
+// Enhanced article input for script generation
+export interface AIArticleForScript {
+  title: string;
+  content: string;
+  contentText?: string;
+  images: string[];
+  comments: AIArticleComment[];
+}
+
+// Enhanced script generation input with full context
+export interface ScriptGenerationInputEnhanced {
+  videoFormat: VideoFormat;           // single_short | multi_short | long
+  urgency: UrgencyLevel;              // urgent | developing | regular
+  timeContext?: string;               // morning, lunch, evening, etc.
+  articles: AIArticleForScript[];
+}
+
+// Script generation result with prompt asset info
+export interface ScriptGenerationResultEnhanced {
+  script: VideoScript;
+  tokenUsage: { inputTokens: number; outputTokens: number; totalTokens: number };
+  promptAssetId?: string;             // ULID of stored prompt asset (if stored to R2)
+}
+
 // Asset metadata interfaces
 export interface GridImageMetadata {
   gridIndex: number;              // 0 or 1
@@ -96,7 +127,7 @@ export interface RenderedVideoMetadata {
 export interface VideoAsset {
   id: number;
   video_id: number;
-  asset_type: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video' | 'selection_prompt';
+  asset_type: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video' | 'selection_prompt' | 'script_prompt';
   asset_index: number;
   r2_key: string;
   mime_type: string;
@@ -110,7 +141,7 @@ export interface VideoAsset {
 // Parsed asset for frontend (with URL)
 export interface ParsedVideoAsset {
   id: number;
-  assetType: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video' | 'selection_prompt';
+  assetType: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video' | 'selection_prompt' | 'script_prompt';
   assetIndex: number;
   url: string;                    // Public URL or API route
   mimeType: string;
@@ -127,6 +158,8 @@ export interface Video {
   short_title: string | null;        // English title for video
   articles: string | null;           // JSON array of pick_id values
   video_type: VideoType;
+  video_format: VideoFormat | null;  // Enhanced format: single_short, multi_short, long
+  urgency: UrgencyLevel | null;      // Story urgency: urgent, developing, regular
   selection_status: VideoSelectionStatus;
   total_cost: number;
   script: string | null;             // JSON-serialized VideoScript
@@ -156,6 +189,7 @@ export interface ParsedVideo extends Omit<Video, 'notes' | 'articles' | 'script'
   renderedVideo: ParsedVideoAsset | null;  // Rendered video asset if present
   slideImageAssetIds: string[];      // Parsed slide image asset ULIDs
   slideAudioAssetIds: string[];      // Parsed slide audio asset ULIDs
+  scriptPrompt: ScriptPrompt | null;  // Script prompt if available
 }
 
 // Model info interface
@@ -178,6 +212,16 @@ export interface CostLog {
   input_tokens: number | null;
   output_tokens: number | null;
   cost: number;                      // Calculated cost for this operation
+  created_at: string;
+}
+
+// Script prompt interface
+export interface ScriptPrompt {
+  id: number;
+  video_id: number;
+  prompt: string;
+  r2_key: string;
+  public_url: string;
   created_at: string;
 }
 

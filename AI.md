@@ -31,7 +31,7 @@ japan-quick/
 │   │   ├── retry-helper.ts     # Retry logic with exponential backoff (withRetry, sleep, getRetryStatus)
 │   │   ├── comment-parser.ts   # Comment extraction utilities (JSON/HTML parsing, nested replies)
 │   │   ├── workflow-helper.ts  # AI workflow utilities (index mapping, cost calculation, prompt building)
-│   │   ├── prompts.ts          # Centralized AI prompt templates (buildSelectionPrompt, buildEnhancedSelectionPrompt, buildScriptPrompt, buildGridImagePrompt)
+│   │   ├── prompts.ts          # Centralized AI prompt templates (buildSelectionPrompt, buildEnhancedSelectionPrompt, buildScriptPrompt, buildScriptPromptEnhanced, buildGridImagePrompt)
 │   │   ├── dimensions.ts       # Grid dimension calculations for 1K/2K resolutions
 │   │   ├── image-fetcher.ts    # Fetch images from URLs and convert to base64
 │   │   ├── audio-helper.ts     # Audio conversion utilities (pcmToWav, calculatePcmDuration)
@@ -232,7 +232,7 @@ All `/api/*` routes require JWT authentication:
   - render_status: pending | rendering | rendered | error
 - **cost_logs** - AI operation cost tracking
 - **video_assets** - R2 asset storage records (ULID-based)
-  - asset_type: grid_image | slide_image | slide_audio | rendered_video | selection_prompt
+  - asset_type: grid_image | slide_image | slide_audio | rendered_video | selection_prompt | script_prompt
 - **models** - AI model pricing configuration
 - **youtube_auth** - YouTube OAuth tokens
 
@@ -258,7 +258,9 @@ All `/api/*` routes require JWT authentication:
 ## Gemini AI
 
 **Models:**
-- Selection/Scripts: `gemini-3-flash-preview` ($0.50/$3.00 per 1M tokens)
+- Selection: `gemini-3-flash-preview` ($0.50 input/$3.00 output per 1M tokens)
+- Enhanced Script: `gemini-3-pro-preview` ($2.00 input/$12.00 output per 1M tokens)
+- Basic Script: `gemini-3-flash-preview` ($0.50 input/$3.00 output per 1M tokens)
 - Images: `gemini-2.5-flash-image` ($0.039 each) or `gemini-3-pro-image-preview` ($0.134 each)
 - TTS: `gemini-2.5-flash-preview-tts` or `gemini-2.5-pro-preview-tts`
 
@@ -272,9 +274,18 @@ All `/api/*` routes require JWT authentication:
 - AI must select at least one article
 
 **Script Generation:**
-- Input: Articles with content, comments, images
-- Output: VideoScript (title, description, thumbnailDescription, slides[])
-- Slide counts: 6-8 (short), 15-17 (long)
+- **Enhanced**: buildScriptPromptEnhanced() - Single prompt with context provided
+  - Uses gemini-3-pro-preview model for better quality
+  - Input: videoFormat, urgency, timeContext, articles with content/comments/images
+  - Context provided to AI: format specs, urgency tone, time framing, hook/CTA templates
+  - AI follows structure based on context provided
+  - Channel name: "J-Quick"
+  - Fact integrity rule: ONLY use facts from source articles
+  - **Prompt Storage**: Script prompt saved to R2 as script_prompt asset (viewable in UI via "View Script Prompt" button)
+- **Basic**: buildScriptPrompt() - Legacy fallback for videos without enhanced metadata
+  - Uses gemini-3-flash-preview model
+  - Input: videoType (short/long), articles
+  - Slide counts: 6-8 (short), 15-17 (long)
 - Language rules: Article text in article language, image descriptions in English
 
 **Cost Tracking:** All operations logged to `cost_logs` table

@@ -4,12 +4,31 @@
  */
 
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
+import { ulid } from 'ulid';
 import { GeminiService } from '../services/gemini.js';
-import type { Video, VideoScript } from '../types/video.js';
+import { R2StorageService } from '../services/r2-storage.js';
+import type { Video, VideoScript, VideoFormat, UrgencyLevel } from '../types/video.js';
 import type { Article, ArticleVersion, ArticleComment } from '../types/article.js';
 import type { Env } from '../types/env.js';
 import { log, generateRequestId } from '../lib/logger.js';
-import { RETRY_POLICIES, SCRAPING, VIDEO_RENDERING } from '../lib/constants.js';
+import { RETRY_POLICIES } from '../lib/constants.js';
+
+/**
+ * Get time context from current hour in JST
+ */
+function getTimeContextFromJST(): string | undefined {
+  // Get current time in JST (UTC+9)
+  const now = new Date();
+  const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+  const jst = new Date(utc + (9 * 3600000));
+  const hour = jst.getHours();
+
+  // Define time slots
+  if (hour >= 6 && hour < 9) return 'morning';
+  if (hour >= 12 && hour < 14) return 'lunch';
+  if (hour >= 18 && hour < 21) return 'evening';
+  return undefined; // No specific time context
+}
 
 export interface ScriptGenerationParams {
   videoId: number;
@@ -43,6 +62,8 @@ export class ScriptGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings']
           SELECT
             id,
             video_type,
+            video_format,
+            urgency,
             articles,
             script_status
           FROM videos
@@ -53,7 +74,7 @@ export class ScriptGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings']
           throw new Error(`Video ${videoId} not found`);
         }
 
-        return result as Video;
+        return result as Video & { video_format: VideoFormat | null; urgency: UrgencyLevel | null };
       });
       log.scriptGenerationWorkflow.info(reqId, 'Step completed', { step: 'fetch-video-data', durationMs: Date.now() - startTime });
 
@@ -148,6 +169,9 @@ export class ScriptGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings']
       }
 
       // Step 4: Generate script using Gemini AI
+      const timeContext = getTimeContextFromJST();
+      const hasEnhancedMetadata = video.video_format && video.urgency;
+
       const generationResult = await step.do('generate-script', {
         retries: {
           limit: RETRY_POLICIES.DEFAULT.limit,
@@ -155,13 +179,69 @@ export class ScriptGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings']
           backoff: 'exponential'
         }
       }, async () => {
-        const geminiService = new GeminiService(this.env.GOOGLE_API_KEY);
+        const r2Storage = new R2StorageService(this.env.ASSETS_BUCKET);
+        const geminiService = new GeminiService(this.env.GOOGLE_API_KEY, r2Storage);
+
+        // Use enhanced function if metadata is available
+        if (hasEnhancedMetadata && video.video_format && video.urgency) {
+          log.scriptGenerationWorkflow.info(reqId, 'Using enhanced script generation', {
+            videoFormat: video.video_format,
+            urgency: video.urgency,
+            timeContext
+          });
+          return await geminiService.generateScriptEnhanced(reqId, {
+            videoFormat: video.video_format,
+            urgency: video.urgency,
+            timeContext,
+            articles: articlesWithContent
+          });
+        }
+
+        // Fall back to basic function for backward compatibility
+        log.scriptGenerationWorkflow.info(reqId, 'Using basic script generation (no enhanced metadata)');
         return await geminiService.generateScript(reqId, {
           videoType: video.video_type,
           articles: articlesWithContent
         });
       });
       log.scriptGenerationWorkflow.info(reqId, 'Step completed', { step: 'generate-script', slideCount: generationResult.script.slides.length });
+
+      // Step 4.5: Store script prompt to R2 and database if using enhanced generation
+      if (hasEnhancedMetadata && 'prompt' in generationResult) {
+        const enhancedResult = generationResult as { prompt: string };
+        if (enhancedResult.prompt) {
+          await step.do('store-script-prompt', {
+            retries: {
+              limit: RETRY_POLICIES.DEFAULT.limit,
+              delay: '2 seconds',
+              backoff: 'constant'
+            }
+          }, async () => {
+            // Generate ULID for prompt file
+            const promptUlid = ulid();
+
+            // Convert prompt to buffer (Uint8Array, not ArrayBuffer)
+            const promptBuffer = new TextEncoder().encode(enhancedResult.prompt);
+
+            // Upload to R2 - match video-selection.workflow pattern exactly
+            const r2 = new R2StorageService(this.env.ASSETS_BUCKET, this.env.ASSETS_PUBLIC_URL);
+            const uploadResult = await r2.uploadAsset(promptUlid, promptBuffer, 'text/plain; charset=utf-8');
+
+            // Create database record
+            await this.env.DB.prepare(`
+              INSERT INTO script_prompts (video_id, prompt, r2_key, public_url)
+              VALUES (?, ?, ?, ?)
+            `).bind(videoId, enhancedResult.prompt, uploadResult.key, uploadResult.publicUrl).run();
+
+            log.scriptGenerationWorkflow.info(reqId, 'Script prompt stored to database', {
+              promptUlid,
+              fileSize: uploadResult.size,
+              publicUrl: uploadResult.publicUrl
+            });
+          });
+          log.scriptGenerationWorkflow.info(reqId, 'Step completed', { step: 'store-script-prompt' });
+        }
+      }
 
       // Step 5: Log token costs
       const costData = await step.do('log-cost', {
@@ -172,9 +252,10 @@ export class ScriptGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings']
         }
       }, async () => {
         const { inputTokens, outputTokens } = generationResult.tokenUsage;
-        const modelId = 'gemini-3-flash-preview';
-        const inputCostPerMillion = 0.50;
-        const outputCostPerMillion = 3.00;
+        // Use Pro model pricing when enhanced generation was used
+        const modelId = hasEnhancedMetadata ? 'gemini-3-pro-preview' : 'gemini-3-flash-preview';
+        const inputCostPerMillion = hasEnhancedMetadata ? 2.00 : 0.50;
+        const outputCostPerMillion = hasEnhancedMetadata ? 12.00 : 3.00;
         const cost = (inputTokens / 1_000_000) * inputCostPerMillion +
                      (outputTokens / 1_000_000) * outputCostPerMillion;
 

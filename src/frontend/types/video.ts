@@ -59,6 +59,16 @@ export interface SlideAudioMetadata {
   bitDepth: number;
 }
 
+// Script prompt interface
+export interface ScriptPrompt {
+  id: number;
+  video_id: number;
+  prompt: string;
+  r2_key: string;
+  public_url: string;
+  created_at: string;
+}
+
 export interface RenderedVideoMetadata {
   width: number;
   height: number;
@@ -107,6 +117,7 @@ export interface ParsedVideo {
   slideAudioAssetIds: string[];
   assets: ParsedVideoAsset[];
   renderedVideo: ParsedVideoAsset | null;
+  scriptPrompt: ScriptPrompt | null;
   created_at: string;
   updated_at: string;
 }

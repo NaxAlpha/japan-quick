@@ -16,7 +16,7 @@
 
 import { Hono } from 'hono';
 import type { Env } from '../types/env.js';
-import type { Video, ParsedVideo, CostLog, VideoAsset, ParsedVideoAsset, VideoScript, TTS_VOICES } from '../types/video.js';
+import type { Video, ParsedVideo, CostLog, VideoAsset, ParsedVideoAsset, VideoScript, TTS_VOICES, ScriptPrompt } from '../types/video.js';
 import type { VideoSelectionParams, VideoSelectionResult } from '../workflows/video-selection.workflow.js';
 import type { VideoRenderParams, VideoRenderResult } from '../workflows/video-render.workflow.js';
 import type { ScriptGenerationParams, ScriptGenerationResult } from '../workflows/script-generation.workflow.js';
@@ -115,7 +115,8 @@ videoRoutes.get('/:id', async (c) => {
       url: `${c.env.ASSETS_PUBLIC_URL}/${asset.r2_key}`,
       mimeType: asset.mime_type,
       fileSize: asset.file_size,
-      metadata: asset.metadata ? JSON.parse(asset.metadata) : null
+      metadata: asset.metadata ? JSON.parse(asset.metadata) : null,
+      publicUrl: asset.public_url
     }));
 
     const parsedVideo = parseVideo(video);
@@ -129,10 +130,16 @@ videoRoutes.get('/:id', async (c) => {
       url: `${c.env.ASSETS_PUBLIC_URL}/${renderedVideoAsset.r2_key}`,
       mimeType: renderedVideoAsset.mime_type,
       fileSize: renderedVideoAsset.file_size,
-      metadata: renderedVideoAsset.metadata ? JSON.parse(renderedVideoAsset.metadata) : null
+      metadata: renderedVideoAsset.metadata ? JSON.parse(renderedVideoAsset.metadata) : null,
+      publicUrl: renderedVideoAsset.public_url
     } : null;
 
-    return successResponse({ video: { ...parsedVideo, assets, renderedVideo }, costLogs });
+    // Fetch script prompt if exists
+    const scriptPromptResult = await c.env.DB.prepare(`
+      SELECT * FROM script_prompts WHERE video_id = ? ORDER BY created_at DESC LIMIT 1
+    `).bind(id).first<ScriptPrompt>();
+
+    return successResponse({ video: { ...parsedVideo, assets, renderedVideo, scriptPrompt: scriptPromptResult || null }, costLogs });
   } catch (error) {
     log.videoRoutes.error(reqId, 'Request failed', error as Error);
     return serverErrorResponse(error as Error);

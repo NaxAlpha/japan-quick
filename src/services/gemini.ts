@@ -3,10 +3,12 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
-import type { AISelectionOutput, VideoType, VideoScript, AIArticleInputWithContent, EnhancedAISelectionOutput, PastVideoContext, AIArticleInput } from '../types/video.js';
+import { ulid } from 'ulid';
+import type { AISelectionOutput, VideoType, VideoScript, AIArticleInputWithContent, EnhancedAISelectionOutput, PastVideoContext, AIArticleInput, VideoFormat, UrgencyLevel, ScriptGenerationInputEnhanced, ScriptGenerationResultEnhanced } from '../types/video.js';
 import type { Article } from '../types/article.js';
 import { log } from '../lib/logger.js';
-import { buildSelectionPrompt, buildScriptPrompt, buildEnhancedSelectionPrompt } from '../lib/prompts.js';
+import { buildSelectionPrompt, buildScriptPrompt, buildEnhancedSelectionPrompt, buildScriptPromptEnhanced } from '../lib/prompts.js';
+import { R2StorageService } from './r2-storage.js';
 
 interface TokenUsage {
   inputTokens: number;
@@ -48,12 +50,28 @@ interface ScriptGenerationResult {
   tokenUsage: TokenUsage;
 }
 
+interface EnhancedScriptGenerationInput {
+  videoFormat: VideoFormat;
+  urgency: UrgencyLevel;
+  timeContext?: string;
+  articles: ArticleWithContent[];
+}
+
+interface EnhancedScriptGenerationResult {
+  script: VideoScript;
+  tokenUsage: TokenUsage;
+  prompt: string;
+}
 
 export class GeminiService {
   private genai: GoogleGenAI;
+  private r2Storage: R2StorageService | null = null;
 
-  constructor(apiKey: string) {
+  constructor(apiKey: string, r2Storage?: R2StorageService) {
     this.genai = new GoogleGenAI({ apiKey });
+    if (r2Storage) {
+      this.r2Storage = r2Storage;
+    }
   }
 
   /**
@@ -370,6 +388,72 @@ export class GeminiService {
       return { script, tokenUsage };
     } catch (error) {
       log.scriptGeneration.error(reqId, 'Script generation failed', error as Error);
+      throw error;
+    }
+  }
+
+  /**
+   * Call Gemini AI to generate video script with enhanced context
+   * Uses Pro model for better quality and stores prompt to R2
+   */
+  async generateScriptEnhanced(
+    reqId: string,
+    input: EnhancedScriptGenerationInput
+  ): Promise<EnhancedScriptGenerationResult> {
+    log.scriptGeneration.info(reqId, 'Enhanced script generation started', {
+      videoFormat: input.videoFormat,
+      urgency: input.urgency,
+      timeContext: input.timeContext,
+      articleCount: input.articles.length
+    });
+    const startTime = Date.now();
+
+    try {
+      // Build enhanced prompt
+      const prompt = buildScriptPromptEnhanced({
+        videoFormat: input.videoFormat,
+        urgency: input.urgency,
+        timeContext: input.timeContext,
+        articles: input.articles
+      });
+
+      // Call Gemini API with Pro model for better quality
+      const response = await this.genai.models.generateContent({
+        model: 'gemini-3-pro-preview',
+        contents: prompt
+      });
+
+      // Extract token usage
+      const usageMetadata = response.usageMetadata;
+      const tokenUsage: TokenUsage = {
+        inputTokens: usageMetadata?.promptTokenCount || 0,
+        outputTokens: usageMetadata?.candidatesTokenCount || 0
+      };
+
+      const durationMs = Date.now() - startTime;
+      log.scriptGeneration.info(reqId, 'Gemini Pro API call completed', {
+        durationMs,
+        inputTokens: tokenUsage.inputTokens,
+        outputTokens: tokenUsage.outputTokens
+      });
+
+      // Parse JSON response
+      const text = response.text;
+      if (!text) {
+        throw new Error('No text in Gemini response');
+      }
+      const cleanText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
+      const script: VideoScript = JSON.parse(cleanText);
+
+      log.scriptGeneration.info(reqId, 'Enhanced script generation completed', {
+        slideCount: script.slides.length,
+        titleLength: script.title.length
+      });
+
+      return { script, tokenUsage, prompt };
+    } catch (error) {
+      log.scriptGeneration.error(reqId, 'Enhanced script generation failed', error as Error);
       throw error;
     }
   }
