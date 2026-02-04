@@ -304,6 +304,22 @@ export class ScriptGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings']
         `).bind(totalCost, videoId).run();
       });
 
+      // Step 8: Trigger asset generation workflow
+      await step.do('trigger-asset-generation', {
+        retries: {
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: '2 seconds',
+          backoff: 'constant'
+        }
+      }, async () => {
+        const params = { videoId };
+        await this.env.ASSET_GENERATION_WORKFLOW.create({
+          id: `asset-gen-${videoId}-${Date.now()}`,
+          params
+        });
+        log.scriptGenerationWorkflow.info(reqId, 'Asset generation workflow triggered', { videoId });
+      });
+
       log.scriptGenerationWorkflow.info(reqId, 'Workflow completed', {
         durationMs: Date.now() - startTime,
         videoId,

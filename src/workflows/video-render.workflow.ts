@@ -284,6 +284,22 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
         `).bind(videoId).run();
       });
 
+      // Step 10: Trigger YouTube upload workflow
+      await step.do('trigger-youtube-upload', {
+        retries: {
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: '2 seconds',
+          backoff: 'constant'
+        }
+      }, async () => {
+        const params = { videoId };
+        await this.env.YOUTUBE_UPLOAD_WORKFLOW.create({
+          id: `youtube-upload-${videoId}-${Date.now()}`,
+          params
+        });
+        log.videoRenderWorkflow.info(reqId, 'YouTube upload workflow triggered', { videoId });
+      });
+
       log.videoRenderWorkflow.info(reqId, 'Workflow completed', {
         durationMs: Date.now() - startTime,
         videoId,

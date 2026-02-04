@@ -319,6 +319,30 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
       });
       log.videoSelectionWorkflow.info(reqId, 'Step completed', { step: 'update-video-entry', durationMs: Date.now() - updateStart });
 
+      // Step 9: Trigger script generation workflow (if AUTO_PIPELINE enabled)
+      const triggerStart = Date.now();
+      await step.do('trigger-script-generation', {
+        retries: {
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: RETRY_POLICIES.DEFAULT.delay,
+          backoff: RETRY_POLICIES.DEFAULT.backoff
+        }
+      }, async () => {
+        const autoPipeline = this.env.AUTO_PIPELINE === 'true';
+        if (!autoPipeline) {
+          log.videoSelectionWorkflow.info(reqId, 'Auto-pipeline disabled, stopping after selection', { videoId });
+          return;
+        }
+
+        const params = { videoId };
+        await this.env.SCRIPT_GENERATION_WORKFLOW.create({
+          id: `script-gen-${videoId}-${Date.now()}`,
+          params
+        });
+        log.videoSelectionWorkflow.info(reqId, 'Script generation workflow triggered', { videoId });
+      });
+      log.videoSelectionWorkflow.info(reqId, 'Step completed', { step: 'trigger-script-generation', durationMs: Date.now() - triggerStart });
+
       log.videoSelectionWorkflow.info(reqId, 'Workflow completed', {
         durationMs: Date.now() - startTime,
         videoId,
