@@ -12,6 +12,7 @@ import { customElement, state, property } from 'lit/decorators.js';
 import { getAuthHeaders } from '../lib/auth.js';
 import { baseStyles, buttonStyles, badgeStyles, loadingStyles } from '../styles/shared-styles.js';
 import { POLLING } from '../lib/constants.js';
+import type { VideoFormat, RenderStatus, YouTubeUploadStatus } from '../types/video.js';
 
 type VideoType = 'short' | 'long';
 type VideoSelectionStatus = 'todo' | 'doing' | 'done';
@@ -22,9 +23,12 @@ interface ParsedVideo {
   short_title: string | null;
   articles: string[];
   video_type: VideoType;
+  video_format: VideoFormat | null;
   selection_status: VideoSelectionStatus;
   script_status: 'pending' | 'generating' | 'generated' | 'error';
   asset_status: 'pending' | 'generating' | 'generated' | 'error';
+  render_status: RenderStatus;
+  youtube_upload_status: YouTubeUploadStatus;
   total_cost: number;
   created_at: string;
   updated_at: string;
@@ -139,8 +143,7 @@ export class VideosPage extends LitElement {
     .video-card-header {
       padding: 1.25rem 1.25rem 0.75rem;
       display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
+      flex-direction: column;
       gap: 0.75rem;
     }
 
@@ -151,14 +154,12 @@ export class VideosPage extends LitElement {
       color: #0a0a0a;
       margin: 0;
       line-height: 1.4;
-      flex: 1;
     }
 
     .badges {
       display: flex;
-      gap: 0.375rem;
-      flex-shrink: 0;
       flex-wrap: wrap;
+      gap: 0.375rem;
       justify-content: flex-end;
     }
 
@@ -384,18 +385,49 @@ export class VideosPage extends LitElement {
     }
   }
 
-  private formatDate(dateString: string): string {
+  private formatDateTime(dateString: string): string {
     const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', {
+    return date.toLocaleString('en-US', {
       month: 'short',
-      day: 'numeric'
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
     });
   }
 
-  private getTypeBadge(type: VideoType) {
-    const classes = `badge type-${type}`;
-    const label = type === 'short' ? 'SHORT' : 'LONG';
+  private getFormatBadge(video: ParsedVideo) {
+    const format = video.video_format || video.video_type;
+    const labels: Record<string, string> = {
+      'single_short': 'SHORT',
+      'multi_short': 'MULTI',
+      'long': 'LONG',
+      'short': 'SHORT'
+    };
+    const label = labels[format] || format.toUpperCase();
+    const classes = `badge type-${video.video_type}`;
     return html`<span class="${classes}">${label}</span>`;
+  }
+
+  private getRenderStatusLabel(status: RenderStatus): string {
+    const labels: Record<RenderStatus, string> = {
+      'pending': 'WAIT',
+      'rendering': 'RENDER...',
+      'rendered': 'DONE',
+      'error': 'FAIL'
+    };
+    return labels[status] || status;
+  }
+
+  private getYouTubeStatusLabel(status: YouTubeUploadStatus): string {
+    const labels: Record<YouTubeUploadStatus, string> = {
+      'pending': 'WAIT',
+      'uploading': 'UP...',
+      'processing': 'PROC.',
+      'uploaded': 'DONE',
+      'error': 'FAIL'
+    };
+    return labels[status] || status;
   }
 
   private getStatusLabel(status: string): string {
@@ -490,14 +522,16 @@ export class VideosPage extends LitElement {
         <div class="video-card-header">
           <h2 class="video-title">${video.short_title || 'Untitled Video'}</h2>
           <div class="badges">
-            ${this.getTypeBadge(video.video_type)}
+            ${this.getFormatBadge(video)}
             <span class="badge script-${video.script_status}">SCR: ${this.getStatusLabel(video.script_status)}</span>
             <span class="badge asset-${video.asset_status}">AST: ${this.getStatusLabel(video.asset_status)}</span>
+            <span class="badge render-${video.render_status}">RND: ${this.getRenderStatusLabel(video.render_status)}</span>
+            <span class="badge youtube-${video.youtube_upload_status}">YT: ${this.getYouTubeStatusLabel(video.youtube_upload_status)}</span>
           </div>
         </div>
 
         <div class="video-meta">
-          <span>${this.formatDate(video.created_at)}</span>
+          <span>${this.formatDateTime(video.created_at)}</span>
           <span class="video-cost">$${video.total_cost.toFixed(4)}</span>
         </div>
 
