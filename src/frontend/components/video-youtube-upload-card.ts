@@ -141,6 +141,21 @@ export class VideoYouTubeUploadCard extends LitElement {
     this.dispatchEvent(new CustomEvent('upload-to-youtube'));
   }
 
+  private formatDateTime(dateString: string): string {
+    // SQLite datetime('now') returns UTC as "YYYY-MM-DD HH:MM:SS"
+    // Convert to ISO 8601 UTC format by replacing space with 'T' and adding 'Z'
+    const utcString = dateString.replace(' ', 'T') + 'Z';
+    const date = new Date(utcString);
+    return date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: 'Asia/Tokyo'
+    });
+  }
+
   render() {
     if (!this.video) return null;
 
@@ -216,7 +231,7 @@ export class VideoYouTubeUploadCard extends LitElement {
                 ${youtubeInfo.upload_completed_at ? html`
                   <div class="info-row">
                     <span class="info-label">Uploaded</span>
-                    <span class="info-value">${new Date(youtubeInfo.upload_completed_at).toLocaleString()}</span>
+                    <span class="info-value">${this.formatDateTime(youtubeInfo.upload_completed_at)}</span>
                   </div>
                 ` : ''}
                 ${youtubeInfo.tags ? html`

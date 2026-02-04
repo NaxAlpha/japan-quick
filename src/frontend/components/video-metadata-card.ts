@@ -301,6 +301,21 @@ export class VideoMetadataCard extends LitElement {
     return tokens.toLocaleString();
   }
 
+  private formatDateTime(dateString: string): string {
+    // SQLite datetime('now') returns UTC as "YYYY-MM-DD HH:MM:SS"
+    // Convert to ISO 8601 UTC format by replacing space with 'T' and adding 'Z'
+    const utcString = dateString.replace(' ', 'T') + 'Z';
+    const date = new Date(utcString);
+    return date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: 'Asia/Tokyo'
+    });
+  }
+
   private toggleLogs(): void {
     this.logsExpanded = !this.logsExpanded;
   }
@@ -321,13 +336,7 @@ export class VideoMetadataCard extends LitElement {
             </div>
             <div class="meta-item">
               <span class="meta-label">Created</span>
-              <span class="meta-value">${new Date(this.video.created_at).toLocaleString('en-US', {
-                month: 'short',
-                day: 'numeric',
-                hour: 'numeric',
-                minute: '2-digit',
-                hour12: true
-              })}</span>
+              <span class="meta-value">${this.formatDateTime(this.video.created_at)}</span>
             </div>
             <div class="meta-item">
               <span class="meta-label">Cost</span>
