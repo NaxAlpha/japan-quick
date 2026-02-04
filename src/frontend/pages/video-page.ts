@@ -20,6 +20,7 @@ import '../components/video-render-card.js';
 import '../components/video-youtube-upload-card.js';
 import type {
   ParsedVideo,
+  CostLog,
   ImageModelId,
   TTSModelId,
   RenderStatus,
@@ -93,6 +94,9 @@ export class VideoPage extends LitElement {
   private video: ParsedVideo | null = null;
 
   @state()
+  private costLogs: CostLog[] = [];
+
+  @state()
   private loading = true;
 
   @state()
@@ -151,6 +155,7 @@ export class VideoPage extends LitElement {
       const data = await response.json();
       if (data.success) {
         this.video = data.video;
+        this.costLogs = data.costLogs || [];
       } else {
         this.error = data.error || 'Failed to load video';
       }
@@ -421,7 +426,10 @@ export class VideoPage extends LitElement {
         </div>
 
         <div class="cards-container">
-          <video-metadata-card .video=${this.video}></video-metadata-card>
+          <video-metadata-card
+            .video=${this.video}
+            .costLogs=${this.costLogs}>
+          </video-metadata-card>
           <video-selection-card .video=${this.video}></video-selection-card>
           <video-script-card
             .video=${this.video}

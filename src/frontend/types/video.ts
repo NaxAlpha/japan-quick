@@ -123,6 +123,19 @@ export interface ParsedVideoAsset {
   generationType: string;
 }
 
+// Cost log interface
+export interface CostLog {
+  id: number;
+  video_id: number;
+  log_type: string;
+  model_id: string;
+  attempt_id: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cost: number;
+  created_at: string;
+}
+
 // Frontend-ready interface
 export interface ParsedVideo {
   id: number;
