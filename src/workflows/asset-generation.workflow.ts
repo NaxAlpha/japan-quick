@@ -448,6 +448,22 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
         });
       });
 
+      // Step 10: Trigger video render workflow
+      await step.do('trigger-video-render', {
+        retries: {
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: '2 seconds',
+          backoff: 'constant'
+        }
+      }, async () => {
+        const params = { videoId };
+        await this.env.VIDEO_RENDER_WORKFLOW.create({
+          id: `render-${videoId}-${Date.now()}`,
+          params
+        });
+        log.assetGenerationWorkflow.info(reqId, 'Video render workflow triggered', { videoId });
+      });
+
       log.assetGenerationWorkflow.info(reqId, 'Workflow completed', {
         durationMs: Date.now() - startTime,
         videoId,

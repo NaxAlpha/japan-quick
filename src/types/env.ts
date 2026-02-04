@@ -51,5 +51,7 @@ export type Env = {
     YOUTUBE_CLIENT_ID: string;
     YOUTUBE_CLIENT_SECRET: string;
     YOUTUBE_REDIRECT_URI: string;
+    // Feature Flags
+    AUTO_PIPELINE: string;  // "true" to enable full auto-pipeline, "false" to stop after selection
   }
 };
