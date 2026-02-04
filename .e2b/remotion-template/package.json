@@ -1,6 +1,6 @@
 {
   "name": "japan-quick-remotion",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Remotion video renderer for Japan Quick",
   "scripts": {
     "start": "remotion studio",

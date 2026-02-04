@@ -3,19 +3,12 @@ import { Composition } from 'remotion';
 import { DynamicVideo } from './DynamicVideo';
 import type { VideoInputProps } from './types';
 
-// Calculate total duration from slides with transitions
+// Calculate total duration from slides
+// Sequences are sequential (no overlap) - sum all slide durations
 const calculateDuration = (slides: VideoInputProps['slides']): number => {
   if (slides.length === 0) return 3000; // Default
 
-  const TRANSITION_FRAMES = 30; // 1 second cross-fade
-  let totalFrames = slides[0].durationInFrames;
-
-  for (let i = 1; i < slides.length; i++) {
-    // Each slide after the first overlaps by TRANSITION_FRAMES
-    totalFrames += slides[i].durationInFrames - TRANSITION_FRAMES;
-  }
-
-  return totalFrames;
+  return slides.reduce((sum, slide) => sum + slide.durationInFrames, 0);
 };
 
 export const RemotionRoot: React.FC = () => {
