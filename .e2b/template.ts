@@ -23,4 +23,5 @@ export const template = Template()
   .setWorkdir('/home/user/remotion')
   .copy('./remotion-template', '/home/user/remotion')
   .runCmd('bun install')
-  .runCmd('bunx remotion browser ensure');  // Pre-download Chromium during build
+  .runCmd('bunx remotion browser ensure')  // Pre-download Chromium during build
+  .runCmd('echo "E2B build v3: $(date)" > /tmp/build_version.txt')  // Force cache invalidation

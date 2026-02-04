@@ -102,9 +102,9 @@ videoRoutes.get('/:id', async (c) => {
 
     const costLogs = costLogsResult.results as CostLog[];
 
-    // Fetch video assets
+    // Fetch video assets (ordered by created_at DESC so newest rendered_video is first)
     const assetsResult = await c.env.DB.prepare(`
-      SELECT * FROM video_assets WHERE video_id = ? ORDER BY asset_type, asset_index
+      SELECT * FROM video_assets WHERE video_id = ? ORDER BY asset_type, asset_index, created_at DESC
     `).bind(id).all();
 
     // Use direct R2 public URLs for browser <img> and <audio> tags
@@ -578,10 +578,12 @@ videoRoutes.get('/:id/render/status', async (c) => {
       return notFoundResponse('Video');
     }
 
-    // Fetch rendered video asset if exists
+    // Fetch rendered video asset if exists (get the latest render)
     const renderedAsset = await c.env.DB.prepare(`
       SELECT * FROM video_assets
       WHERE video_id = ? AND asset_type = 'rendered_video'
+      ORDER BY created_at DESC
+      LIMIT 1
     `).bind(id).first<VideoAsset>();
 
     // Use direct R2 public URL for rendered video

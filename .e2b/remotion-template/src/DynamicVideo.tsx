@@ -25,15 +25,11 @@ export const DynamicVideo = memo<VideoInputProps>(({ slides, videoType, articleD
       // Determine zoom direction (alternate between in and out)
       const zoomDirection: ZoomDirection = index % 2 === 0 ? 'in' : 'out';
 
-      // Calculate start frame (overlap with previous slide for cross-fade)
-      const startFrame = isFirst ? 0 : currentFrame - TRANSITION_FRAMES;
+      // Calculate start frame - NO overlap, sequences are sequential
+      const startFrame = currentFrame;
 
-      // Move current frame forward (accounting for overlap)
-      if (!isFirst) {
-        currentFrame += slide.durationInFrames - TRANSITION_FRAMES;
-      } else {
-        currentFrame += slide.durationInFrames;
-      }
+      // Move current frame forward by full slide duration
+      currentFrame += slide.durationInFrames;
 
       return {
         slide,

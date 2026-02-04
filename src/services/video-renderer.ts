@@ -176,7 +176,9 @@ async function writeRemotionInputProps(
     }
 
     // Convert duration to frames at 30 FPS
-    const durationInFrames = Math.ceil((audio.durationMs / 1000) * 30);
+    // Add 30 frames (1 second) of padding: 15 frames silence at start, 15 at end
+    const audioFrames = Math.ceil((audio.durationMs / 1000) * 30);
+    const durationInFrames = audioFrames + 30; // Add padding for transitions
 
     return {
       imageUrl: imageFile,  // Local filename from public/ (e.g., "slide-0.png")
@@ -237,9 +239,14 @@ async function executeRemotion(
   const height = Math.round(baseHeight * scaleFactor);
 
   // Calculate total duration in frames (30 FPS)
+  // IMPORTANT: Sum individual slide calculations to avoid rounding discrepancies
+  // Each slide: Math.ceil((audioMs / 1000) * 30) + 30 frames padding
+  // Total: Must equal sum of all individual durationInFrames
   const totalDurationMs = input.audio.reduce((sum, a) => sum + a.durationMs, 0);
-  const transitionOverlapMs = (input.audio.length - 1) * 1000; // 1s overlap per transition
-  const totalFrames = Math.ceil(((totalDurationMs - transitionOverlapMs) / 1000) * 30);
+  const totalFrames = input.audio.reduce((sum, a) => {
+    const audioFrames = Math.ceil((a.durationMs / 1000) * 30);
+    return sum + audioFrames + 30; // audio frames + 30 frames padding
+  }, 0);
 
   // Build remotion render command optimized for output with chunking
   const remotionCommand = [
@@ -261,6 +268,19 @@ async function executeRemotion(
     '--log', 'verbose',                    // Verbose logging for debugging
     '--delay-render-timeout-in-milliseconds', '300000'  // 5 minute timeout for slow asset downloads from R2
   ].join(' ');
+
+  // Debug: Log detailed frame calculation
+  const frameCalculation = input.audio.map((a, i) => {
+    const audioFrames = Math.ceil((a.durationMs / 1000) * 30);
+    return { slideIndex: i, audioMs: a.durationMs, audioFrames, paddingFrames: 30, totalFrames: audioFrames + 30 };
+  });
+
+  log.videoRenderer.info(reqId, 'Frame calculation', {
+    totalFrames,
+    totalDurationMs,
+    expectedSeconds: (totalFrames / 30).toFixed(2),
+    slideBreakdown: frameCalculation
+  });
 
   log.videoRenderer.info(reqId, 'Remotion command', {
     cmd: remotionCommand,
@@ -336,10 +356,10 @@ async function executeRemotion(
  * Calculate video metadata from input and output
  */
 function getMetadata(outputPath: string, input: RenderInput): RenderedVideoMetadata {
+  // Total duration = sum of all audio + 1 second padding per slide for transitions
   const totalAudioDuration = input.audio.reduce((sum, a) => sum + a.durationMs, 0) / 1000;
-  // Account for cross-fade overlaps (1 second per transition)
-  const transitionOverlap = (input.audio.length - 1) * VIDEO_RENDERING.TRANSITION_DURATION_S;
-  const totalDuration = totalAudioDuration - transitionOverlap;
+  const paddingDuration = input.audio.length * 1; // 1 second padding per slide
+  const totalDuration = totalAudioDuration + paddingDuration;
 
   // Resolution based on image model
   const isProModel = input.imageModel === 'gemini-3-pro-image-preview';
@@ -365,9 +385,10 @@ async function getMetadataWithSize(
   outputPath: string,
   input: RenderInput
 ): Promise<RenderedVideoMetadata & { fileSize: number }> {
+  // Total duration = sum of all audio + 1 second padding per slide for transitions
   const totalAudioDuration = input.audio.reduce((sum, a) => sum + a.durationMs, 0) / 1000;
-  const transitionOverlap = (input.audio.length - 1) * VIDEO_RENDERING.TRANSITION_DURATION_S;
-  const totalDuration = totalAudioDuration - transitionOverlap;
+  const paddingDuration = input.audio.length * 1; // 1 second padding per slide
+  const totalDuration = totalAudioDuration + paddingDuration;
 
   // Get file size and metadata from ffprobe
   const ffprobeResult = await sandbox.commands.run(

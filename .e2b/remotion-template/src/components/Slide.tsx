@@ -54,13 +54,15 @@ export const Slide = memo<SlideProps>(({
     return staticFile(audioUrl);
   }, [audioUrl]);
 
-  // Memoize audio timing calculations
+  // Audio timing with 0.5s (15 frames) silence padding at start and end for transitions
+  // This creates 1 second total pause between slides
+  const SILENCE_FRAMES = 15; // 0.5 seconds at 30 FPS
   const { audioStartFrame, audioEndFrame } = useMemo(() => {
     return {
-      audioStartFrame: fadeIn ? FADE_DURATION_FRAMES : 0,
-      audioEndFrame: fadeOut ? durationInFrames - FADE_DURATION_FRAMES : durationInFrames,
+      audioStartFrame: SILENCE_FRAMES,
+      audioEndFrame: durationInFrames - SILENCE_FRAMES,
     };
-  }, [fadeIn, fadeOut, durationInFrames]);
+  }, [durationInFrames]);
 
   // Memoize fade opacity calculation (only recalculates when frame crosses boundaries)
   const opacity = useMemo(() => {
@@ -107,14 +109,8 @@ export const Slide = memo<SlideProps>(({
         />
       </BackgroundAnimation>
 
-      {/* Audio narration - delayed for non-first scenes to create silence during transition */}
-      {audioStartFrame > 0 ? (
-        <Sequence from={audioStartFrame} durationInFrames={audioEndFrame - audioStartFrame}>
-          <Audio src={resolvedAudioUrl} delayRenderTimeoutInMilliseconds={60000} />
-        </Sequence>
-      ) : (
-        <Audio src={resolvedAudioUrl} endAt={audioEndFrame} delayRenderTimeoutInMilliseconds={60000} />
-      )}
+      {/* Audio narration - plays for full slide duration */}
+      <Audio src={resolvedAudioUrl} endAt={audioEndFrame} delayRenderTimeoutInMilliseconds={60000} />
 
       {/* Headline overlay with fade-underline animation */}
       {headline && (
@@ -134,3 +130,4 @@ export const Slide = memo<SlideProps>(({
 });
 
 Slide.displayName = 'Slide';
+// Build cache invalidation: Tue Feb  3 20:44:58 PKT 2026
