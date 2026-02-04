@@ -725,25 +725,43 @@ export class AssetGeneratorService {
     const dimensions = calculateGridDimensions(isShort ? 'short' : 'long', imageSize);
     const { gridSize, cellSize } = dimensions;
 
-    const cellDescriptions = slideIndices.map((slideIdx, cellPos) => {
-      const slide = script.slides[slideIdx];
-      if (!slide) return `Position ${cellPos}: A plain solid black image with absolutely no visible elements - no gradients, no patterns, no text, no highlights or shadows, just pure uniform black color (#000000) filling the entire cell area`;
-      return `Position ${cellPos} (Slide ${slideIdx + 1}): ${slide.imageDescription}`;
-    }).join('\n');
+    // Build descriptions for ALL 9 positions explicitly
+    // This ensures the AI generates a complete 3x3 grid with no missing cells
+    const cellDescriptions: string[] = [];
+    const blankCellDescription = 'A plain solid black image with absolutely no visible elements - no gradients, no patterns, no text, no highlights or shadows, just pure uniform black color (#000000) filling the entire cell area';
+
+    for (let pos = 0; pos < 9; pos++) {
+      if (pos === 8 && includeThumbnail) {
+        // Position 8 is reserved for thumbnail, added via thumbnailSection below
+        continue;
+      }
+
+      // Check if this position has a slide from slideIndices
+      const slideIdx = slideIndices[pos];
+      if (slideIdx !== undefined && script.slides[slideIdx]) {
+        cellDescriptions.push(
+          `Position ${pos} (Slide ${slideIdx + 1}): ${script.slides[slideIdx].imageDescription}`
+        );
+      } else {
+        // Empty position - fill with black
+        cellDescriptions.push(`Position ${pos}: ${blankCellDescription}`);
+      }
+    }
+
+    const cellDescriptionsText = cellDescriptions.join('\n');
 
     const thumbnailSection = includeThumbnail
       ? `\nPosition 8 (Thumbnail): ${script.thumbnailDescription}`
       : '';
 
-    const emptySection = slideIndices.length < 9 && !includeThumbnail
-      ? `\nPositions ${slideIndices.length}-8: A plain solid black image with absolutely no visible elements - no gradients, no patterns, no text, no highlights or shadows, just pure uniform black color (#000000) filling the entire cell area`
-      : '';
+    // emptySection no longer needed - all positions handled above
+    const emptySection = '';
 
     return buildGridImagePrompt({
       isShort,
       gridSize,
       cellSize,
-      cellDescriptions,
+      cellDescriptions: cellDescriptionsText,
       thumbnailSection,
       emptySection
     });
