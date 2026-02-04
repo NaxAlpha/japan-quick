@@ -17,11 +17,13 @@ import '../components/video-selection-card.js';
 import '../components/video-script-card.js';
 import '../components/video-assets-card.js';
 import '../components/video-render-card.js';
+import '../components/video-youtube-upload-card.js';
 import type {
   ParsedVideo,
   ImageModelId,
   TTSModelId,
-  RenderStatus
+  RenderStatus,
+  YouTubeUploadStatus
 } from '../types/video.js';
 import { POLLING, STATUS, TERMINAL_STATES } from '../lib/constants.js';
 
@@ -108,10 +110,17 @@ export class VideoPage extends LitElement {
   @state()
   private renderStatus: RenderStatus = 'pending';
 
+  @state()
+  private uploadingToYouTube = false;
+
+  @state()
+  private youtubeUploadStatus: YouTubeUploadStatus = 'pending';
+
   // Pollers for async operations
   private scriptPoller: Poller | null = null;
   private assetPoller: Poller | null = null;
   private renderPoller: Poller | null = null;
+  private youtubeUploadPoller: Poller | null = null;
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -122,6 +131,7 @@ export class VideoPage extends LitElement {
     this.scriptPoller?.stop();
     this.assetPoller?.stop();
     this.renderPoller?.stop();
+    this.youtubeUploadPoller?.stop();
     super.disconnectedCallback();
   }
 
@@ -323,6 +333,63 @@ export class VideoPage extends LitElement {
     this.renderPoller.start();
   }
 
+  private async uploadToYouTube(): Promise<void> {
+    if (!this.video) return;
+
+    this.uploadingToYouTube = true;
+    this.error = '';
+
+    try {
+      const response = await fetch(`/api/videos/${this.videoId}/youtube-upload`, {
+        method: 'POST',
+        headers: getAuthHeaders()
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to start YouTube upload: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      if (data.success) {
+        // Start polling for upload status
+        this.startYouTubeUploadPolling();
+      } else {
+        this.error = data.error || 'Failed to start YouTube upload';
+        this.uploadingToYouTube = false;
+      }
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : 'Failed to start YouTube upload';
+      this.uploadingToYouTube = false;
+    }
+  }
+
+  private startYouTubeUploadPolling(): void {
+    this.youtubeUploadPoller = createPoller({
+      getEndpoint: () => `/api/videos/${this.videoId}/youtube-upload/status`,
+      intervalMs: POLLING.YOUTUBE_UPLOAD_POLL_INTERVAL_MS,
+      terminalStates: TERMINAL_STATES.YOUTUBE_UPLOAD,
+      onStatus: (status, data) => {
+        this.youtubeUploadStatus = status as YouTubeUploadStatus;
+        if (status === 'error') {
+          this.error = (data as { uploadError?: string }).uploadError || 'YouTube upload failed';
+        }
+      },
+      onComplete: async (terminalStatus) => {
+        this.uploadingToYouTube = false;
+        if (terminalStatus === 'uploaded') {
+          await this.loadVideo();
+        }
+        // For error status, the error was already set in onStatus callback
+      },
+      onError: (err) => {
+        console.error('YouTube upload polling error:', err);
+        this.uploadingToYouTube = false;
+      }
+    });
+
+    this.youtubeUploadPoller.start();
+  }
+
   render() {
     if (this.loading) {
       return html`
@@ -374,6 +441,13 @@ export class VideoPage extends LitElement {
               .rendering=${this.renderingVideo}
               @render-video=${this.renderVideo}>
             </video-render-card>
+          ` : ''}
+          ${this.video && this.video.render_status === 'rendered' ? html`
+            <video-youtube-upload-card
+              .video=${this.video}
+              .uploading=${this.uploadingToYouTube}
+              @upload-to-youtube=${this.uploadToYouTube}>
+            </video-youtube-upload-card>
           ` : ''}
         </div>
       </div>

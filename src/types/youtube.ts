@@ -99,3 +99,77 @@ export type OAuthError =
   | 'channel_fetch_failed'
   | 'save_failed'
   | 'not_authenticated';
+
+// ============================================================================
+// YouTube Upload Types
+// ============================================================================
+
+/**
+ * YouTube video resource from API
+ */
+export interface YouTubeVideoResource {
+  id: string;
+  snippet: {
+    title: string;
+    description: string;
+    categoryId: string;
+    tags?: string[];
+    defaultLanguage?: string;
+    defaultAudioLanguage?: string;
+  };
+  status: {
+    privacyStatus: string;
+    selfDeclaredMadeForKids: boolean;
+    madeForKids: boolean;
+    uploadStatus: string;
+    processingStatus?: string;
+  };
+  contentDetails: {
+    videoDuration?: string;
+  };
+}
+
+/**
+ * YouTube upload session response
+ */
+export interface YouTubeUploadSession {
+  uploadUrl: string;
+  videoId: string;
+}
+
+/**
+ * YouTube upload progress
+ */
+export interface YouTubeUploadProgress {
+  bytesUploaded: number;
+  totalBytes: number;
+  percentage: number;
+}
+
+/**
+ * YouTube upload options
+ */
+export interface YouTubeUploadOptions {
+  title: string;
+  description: string;
+  privacy?: 'public' | 'private' | 'unlisted';
+  tags?: string[];
+  categoryId?: string;              // Default '25' (News & Politics)
+  defaultLanguage?: string;         // Default 'ja' (Japanese)
+  defaultAudioLanguage?: string;    // Default 'ja' (Japanese)
+  madeForKids?: boolean;            // Default false
+  selfDeclaredMadeForKids?: boolean; // Default false (required)
+  containsSyntheticMedia?: boolean; // Default true for AI content
+  notPaidContent?: boolean;         // Default true (not a paid promotion)
+}
+
+/**
+ * YouTube video processing status
+ */
+export interface YouTubeVideoStatus {
+  uploadStatus: 'uploaded' | 'processing' | 'failed' | 'rejected';
+  processingStatus?: 'processing' | 'succeeded' | 'failed' | 'terminated';
+  privacyStatus: 'public' | 'private' | 'unlisted';
+  failureReason?: string;
+  rejectionReason?: string;
+}

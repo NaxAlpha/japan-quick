@@ -37,6 +37,8 @@ export const POLLING = {
     ASSET_POLL_INTERVAL_MS: 3000,
     // Video render status polling
     RENDER_POLL_INTERVAL_MS: 3000,
+    // YouTube upload status polling
+    YOUTUBE_UPLOAD_POLL_INTERVAL_MS: 5000,
     // Videos page workflow status polling
     VIDEOS_POLL_INTERVAL_MS: 3000,
     // Stale status threshold (10 minutes)
@@ -77,6 +79,8 @@ export const API = {
         DELETE: (id) => `/api/videos/${id}`,
         RENDER: (id) => `/api/videos/${id}/render`,
         RENDER_STATUS: (id) => `/api/videos/${id}/render/status`,
+        YOUTUBE_UPLOAD: (id) => `/api/videos/${id}/youtube-upload`,
+        YOUTUBE_UPLOAD_STATUS: (id) => `/api/videos/${id}/youtube-upload/status`,
     },
     // YouTube endpoints
     YOUTUBE: {
@@ -127,6 +131,14 @@ export const STATUS = {
         PENDING: 'pending',
         RENDERING: 'rendering',
         RENDERED: 'rendered',
+        ERROR: 'error',
+    },
+    // YouTube upload statuses
+    YOUTUBE_UPLOAD: {
+        PENDING: 'pending',
+        UPLOADING: 'uploading',
+        PROCESSING: 'processing',
+        UPLOADED: 'uploaded',
         ERROR: 'error',
     },
     // Workflow statuses
@@ -247,6 +259,8 @@ export const TERMINAL_STATES = {
     ASSET: [STATUS.ASSET.GENERATED, STATUS.ASSET.ERROR],
     // Render terminal states
     RENDER: [STATUS.RENDER.RENDERED, STATUS.RENDER.ERROR],
+    // YouTube upload terminal states
+    YOUTUBE_UPLOAD: [STATUS.YOUTUBE_UPLOAD.UPLOADED, STATUS.YOUTUBE_UPLOAD.ERROR],
     // Article terminal states
     ARTICLE: [STATUS.ARTICLE.SCRAPPED_V1, STATUS.ARTICLE.SCRAPPED_V2, STATUS.ARTICLE.NOT_AVAILABLE, STATUS.ARTICLE.ERROR],
     // Workflow terminal states

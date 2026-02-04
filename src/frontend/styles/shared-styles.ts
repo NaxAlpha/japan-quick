@@ -390,6 +390,35 @@ export const badgeStyles = css`
     color: #e63946;
     border-color: #e63946;
   }
+
+  .badge.youtube-pending {
+    background: #f5f3f0;
+    color: #58544c;
+  }
+
+  .badge.youtube-uploading {
+    background: #0066cc;
+    color: #ffffff;
+    border-color: #0066cc;
+  }
+
+  .badge.youtube-processing {
+    background: #f97316;
+    color: #ffffff;
+    border-color: #f97316;
+  }
+
+  .badge.youtube-uploaded {
+    background: #ff0000;
+    color: #ffffff;
+    border-color: #ff0000;
+  }
+
+  .badge.youtube-error {
+    background: #0a0a0a;
+    color: #e63946;
+    border-color: #e63946;
+  }
 `;
 
 export const loadingStyles = css`

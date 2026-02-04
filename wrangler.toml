@@ -73,6 +73,11 @@ binding = "ASSET_GENERATION_WORKFLOW"
 class_name = "AssetGenerationWorkflow"
 
 [[workflows]]
+name = "youtube-upload-workflow"
+binding = "YOUTUBE_UPLOAD_WORKFLOW"
+class_name = "YouTubeUploadWorkflow"
+
+[[workflows]]
 name = "test-chunked-workflow"
 binding = "TEST_CHUNKED_WORKFLOW"
 class_name = "TestChunkedWorkflow"
