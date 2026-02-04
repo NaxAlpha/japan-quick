@@ -5,7 +5,7 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { baseStyles, badgeStyles } from '../styles/shared-styles.js';
-import type { ParsedVideo, RenderStatus, CostLog } from '../types/video.js';
+import type { ParsedVideo, RenderStatus, CostLog, YouTubeUploadStatus, VideoFormat } from '../types/video.js';
 
 @customElement('video-metadata-card')
 export class VideoMetadataCard extends LitElement {
@@ -247,6 +247,28 @@ export class VideoMetadataCard extends LitElement {
     return labels[status] || status;
   }
 
+  private getYouTubeStatusLabel(status: YouTubeUploadStatus): string {
+    const labels: Record<YouTubeUploadStatus, string> = {
+      'pending': 'WAIT',
+      'uploading': 'UP...',
+      'processing': 'PROC.',
+      'uploaded': 'DONE',
+      'error': 'FAIL'
+    };
+    return labels[status] || status;
+  }
+
+  private getFormatLabel(video: ParsedVideo): string {
+    const format = video.video_format || video.video_type;
+    const labels: Record<string, string> = {
+      'single_short': 'SHORT',
+      'multi_short': 'MULTI',
+      'long': 'LONG',
+      'short': 'SHORT'
+    };
+    return labels[format] || format.toUpperCase();
+  }
+
   private getLogTypeLabel(logType: string): string {
     const labels: Record<string, string> = {
       'video-selection': 'Selection',
@@ -299,7 +321,13 @@ export class VideoMetadataCard extends LitElement {
             </div>
             <div class="meta-item">
               <span class="meta-label">Created</span>
-              <span class="meta-value">${new Date(this.video.created_at).toLocaleDateString()}</span>
+              <span class="meta-value">${new Date(this.video.created_at).toLocaleString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true
+              })}</span>
             </div>
             <div class="meta-item">
               <span class="meta-label">Cost</span>
@@ -308,11 +336,12 @@ export class VideoMetadataCard extends LitElement {
           </div>
           <div style="margin-top: 1rem;">
             <div class="badges">
-              <span class="badge type-${this.video.video_type}">${this.video.video_type.toUpperCase()}</span>
+              <span class="badge type-${this.video.video_type}">${this.getFormatLabel(this.video)}</span>
               <span class="badge selection-${this.video.selection_status}">${this.getStatusLabel(this.video.selection_status)}</span>
               <span class="badge script-${this.video.script_status}">SCR: ${this.getStatusLabel(this.video.script_status)}</span>
               <span class="badge asset-${this.video.asset_status}">AST: ${this.getStatusLabel(this.video.asset_status)}</span>
               <span class="badge render-${this.video.render_status}">RND: ${this.getRenderStatusLabel(this.video.render_status)}</span>
+              <span class="badge youtube-${this.video.youtube_upload_status}">YT: ${this.getYouTubeStatusLabel(this.video.youtube_upload_status)}</span>
             </div>
           </div>
         </div>

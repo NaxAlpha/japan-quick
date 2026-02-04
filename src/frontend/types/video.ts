@@ -2,6 +2,8 @@
 // These are duplicated from ../../types/video.ts to satisfy TypeScript rootDir constraints
 
 export type VideoType = 'short' | 'long';
+export type VideoFormat = 'single_short' | 'multi_short' | 'long';
+export type UrgencyLevel = 'urgent' | 'developing' | 'regular';
 export type VideoSelectionStatus = 'todo' | 'doing' | 'done' | 'error';
 export type ScriptStatus = 'pending' | 'generating' | 'generated' | 'error';
 export type AssetStatus = 'pending' | 'generating' | 'generated' | 'error';
@@ -143,6 +145,8 @@ export interface ParsedVideo {
   short_title: string | null;
   articles: string[];
   video_type: VideoType;
+  video_format: VideoFormat | null;
+  urgency: UrgencyLevel | null;
   selection_status: VideoSelectionStatus;
   total_cost: number;
   script: VideoScript | null;
