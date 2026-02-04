@@ -6,6 +6,7 @@ export type VideoSelectionStatus = 'todo' | 'doing' | 'done' | 'error';
 export type ScriptStatus = 'pending' | 'generating' | 'generated' | 'error';
 export type AssetStatus = 'pending' | 'generating' | 'generated' | 'error';
 export type RenderStatus = 'pending' | 'rendering' | 'rendered' | 'error';
+export type YouTubeUploadStatus = 'pending' | 'uploading' | 'processing' | 'uploaded' | 'error';
 
 // Model ID types
 export type ImageModelId = 'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview';
@@ -78,6 +79,27 @@ export interface ScriptPrompt {
   created_at: string;
 }
 
+// YouTube info interface (from youtube_info table)
+export interface YouTubeInfo {
+  id: number;
+  video_id: number;
+  youtube_video_id: string;
+  youtube_video_url: string;
+  title: string | null;
+  description: string | null;
+  privacy_status: string;
+  tags: string | null;            // JSON array string
+  category_id: string;
+  made_for_kids: number;          // 0 or 1
+  self_declared_made_for_kids: number;  // 0 or 1
+  contains_synthetic_media: number;     // 0 or 1
+  not_paid_content: number;       // 0 or 1
+  upload_started_at: string | null;
+  upload_completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface RenderedVideoMetadata {
   width: number;
   height: number;
@@ -127,6 +149,9 @@ export interface ParsedVideo {
   assets: ParsedVideoAsset[];
   renderedVideo: ParsedVideoAsset | null;
   scriptPrompt: ScriptPrompt | null;
+  youtube_upload_status: YouTubeUploadStatus;
+  youtube_upload_error: string | null;
+  youtubeInfo?: YouTubeInfo;
   created_at: string;
   updated_at: string;
 }

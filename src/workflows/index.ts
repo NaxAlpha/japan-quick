@@ -11,6 +11,7 @@ export { VideoSelectionWorkflow } from './video-selection.workflow.js';
 export { VideoRenderWorkflow } from './video-render.workflow.js';
 export { ScriptGenerationWorkflow } from './script-generation.workflow.js';
 export { AssetGenerationWorkflow } from './asset-generation.workflow.js';
+export { YouTubeUploadWorkflow } from './youtube-upload.workflow.js';
 export { TestChunkedWorkflow } from './test-chunked.workflow.js';
 export type {
   NewsScraperParams,
@@ -22,3 +23,4 @@ export type { VideoSelectionParams, VideoSelectionResult } from './video-selecti
 export type { VideoRenderParams, VideoRenderResult } from './video-render.workflow.js';
 export type { ScriptGenerationParams, ScriptGenerationResult } from './script-generation.workflow.js';
 export type { AssetGenerationParams, AssetGenerationResult } from './asset-generation.workflow.js';
+export type { YouTubeUploadParams, YouTubeUploadResult } from './youtube-upload.workflow.js';

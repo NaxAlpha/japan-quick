@@ -169,6 +169,7 @@ export const log = {
 
   // Services
   youtubeAuth: createLogger('YouTubeAuth'),
+  youTubeUpload: createLogger('YouTubeUpload'),
   videoRenderer: createLogger('VideoRenderer'),
   imageFetcher: createLogger('ImageFetcher'),
 
@@ -181,6 +182,7 @@ export const log = {
   videoRenderWorkflow: createLogger('VideoRenderWorkflow'),
   scriptGenerationWorkflow: createLogger('ScriptGenerationWorkflow'),
   assetGenerationWorkflow: createLogger('AssetGenerationWorkflow'),
+  youTubeUploadWorkflow: createLogger('YouTubeUploadWorkflow'),
   testChunked: createLogger('TestChunked'),
 };
 

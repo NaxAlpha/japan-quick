@@ -18,7 +18,9 @@ japan-quick/
 │   ├── 006_video_scripts.sql   # Database migration for video script columns
 │   ├── 007_video_assets.sql    # Database migration for video assets (images, audio) and R2 storage
 │   ├── 008_video_render.sql    # Database migration for video render status tracking
-│   └── 009_public_assets.sql   # Database migration for ULID-based public asset system
+│   ├── 009_public_assets.sql   # Database migration for ULID-based public asset system
+│   ├── 010_video_selection_v2.sql  # Database migration for enhanced video selection
+│   └── 012_youtube_upload.sql  # Database migration for YouTube upload status and metadata
 ├── src/
 │   ├── index.ts                # Cloudflare Workers backend with Hono + workflow exports
 │   ├── middleware/
@@ -37,18 +39,22 @@ japan-quick/
 │   │   ├── audio-helper.ts     # Audio conversion utilities (pcmToWav, calculatePcmDuration)
 │   │   └── auth.ts             # Frontend Basic Auth header generator (getAuthHeaders)
 │   ├── frontend/
+│   │   ├── components/
+│   │   │   ├── video-youtube-upload-card.ts  # YouTube upload card component
+│   │   │   └── ...             # Other video-related components
 │   │   ├── styles/
 │   │   │   └── design-system.ts # Tokyo Cyber-Industrial design tokens (Colors, Typography, Spacing, etc.)
 │   │   ├── lib/
 │   │   │   ├── auth.ts         # Frontend auth utilities (re-exports from auth-service)
-│   │   │   └── auth-service.ts # JWT token management (login, logout, getAuthHeaders)
+│   │   │   ├── auth-service.ts # JWT token management (login, logout, getAuthHeaders)
+│   │   │   └── polling.ts      # Polling utility for async operations
 │   │   ├── app.ts              # LitElement root component (AppRoot)
 │   │   └── pages/
 │   │       ├── login-page.ts   # Login page component (Tokyo aesthetic)
 │   │       ├── news-page.ts    # News page component (workflow trigger/poll/result pattern)
 │   │       ├── article-page.ts # Article detail page component (Tokyo aesthetic)
 │   │       ├── videos-page.ts  # Videos page component (video selection management)
-│   │       ├── video-page.ts   # Video detail page component (metadata, selection, script cards)
+│   │       ├── video-page.ts   # Video detail page component (metadata, selection, script, render, upload cards)
 │   │       └── settings-page.ts # Settings page component (YouTube OAuth connection)
 │   ├── workflows/
 │   │   ├── index.ts            # Export all workflow classes
@@ -61,6 +67,7 @@ japan-quick/
 │   │   ├── script-generation.workflow.ts # ScriptGenerationWorkflow (async script generation)
 │   │   ├── asset-generation.workflow.ts  # AssetGenerationWorkflow (async asset generation)
 │   │   ├── video-render.workflow.ts      # VideoRenderWorkflow (FFmpeg video composition)
+│   │   ├── youtube-upload.workflow.ts    # YouTubeUploadWorkflow (YouTube video upload via resumable upload API)
 │   │   └── test-chunked.workflow.ts      # TestChunkedWorkflow (R2 multipart upload test)
 │   ├── services/
 │   │   ├── news-scraper.ts           # Yahoo News Japan scraper (filters pickup URLs only, with thorough logging)
@@ -71,17 +78,18 @@ japan-quick/
 │   │   ├── video-renderer.ts         # FFmpeg video rendering in Cloudflare Sandbox
 │   │   ├── r2-storage.ts             # R2 storage service (upload, retrieve, delete assets)
 │   │   ├── youtube-auth.ts           # YouTube OAuth 2.0 service (token management, channel operations)
+│   │   ├── youtube-upload.ts         # YouTube upload service (resumable upload, chunked upload, processing poll)
 │   │   └── jwt-auth.ts              # JWT token generation and verification service
 │   ├── types/
 │   │   ├── news.ts             # News type definitions + Env type (single source of truth)
 │   │   ├── article.ts          # Article type definitions
-│   │   ├── video.ts            # Video type definitions (Video, Model, CostLog, ImageSize, ImageDimensions)
-│   │   └── youtube.ts          # YouTube OAuth type definitions
+│   │   ├── video.ts            # Video type definitions (Video, Model, CostLog, ImageSize, ImageDimensions, YouTubeUploadStatus, YouTubeInfo)
+│   │   └── youtube.ts          # YouTube OAuth type definitions (plus upload types: YouTubeUploadSession, YouTubeUploadOptions, YouTubeInfo)
 │   ├── routes/
 │   │   ├── auth.ts            # JWT auth routes (login, me, logout)
 │   │   ├── news.ts            # API routes for news workflow management
 │   │   ├── articles.ts        # API routes for article management
-│   │   ├── videos.ts          # API routes for video workflow management
+│   │   ├── videos.ts          # API routes for video workflow management (including YouTube upload endpoints)
 │   │   ├── youtube.ts         # API routes for YouTube OAuth (status, auth URL, callback, refresh, disconnect)
 │   │   └── frontend.ts        # Frontend route handlers (/, /login, /news, /article/:id, /videos, /video/:id, /settings)
 │   └── tests/
@@ -122,7 +130,7 @@ japan-quick/
 | NEWS_CACHE | KV Namespace | Cache (35min TTL) + OAuth state |
 | DB | D1 Database | SQLite storage |
 | ASSETS_BUCKET | R2 Bucket | Video assets |
-| *_WORKFLOW | Workflow | Durable workflows (8 types) |
+| *_WORKFLOW | Workflow | Durable workflows (10 types) |
 | ADMIN_USERNAME/PASSWORD | Var | Admin credentials (login) |
 | JWT_SECRET | Secret | JWT signing key |
 | E2B_API_KEY | Secret | E2B sandbox API key |
@@ -149,7 +157,7 @@ wrangler workflows instances describe test-chunked-workflow <instance-id>
 
 **Format:** `[reqId] [timestamp] [level] [component] message | key=value`
 
-**Components:** newsRoutes, newsWorkflow, newsScraper, articleRoutes, articleWorkflow, articleScraper, videoRoutes, videoWorkflow, gemini, scriptGeneration, assetGen, assetRoutes, youtubeRoutes, youtubeAuth, auth
+**Components:** newsRoutes, newsWorkflow, newsScraper, articleRoutes, articleWorkflow, articleScraper, videoRoutes, videoWorkflow, gemini, scriptGeneration, assetGen, assetRoutes, youtubeRoutes, youtubeAuth, youTubeUpload, youTubeUploadWorkflow, auth
 
 **Usage:**
 ```typescript
@@ -230,11 +238,13 @@ All `/api/*` routes require JWT authentication:
   - script_status: pending | generating | generated | error
   - asset_status: pending | generating | generated | error
   - render_status: pending | rendering | rendered | error
+  - youtube_upload_status: pending | uploading | processing | uploaded | error
 - **cost_logs** - AI operation cost tracking
 - **video_assets** - R2 asset storage records (ULID-based)
   - asset_type: grid_image | slide_image | slide_audio | rendered_video | selection_prompt | script_prompt
 - **models** - AI model pricing configuration
 - **youtube_auth** - YouTube OAuth tokens
+- **youtube_info** - YouTube video metadata (video_id, youtube_video_id, url, title, description, tags, privacy, etc.)
 
 ## Yahoo News Scraper
 
@@ -421,6 +431,43 @@ Remotion components require React performance patterns to avoid memory leaks dur
 - Auto-refresh when < 5 minutes remaining
 - Manual refresh via settings button
 
+## YouTube Upload
+
+**Workflow:** `YouTubeUploadWorkflow` - Async upload via Cloudflare Workflow
+
+**Process:**
+1. Fetch video with script from D1
+2. Fetch rendered video asset from R2
+3. Download video bytes from R2
+4. Create YouTube resumable upload session
+5. Upload video in 256KB chunks
+6. Poll for YouTube processing completion
+7. Store YouTube metadata in `youtube_info` table
+
+**Upload Settings (Japanese Content):**
+- Privacy: `private` (configurable, currently private for testing)
+- Tags: `['日本', 'ニュース', 'Japan', 'News']`
+- Category: `25` (News & Politics)
+- Language: `ja` (Japanese)
+- Made for Kids: `false`
+- Contains Synthetic Media: `true` (AI content disclosure)
+- Not Paid Content: `true` (not a paid promotion)
+
+**Frontend Component:** `video-youtube-upload-card`
+- Displays status badge (pending/uploading/processing/uploaded/error)
+- Upload button when pending/error
+- Progress display during upload
+- YouTube link and video ID when uploaded
+- Re-upload capability
+
+**Status Transitions:**
+- `pending` → `uploading` → `processing` → `uploaded` (success)
+- `*` → `error` (failure at any stage)
+
+**API Endpoints:**
+- `POST /api/videos/:id/youtube-upload` - Trigger upload workflow
+- `GET /api/videos/:id/youtube-upload/status` - Poll upload status
+
 ## Design System
 
 **Tokyo Cyber-Industrial** aesthetic defined in `src/frontend/styles/design-system.ts`:
@@ -526,3 +573,4 @@ Remotion components require React performance patterns to avoid memory leaks dur
 - 008: video_render
 - 009: public_assets (ULID-based system)
 - 010: video_selection_v2 (video_format, urgency)
+- 012: youtube_upload (youtube_upload_status, youtube_info table)

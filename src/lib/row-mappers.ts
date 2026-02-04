@@ -129,8 +129,13 @@ export function mapDbRowToVideo(row: Record<string, unknown>): Video {
     render_completed_at: row.render_completed_at as string | null,
     slide_image_asset_ids: row.slide_image_asset_ids as string | null,
     slide_audio_asset_ids: row.slide_audio_asset_ids as string | null,
+    youtube_upload_status: row.youtube_upload_status as Video['youtube_upload_status'],
+    youtube_upload_error: row.youtube_upload_error as string | null,
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
+    // Optional fields that may not exist yet
+    video_format: (row.video_format as Video['video_format'] | null) || null,
+    urgency: (row.urgency as Video['urgency'] | null) || null,
   };
 }
 

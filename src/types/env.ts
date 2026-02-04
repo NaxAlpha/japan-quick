@@ -44,6 +44,7 @@ export type Env = {
     VIDEO_RENDER_WORKFLOW: Workflow;
     SCRIPT_GENERATION_WORKFLOW: Workflow;
     ASSET_GENERATION_WORKFLOW: Workflow;
+    YOUTUBE_UPLOAD_WORKFLOW: Workflow;
     // Secrets
     E2B_API_KEY: string;
     GOOGLE_API_KEY: string;

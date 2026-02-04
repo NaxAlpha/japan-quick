@@ -7,6 +7,7 @@ export type VideoSelectionStatus = 'todo' | 'doing' | 'done' | 'error';
 export type ScriptStatus = 'pending' | 'generating' | 'generated' | 'error';
 export type AssetStatus = 'pending' | 'generating' | 'generated' | 'error';
 export type RenderStatus = 'pending' | 'rendering' | 'rendered' | 'error';
+export type YouTubeUploadStatus = 'pending' | 'uploading' | 'processing' | 'uploaded' | 'error';
 
 // Model ID types
 export type ImageModelId = 'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview';
@@ -182,6 +183,8 @@ export interface Video {
   render_completed_at: string | null;
   slide_image_asset_ids: string | null;   // JSON array of ULID asset IDs
   slide_audio_asset_ids: string | null;   // JSON array of ULID asset IDs
+  youtube_upload_status: YouTubeUploadStatus;
+  youtube_upload_error: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -196,6 +199,7 @@ export interface ParsedVideo extends Omit<Video, 'notes' | 'articles' | 'script'
   slideImageAssetIds: string[];      // Parsed slide image asset ULIDs
   slideAudioAssetIds: string[];      // Parsed slide audio asset ULIDs
   scriptPrompt: ScriptPrompt | null;  // Script prompt if available
+  youtubeInfo?: YouTubeInfo;         // YouTube metadata if uploaded
 }
 
 // Model info interface
@@ -229,6 +233,27 @@ export interface ScriptPrompt {
   r2_key: string;
   public_url: string;
   created_at: string;
+}
+
+// YouTube info interface (from youtube_info table)
+export interface YouTubeInfo {
+  id: number;
+  video_id: number;
+  youtube_video_id: string;
+  youtube_video_url: string;
+  title: string | null;
+  description: string | null;
+  privacy_status: string;
+  tags: string | null;            // JSON array string
+  category_id: string;
+  made_for_kids: number;          // 0 or 1
+  self_declared_made_for_kids: number;  // 0 or 1
+  contains_synthetic_media: number;     // 0 or 1
+  not_paid_content: number;       // 0 or 1
+  upload_started_at: string | null;
+  upload_completed_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 // AI article input format
@@ -281,6 +306,7 @@ export function parseVideo(video: Video): ParsedVideo {
     slideImageAssetIds: video.slide_image_asset_ids ? JSON.parse(video.slide_image_asset_ids) : [],
     slideAudioAssetIds: video.slide_audio_asset_ids ? JSON.parse(video.slide_audio_asset_ids) : [],
     assets: [], // Assets are populated separately in the route handler
-    renderedVideo: null // Rendered video is populated separately in the route handler
+    renderedVideo: null, // Rendered video is populated separately in the route handler
+    youtubeInfo: undefined // YouTube info is populated separately in the route handler
   };
 }

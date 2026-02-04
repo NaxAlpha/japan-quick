@@ -20,6 +20,7 @@ export {
   VideoRenderWorkflow,
   ScriptGenerationWorkflow,
   AssetGenerationWorkflow,
+  YouTubeUploadWorkflow,
   TestChunkedWorkflow
 } from './workflows/index.js';
 

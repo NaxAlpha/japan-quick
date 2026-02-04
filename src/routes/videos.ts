@@ -16,11 +16,12 @@
 
 import { Hono } from 'hono';
 import type { Env } from '../types/env.js';
-import type { Video, ParsedVideo, CostLog, VideoAsset, ParsedVideoAsset, VideoScript, TTS_VOICES, ScriptPrompt } from '../types/video.js';
+import type { Video, ParsedVideo, CostLog, VideoAsset, ParsedVideoAsset, VideoScript, TTS_VOICES, ScriptPrompt, YouTubeInfo } from '../types/video.js';
 import type { VideoSelectionParams, VideoSelectionResult } from '../workflows/video-selection.workflow.js';
 import type { VideoRenderParams, VideoRenderResult } from '../workflows/video-render.workflow.js';
 import type { ScriptGenerationParams, ScriptGenerationResult } from '../workflows/script-generation.workflow.js';
 import type { AssetGenerationParams, AssetGenerationResult } from '../workflows/asset-generation.workflow.js';
+import type { YouTubeUploadParams, YouTubeUploadResult } from '../workflows/youtube-upload.workflow.js';
 import type { Article, ArticleVersion, ArticleComment } from '../types/article.js';
 import { parseVideo, TTS_VOICES as TTSVoicesArray } from '../types/video.js';
 import { R2StorageService } from '../services/r2-storage.js';
@@ -139,7 +140,21 @@ videoRoutes.get('/:id', async (c) => {
       SELECT * FROM script_prompts WHERE video_id = ? ORDER BY created_at DESC LIMIT 1
     `).bind(id).first<ScriptPrompt>();
 
-    return successResponse({ video: { ...parsedVideo, assets, renderedVideo, scriptPrompt: scriptPromptResult || null }, costLogs });
+    // Fetch YouTube info if exists
+    const youtubeInfoResult = await c.env.DB.prepare(`
+      SELECT * FROM youtube_info WHERE video_id = ?
+    `).bind(id).first<YouTubeInfo>();
+
+    return successResponse({
+      video: {
+        ...parsedVideo,
+        assets,
+        renderedVideo,
+        scriptPrompt: scriptPromptResult || null,
+        youtubeInfo: youtubeInfoResult || undefined
+      },
+      costLogs
+    });
   } catch (error) {
     log.videoRoutes.error(reqId, 'Request failed', error as Error);
     return serverErrorResponse(error as Error);
@@ -599,6 +614,91 @@ videoRoutes.get('/:id/render/status', async (c) => {
         fileSize: renderedAsset.file_size,
         metadata: renderedAsset.metadata ? JSON.parse(renderedAsset.metadata) : null
       } : null
+    });
+  } catch (error) {
+    log.videoRoutes.error(reqId, 'Request failed', error as Error);
+    return serverErrorResponse(error as Error);
+  } finally {
+    const durationMs = Date.now() - startTime;
+    log.videoRoutes.info(reqId, 'Request completed', { durationMs });
+  }
+});
+
+// POST /api/videos/:id/youtube-upload - Trigger YouTube upload workflow
+videoRoutes.post('/:id/youtube-upload', async (c) => {
+  const reqId = generateRequestId();
+  const startTime = Date.now();
+  const id = parseInt(c.req.param('id'));
+  log.videoRoutes.info(reqId, 'Request received', { method: 'POST', path: '/:id/youtube-upload', videoId: id });
+
+  try {
+    // Validate video exists and is rendered
+    const video = await c.env.DB.prepare('SELECT * FROM videos WHERE id = ?').bind(id).first<Video>();
+
+    if (!video) {
+      log.videoRoutes.warn(reqId, 'Video not found', { videoId: id });
+      return notFoundResponse('Video');
+    }
+
+    if (video.render_status !== 'rendered') {
+      log.videoRoutes.warn(reqId, 'Video not rendered yet', { videoId: id, renderStatus: video.render_status });
+      return errorResponse('Video not rendered yet', 400);
+    }
+
+    if (video.youtube_upload_status === 'uploading' || video.youtube_upload_status === 'processing') {
+      log.videoRoutes.warn(reqId, 'YouTube upload already in progress', { videoId: id });
+      return conflictResponse('YouTube upload already in progress');
+    }
+
+    const params: YouTubeUploadParams = { videoId: id };
+
+    // Create workflow instance
+    const instance = await c.env.YOUTUBE_UPLOAD_WORKFLOW.create({
+      id: `youtube-upload-${id}-${Date.now()}`,
+      params
+    });
+
+    log.videoRoutes.info(reqId, 'YouTube upload workflow created', { workflowId: instance.id, videoId: id });
+    return successResponse({ workflowId: instance.id });
+  } catch (error) {
+    log.videoRoutes.error(reqId, 'Request failed', error as Error);
+    return serverErrorResponse(error as Error);
+  } finally {
+    const durationMs = Date.now() - startTime;
+    log.videoRoutes.info(reqId, 'Request completed', { durationMs });
+  }
+});
+
+// GET /api/videos/:id/youtube-upload/status - Poll YouTube upload status
+videoRoutes.get('/:id/youtube-upload/status', async (c) => {
+  const reqId = generateRequestId();
+  const startTime = Date.now();
+  const id = c.req.param('id');
+  log.videoRoutes.info(reqId, 'Request received', { method: 'GET', path: '/:id/youtube-upload/status', videoId: id });
+
+  try {
+    const video = await c.env.DB.prepare(`
+      SELECT youtube_upload_status, youtube_upload_error
+      FROM videos WHERE id = ?
+    `).bind(id).first<{
+      youtube_upload_status: string;
+      youtube_upload_error: string | null;
+    }>();
+
+    if (!video) {
+      log.videoRoutes.warn(reqId, 'Video not found', { videoId: id });
+      return notFoundResponse('Video');
+    }
+
+    // Fetch YouTube info if exists
+    const youtubeInfo = await c.env.DB.prepare(`
+      SELECT * FROM youtube_info WHERE video_id = ?
+    `).bind(id).first<YouTubeInfo>();
+
+    return successResponse({
+      uploadStatus: video.youtube_upload_status,
+      uploadError: video.youtube_upload_error,
+      youtubeInfo: youtubeInfo || null
     });
   } catch (error) {
     log.videoRoutes.error(reqId, 'Request failed', error as Error);
