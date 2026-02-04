@@ -313,6 +313,7 @@ All `/api/*` routes require JWT authentication:
 - Short: 1 grid, Long: 2 grids
 - Reference images included for AI context
 - Prompts stored as `image_generation_prompt` assets for viewing
+- **Grid padding:** When slide count < 8 (short) or < 16 (long), empty positions between last slide and thumbnail are explicitly filled with "plain solid black" descriptions to ensure complete 3×3 grid generation for proper cropping
 
 **Individual Slides (Non-Pro Model):**
 - Each slide generated separately
