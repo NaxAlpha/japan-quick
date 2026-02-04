@@ -1,11 +1,11 @@
 /**
  * Video metadata card component
- * Displays video ID, creation date, cost, and status badges
+ * Displays video ID, creation date, cost, status badges, and cost logs
  */
 import { LitElement, html, css } from 'lit';
-import { customElement, property } from 'lit/decorators.js';
+import { customElement, property, state } from 'lit/decorators.js';
 import { baseStyles, badgeStyles } from '../styles/shared-styles.js';
-import type { ParsedVideo, RenderStatus } from '../types/video.js';
+import type { ParsedVideo, RenderStatus, CostLog } from '../types/video.js';
 
 @customElement('video-metadata-card')
 export class VideoMetadataCard extends LitElement {
@@ -73,10 +73,156 @@ export class VideoMetadataCard extends LitElement {
       gap: 0.375rem;
       flex-wrap: wrap;
     }
+
+    /* Cost Logs Section */
+    .cost-logs-section {
+      margin-top: 1rem;
+      border-top: 2px solid #e8e6e1;
+    }
+
+    .cost-logs-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.75rem 1.25rem;
+      cursor: pointer;
+      user-select: none;
+      transition: background-color 0.15s ease-out;
+    }
+
+    .cost-logs-header:hover {
+      background-color: #f5f3f0;
+    }
+
+    .cost-logs-header-left {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .cost-logs-title {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      font-weight: 700;
+      color: #0a0a0a;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    .cost-logs-count {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.625rem;
+      font-weight: 400;
+      color: #78746c;
+      background: #e8e6e1;
+      padding: 0.125rem 0.375rem;
+      border-radius: 2px;
+    }
+
+    .cost-logs-expand-icon {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      color: #78746c;
+      transition: transform 0.15s ease-out;
+    }
+
+    .cost-logs-expand-icon.expanded {
+      transform: rotate(90deg);
+    }
+
+    .cost-logs-content {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease-out;
+    }
+
+    .cost-logs-content.expanded {
+      max-height: 500px;
+      overflow-y: auto;
+    }
+
+    .cost-logs-grid {
+      padding: 0 1.25rem 1rem 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .cost-logs-card {
+      background: #f5f3f0;
+      border: 2px solid #e8e6e1;
+      padding: 0.75rem;
+      transition: border-color 0.15s ease-out;
+    }
+
+    .cost-logs-card:hover {
+      border-color: #d0cdc7;
+    }
+
+    .cost-logs-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.5rem;
+    }
+
+    .cost-logs-card-type {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.625rem;
+      font-weight: 700;
+      color: #0a0a0a;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      background: #ffffff;
+      padding: 0.25rem 0.5rem;
+      border: 1px solid #0a0a0a;
+    }
+
+    .cost-logs-card-cost {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      font-weight: 700;
+      color: #e63946;
+    }
+
+    .cost-logs-card-model {
+      font-family: 'Inter', sans-serif;
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: #58544c;
+      margin-bottom: 0.375rem;
+    }
+
+    .cost-logs-card-tokens {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.625rem;
+      color: #78746c;
+    }
+
+    .cost-logs-card-tokens-separator {
+      color: #d0cdc7;
+    }
+
+    .cost-logs-empty {
+      padding: 1.25rem;
+      text-align: center;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      color: #78746c;
+    }
   `];
 
   @property({ type: Object })
   video: ParsedVideo | null = null;
+
+  @property({ type: Array })
+  costLogs: CostLog[] = [];
+
+  @state()
+  private logsExpanded = false;
 
   private getStatusLabel(status: string): string {
     const labels: Record<string, string> = {
@@ -99,6 +245,42 @@ export class VideoMetadataCard extends LitElement {
       'error': 'FAIL'
     };
     return labels[status] || status;
+  }
+
+  private getLogTypeLabel(logType: string): string {
+    const labels: Record<string, string> = {
+      'video-selection': 'Selection',
+      'script-generation': 'Script',
+      'asset-generation': 'Assets',
+      'image-generation': 'Images',
+      'tts-generation': 'TTS',
+      'video-render': 'Render',
+      'youtube-upload': 'YouTube'
+    };
+    return labels[logType] || logType;
+  }
+
+  private getModelName(modelId: string): string {
+    const names: Record<string, string> = {
+      'gemini-3-flash-preview': 'Gemini 3 Flash',
+      'gemini-3-pro-preview': 'Gemini 3 Pro',
+      'gemini-2.5-flash-preview-tts': 'Gemini 2.5 Flash TTS',
+      'gemini-2.5-pro-preview-tts': 'Gemini 2.5 Pro TTS',
+      'gemini-2.5-flash-image': 'Gemini 2.5 Flash Image',
+      'gemini-3-pro-image-preview': 'Gemini 3 Pro Image',
+      'gemini-2.5-flash': 'Gemini 2.5 Flash',
+      'gemini-2.5-pro': 'Gemini 2.5 Pro'
+    };
+    return names[modelId] || modelId;
+  }
+
+  private formatTokens(tokens: number | null): string {
+    if (tokens === null) return '—';
+    return tokens.toLocaleString();
+  }
+
+  private toggleLogs(): void {
+    this.logsExpanded = !this.logsExpanded;
   }
 
   render() {
@@ -132,6 +314,39 @@ export class VideoMetadataCard extends LitElement {
               <span class="badge asset-${this.video.asset_status}">AST: ${this.getStatusLabel(this.video.asset_status)}</span>
               <span class="badge render-${this.video.render_status}">RND: ${this.getRenderStatusLabel(this.video.render_status)}</span>
             </div>
+          </div>
+        </div>
+
+        <!-- Cost Logs Section -->
+        <div class="cost-logs-section">
+          <div class="cost-logs-header" @click=${this.toggleLogs}>
+            <div class="cost-logs-header-left">
+              <span class="cost-logs-title">Cost Logs</span>
+              <span class="cost-logs-count">${this.costLogs.length}</span>
+            </div>
+            <span class="cost-logs-expand-icon ${this.logsExpanded ? 'expanded' : ''}">▶</span>
+          </div>
+          <div class="cost-logs-content ${this.logsExpanded ? 'expanded' : ''}">
+            ${this.costLogs.length === 0 ? html`
+              <div class="cost-logs-empty">No cost logs yet</div>
+            ` : html`
+              <div class="cost-logs-grid">
+                ${this.costLogs.map((log) => html`
+                  <div class="cost-logs-card">
+                    <div class="cost-logs-card-header">
+                      <span class="cost-logs-card-type">${this.getLogTypeLabel(log.log_type)}</span>
+                      <span class="cost-logs-card-cost">$${log.cost.toFixed(4)}</span>
+                    </div>
+                    <div class="cost-logs-card-model">${this.getModelName(log.model_id)}</div>
+                    <div class="cost-logs-card-tokens">
+                      <span>${this.formatTokens(log.input_tokens)} in</span>
+                      <span class="cost-logs-card-tokens-separator">│</span>
+                      <span>${this.formatTokens(log.output_tokens)} out</span>
+                    </div>
+                  </div>
+                `)}
+              </div>
+            `}
           </div>
         </div>
       </div>
