@@ -140,21 +140,23 @@ export class YouTubeUploadWorkflow extends WorkflowEntrypoint<Env['Bindings'], Y
         const { uploadUrl } = await uploadService.createUploadSession(reqId, script);
         log.youTubeUploadWorkflow.info(reqId, 'Upload session created');
 
-        // Download video from R2
+        // Get video from R2 (streaming, no memory load)
         const object = await this.env.ASSETS_BUCKET.get(videoAsset);
         if (!object) {
           throw new Error(`Video file not found in R2: ${videoAsset}`);
         }
-        const arrayBuffer = await object.arrayBuffer();
-        const videoBytes = new Uint8Array(arrayBuffer);
+        if (!object.body) {
+          throw new Error(`Video file has no body stream: ${videoAsset}`);
+        }
 
-        log.youTubeUploadWorkflow.info(reqId, 'Downloaded video from R2', {
-          sizeBytes: videoBytes.length,
-          sizeMB: (videoBytes.length / 1024 / 1024).toFixed(2)
+        const videoSizeBytes = object.size;
+        log.youTubeUploadWorkflow.info(reqId, 'Got video stream from R2', {
+          sizeBytes: videoSizeBytes,
+          sizeMB: (videoSizeBytes / 1024 / 1024).toFixed(2)
         });
 
-        // Upload to YouTube and get the actual video ID
-        const actualVideoId = await uploadService.uploadVideoBytes(reqId, uploadUrl, videoBytes);
+        // Upload to YouTube via streaming and get the actual video ID
+        const actualVideoId = await uploadService.uploadVideoStream(reqId, uploadUrl, object.body, videoSizeBytes);
         log.youTubeUploadWorkflow.info(reqId, 'Video uploaded to YouTube', { youtubeVideoId: actualVideoId });
 
         // Build and create YouTube info record
@@ -195,8 +197,8 @@ export class YouTubeUploadWorkflow extends WorkflowEntrypoint<Env['Bindings'], Y
         return {
           youtubeVideoId: actualVideoId,
           youtubeInfoId: result.id,
-          sizeBytes: videoBytes.length,
-          sizeMB: (videoBytes.length / 1024 / 1024).toFixed(2)
+          sizeBytes: videoSizeBytes,
+          sizeMB: (videoSizeBytes / 1024 / 1024).toFixed(2)
         };
       });
       log.youTubeUploadWorkflow.info(reqId, 'Step completed', { step: 'upload-and-create-info', youtubeVideoId, youtubeInfoId, sizeBytes, sizeMB });
@@ -235,7 +237,76 @@ export class YouTubeUploadWorkflow extends WorkflowEntrypoint<Env['Bindings'], Y
         throw new Error(`YouTube rejected or failed to process video: ${errorReason}`);
       }
 
-      // Step 8: Update status to 'uploaded'
+      // Step 8: Upload thumbnail
+      await step.do('upload-thumbnail', {
+        retries: {
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: '5 seconds',
+          backoff: 'exponential'
+        }
+      }, async () => {
+        // Query for thumbnail_image asset
+        const thumbnailAsset = await this.env.DB.prepare(`
+          SELECT r2_key
+          FROM video_assets
+          WHERE video_id = ? AND asset_type = 'thumbnail_image'
+          ORDER BY created_at DESC
+          LIMIT 1
+        `).bind(videoId).first<{ r2_key: string }>();
+
+        if (!thumbnailAsset) {
+          log.youTubeUploadWorkflow.warn(reqId, 'No thumbnail asset found, skipping thumbnail upload', { videoId });
+          return;
+        }
+
+        // Fetch thumbnail from R2
+        const object = await this.env.ASSETS_BUCKET.get(thumbnailAsset.r2_key);
+        if (!object) {
+          throw new Error(`Thumbnail file not found in R2: ${thumbnailAsset.r2_key}`);
+        }
+
+        // Convert stream to bytes
+        const chunks: Uint8Array[] = [];
+        const reader = object.body.getReader();
+        let totalSize = 0;
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            totalSize += value.length;
+          }
+        } finally {
+          reader.releaseLock();
+        }
+
+        // Combine chunks into single Uint8Array
+        const thumbnailBytes = new Uint8Array(totalSize);
+        let offset = 0;
+        for (const chunk of chunks) {
+          thumbnailBytes.set(chunk, offset);
+          offset += chunk.length;
+        }
+
+        log.youTubeUploadWorkflow.info(reqId, 'Uploading thumbnail to YouTube', {
+          videoId,
+          youtubeVideoId,
+          thumbnailSize: totalSize,
+          thumbnailSizeMB: (totalSize / 1024 / 1024).toFixed(2)
+        });
+
+        // Upload thumbnail to YouTube
+        const uploadService = new YouTubeUploadService(accessToken);
+        await uploadService.uploadThumbnail(reqId, accessToken, youtubeVideoId, thumbnailBytes);
+
+        log.youTubeUploadWorkflow.info(reqId, 'Thumbnail uploaded successfully', {
+          videoId,
+          youtubeVideoId
+        });
+      });
+
+      // Step 9: Update status to 'uploaded'
       await step.do('update-status-uploaded', async () => {
         await this.env.DB.prepare(`
           UPDATE videos

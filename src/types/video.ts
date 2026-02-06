@@ -137,7 +137,7 @@ export interface RenderedVideoMetadata {
 export interface VideoAsset {
   id: number;
   video_id: number;
-  asset_type: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video' | 'selection_prompt' | 'script_prompt' | 'image_generation_prompt';
+  asset_type: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video' | 'selection_prompt' | 'script_prompt' | 'image_generation_prompt' | 'thumbnail_image';
   asset_index: number;
   r2_key: string;
   mime_type: string;
@@ -151,7 +151,7 @@ export interface VideoAsset {
 // Parsed asset for frontend (with URL)
 export interface ParsedVideoAsset {
   id: number;
-  assetType: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video' | 'selection_prompt' | 'script_prompt' | 'image_generation_prompt';
+  assetType: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video' | 'selection_prompt' | 'script_prompt' | 'image_generation_prompt' | 'thumbnail_image';
   assetIndex: number;
   url: string;                    // Public URL or API route
   mimeType: string;

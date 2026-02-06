@@ -142,10 +142,16 @@ export class VideoYouTubeUploadCard extends LitElement {
   }
 
   private formatDateTime(dateString: string): string {
-    // SQLite datetime('now') returns UTC as "YYYY-MM-DD HH:MM:SS"
-    // Convert to ISO 8601 UTC format by replacing space with 'T' and adding 'Z'
-    const utcString = dateString.replace(' ', 'T') + 'Z';
-    const date = new Date(utcString);
+    // Handle ISO 8601 format (already contains 'T') - use directly
+    let date: Date;
+    if (dateString.includes('T')) {
+      date = new Date(dateString);
+    } else {
+      // SQLite datetime format: "YYYY-MM-DD HH:MM:SS"
+      // Convert to ISO 8601 UTC format by replacing space with 'T' and adding 'Z'
+      const utcString = dateString.replace(' ', 'T') + 'Z';
+      date = new Date(utcString);
+    }
     return date.toLocaleString('en-US', {
       month: 'short',
       day: 'numeric',

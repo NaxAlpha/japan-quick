@@ -155,6 +155,42 @@ export class VideoAssetsCard extends LitElement {
       border: 2px solid #e8e6e1;
       border-top-color: #e63946;
     }
+
+    .thumbnail-section {
+      margin-top: 1.5rem;
+      padding: 1rem;
+      background: #fafafa;
+      border: 2px solid #0a0a0a;
+    }
+
+    .thumbnail-preview {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      object-fit: cover;
+      border: 2px solid #0a0a0a;
+      background: #f3f4f6;
+      margin-top: 0.75rem;
+    }
+
+    .thumbnail-info {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 0.75rem;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6875rem;
+      color: #78746c;
+    }
+
+    .thumbnail-link {
+      color: #e63946;
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .thumbnail-link:hover {
+      text-decoration: underline;
+    }
   `];
 
   @property({ type: Object })
@@ -164,7 +200,7 @@ export class VideoAssetsCard extends LitElement {
   generating = false;
 
   @property({ type: String })
-  selectedImageModel: ImageModelId = 'gemini-2.5-flash-image';
+  selectedImageModel: ImageModelId = 'gemini-3-pro-image-preview';
 
   @property({ type: String })
   selectedTTSModel: TTSModelId = 'gemini-2.5-flash-preview-tts';
@@ -335,6 +371,27 @@ export class VideoAssetsCard extends LitElement {
                       </a>
                     `)}
                   </div>
+                </div>
+              ` : ''}
+
+              ${assets && assets.filter(a => a.assetType === 'thumbnail_image').length > 0 ? html`
+                <div style="margin-top: 1.5rem;">
+                  <h4 style="font-family: 'Space Mono', monospace; font-size: 0.6875rem; color: #78746c; margin: 0 0 0.75rem 0; text-transform: uppercase;">Thumbnail Image</h4>
+                  ${assets.filter(a => a.assetType === 'thumbnail_image').map((asset) => html`
+                    <div class="thumbnail-section">
+                      <img
+                        class="thumbnail-preview"
+                        src="${asset.url}"
+                        alt="Video thumbnail"
+                      />
+                      <div class="thumbnail-info">
+                        <span>ID: ${asset.url.split('/').pop()?.split('.')[0] || 'unknown'}</span>
+                        <a href="${asset.publicUrl || asset.url}" target="_blank" rel="noopener" class="thumbnail-link">
+                          [ View Full Size ]
+                        </a>
+                      </div>
+                    </div>
+                  `)}
                 </div>
               ` : ''}
             </div>

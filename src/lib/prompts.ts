@@ -314,8 +314,8 @@ Create a compelling video script that tells this story effectively. Follow these
 
 RESPONSE FORMAT (JSON only):
 {
-  "title": "SEO-optimized YouTube title in article language",
-  "description": "SEO-optimized description in article language",
+  "title": "SEO-optimized YouTube title in article language (REQUIRED - must always be provided)",
+  "description": "SEO-optimized description in article language (REQUIRED - must always be provided)",
   "thumbnailDescription": "Detailed thumbnail image prompt in English",
   "slides": [
     {
@@ -330,8 +330,8 @@ RESPONSE FORMAT (JSON only):
 RULES:
 - All text fields (title, description, audioNarration, headline) in article language
 - All imageDescription fields in English
-- Title should be compelling and SEO-friendly for YouTube
-- Description should summarize the video and include keywords
+- Title MUST be provided (never null/undefined) - should be compelling and SEO-friendly for YouTube
+- Description MUST be provided (never null/undefined) - should summarize the video and include keywords
 - Each slide's audioNarration should match the estimatedDuration (10-20 seconds of speech)
 - Ensure smooth information flow across all slides
 
@@ -434,10 +434,11 @@ ${articlesText}
    - Use natural, conversational Japanese appropriate for news narration
    - Image descriptions MUST be in English (for image generation AI)
 
-2. TITLE:
+2. TITLE (REQUIRED):
    - Choose style appropriate for video format (see guidelines above)
    - Make it compelling, SEO-friendly for YouTube
    - Consider urgency level (urgent = more urgent language, regular = more descriptive)
+   - MUST ALWAYS include a title - never omit this field
 
 3. SLIDE COUNT:
    - single_short/multi_short: 6-8 slides, each 10-20 seconds
@@ -549,8 +550,8 @@ ${articlesText}
 
 === RESPONSE FORMAT (JSON only) ===
 {
-  "title": "SEO-optimized YouTube title in Japanese",
-  "description": "SEO-optimized description in Japanese",
+  "title": "SEO-optimized YouTube title in Japanese (REQUIRED - must always be provided)",
+  "description": "SEO-optimized description in Japanese (REQUIRED - must always be provided)",
   "thumbnailDescription": "Detailed thumbnail image prompt in English with neon/borders/arrows",
   "slides": [
     {

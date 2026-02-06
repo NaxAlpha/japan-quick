@@ -115,7 +115,7 @@ export interface RenderedVideoMetadata {
 // Parsed asset for frontend (with URL)
 export interface ParsedVideoAsset {
   id: number;
-  assetType: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video' | 'selection_prompt' | 'script_prompt' | 'image_generation_prompt';
+  assetType: 'grid_image' | 'slide_image' | 'slide_audio' | 'rendered_video' | 'selection_prompt' | 'script_prompt' | 'image_generation_prompt' | 'thumbnail_image';
   assetIndex: number;
   url: string;
   mimeType: string;

@@ -194,6 +194,32 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
           });
         }
 
+        // Upload thumbnail (extracted from grid for pro model, or last slide for non-pro model)
+        if (result.thumbnail) {
+          const thumbnailUlid = ulid();
+          const thumbnailData = Uint8Array.from(atob(result.thumbnail.base64), c => c.charCodeAt(0));
+          const { key, size, publicUrl } = await r2.uploadAsset(thumbnailUlid, thumbnailData.buffer, result.thumbnail.mimeType);
+
+          // Delete existing thumbnail_image assets
+          await this.env.DB.prepare(`
+            DELETE FROM video_assets WHERE video_id = ? AND asset_type = 'thumbnail_image'
+          `).bind(videoId).run();
+
+          // Store thumbnail asset
+          await this.env.DB.prepare(`
+            INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, public_url, mime_type, file_size, metadata)
+            VALUES (?, 'thumbnail_image', 0, ?, ?, ?, ?, NULL)
+          `).bind(videoId, key, publicUrl, result.thumbnail.mimeType, size).run();
+
+          log.assetGenerationWorkflow.info(reqId, 'Thumbnail uploaded', {
+            videoId,
+            ulid: thumbnailUlid,
+            key,
+            size,
+            source: video.image_model === 'gemini-3-pro-image-preview' ? 'grid' : 'last_slide'
+          });
+        }
+
         // Upload grids (if any - pro model only)
         for (const grid of result.grids) {
           const data = Uint8Array.from(atob(grid.base64), c => c.charCodeAt(0));

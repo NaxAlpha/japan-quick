@@ -28,7 +28,7 @@ CREATE INDEX idx_video_assets_type ON video_assets(asset_type, asset_index);
 -- Add asset columns to videos
 ALTER TABLE videos ADD COLUMN asset_status TEXT DEFAULT 'pending';
 ALTER TABLE videos ADD COLUMN asset_error TEXT;
-ALTER TABLE videos ADD COLUMN image_model TEXT DEFAULT 'gemini-2.5-flash-image';
+ALTER TABLE videos ADD COLUMN image_model TEXT DEFAULT 'gemini-3-pro-image-preview';
 ALTER TABLE videos ADD COLUMN tts_model TEXT DEFAULT 'gemini-2.5-flash-preview-tts';
 ALTER TABLE videos ADD COLUMN tts_voice TEXT;  -- Random voice, stored for consistency
 

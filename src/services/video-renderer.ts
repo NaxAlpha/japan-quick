@@ -219,9 +219,10 @@ async function executeRemotion(
   input: RenderInput
 ): Promise<string> {
   // Determine resolution based on image model
-  const isProModel = input.imageModel === 'gemini-3-pro-image-preview';
-  const scaleFactor = isProModel ? 1.0 : 0.667;  // 1080p for pro, 720p for non-pro
-  const resolution = isProModel ? '1080p (pro model)' : '720p (non-pro model)';
+  // 1080p default, only scale down for non-pro model
+  const isNonProModel = input.imageModel === 'gemini-2.5-flash-image';
+  const scaleFactor = isNonProModel ? 0.667 : 1.0;  // Non-pro=720p, Everything else=1080p
+  const resolution = isNonProModel ? '720p (non-pro model)' : '1080p (default)';
 
   log.videoRenderer.info(reqId, `Starting Remotion render at ${resolution}`, {
     videoType: input.videoType,
