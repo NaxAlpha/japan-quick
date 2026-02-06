@@ -17,7 +17,8 @@ export const template = Template()
     'libdrm2',
     'libxkbcommon0',
     'libgbm1',
-    'libasound2'
+    'libasound2',
+    'curl'        // Required for YouTube upload via API
   ])
   // Set up Remotion project
   .setWorkdir('/home/user/remotion')

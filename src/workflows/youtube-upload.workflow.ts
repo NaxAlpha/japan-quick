@@ -129,34 +129,40 @@ export class YouTubeUploadWorkflow extends WorkflowEntrypoint<Env['Bindings'], Y
       // This avoids Cloudflare Workflow serialization limits for large data and closure issues
       const { youtubeVideoId, youtubeInfoId, sizeBytes, sizeMB } = await step.do('upload-and-create-info', {
         retries: {
-          limit: 1, // Upload is expensive, don't retry automatically
+          limit: 0, // No retries - if upload fails, store error and exit
           delay: '5 seconds',
           backoff: 'constant'
         },
         timeout: 3600000 // 60 minutes for large video uploads
       }, async () => {
         // Create upload session
-        const uploadService = new YouTubeUploadService(accessToken);
+        const uploadService = new YouTubeUploadService(accessToken, this.env.E2B_API_KEY);
         const { uploadUrl } = await uploadService.createUploadSession(reqId, script);
         log.youTubeUploadWorkflow.info(reqId, 'Upload session created');
 
-        // Get video from R2 (streaming, no memory load)
+        // Get video from R2 to get size and public URL
         const object = await this.env.ASSETS_BUCKET.get(videoAsset);
         if (!object) {
           throw new Error(`Video file not found in R2: ${videoAsset}`);
         }
-        if (!object.body) {
-          throw new Error(`Video file has no body stream: ${videoAsset}`);
-        }
 
         const videoSizeBytes = object.size;
-        log.youTubeUploadWorkflow.info(reqId, 'Got video stream from R2', {
+        log.youTubeUploadWorkflow.info(reqId, 'Got video from R2', {
           sizeBytes: videoSizeBytes,
           sizeMB: (videoSizeBytes / 1024 / 1024).toFixed(2)
         });
 
-        // Upload to YouTube via streaming and get the actual video ID
-        const actualVideoId = await uploadService.uploadVideoStream(reqId, uploadUrl, object.body, videoSizeBytes);
+        // Construct public URL for the video asset
+        const videoPublicUrl = `${this.env.ASSETS_PUBLIC_URL}/${videoAsset}`;
+        log.youTubeUploadWorkflow.info(reqId, 'Video public URL', { videoPublicUrl });
+
+        // Upload to YouTube via E2B + curl and get the actual video ID
+        const actualVideoId = await uploadService.uploadVideoWithCurl(
+          reqId,
+          uploadUrl,
+          videoPublicUrl,
+          videoSizeBytes
+        );
         log.youTubeUploadWorkflow.info(reqId, 'Video uploaded to YouTube', { youtubeVideoId: actualVideoId });
 
         // Build and create YouTube info record

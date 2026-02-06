@@ -455,12 +455,26 @@ Remotion components require React performance patterns to avoid memory leaks dur
 **Process:**
 1. Fetch video with script from D1
 2. Fetch rendered video asset from R2
-3. Download video bytes from R2
-4. Create YouTube resumable upload session
-5. Upload video in 256KB chunks
-6. **Upload thumbnail to YouTube** (thumbnail_image asset from R2)
-7. Poll for YouTube processing completion
-8. Store YouTube metadata in `youtube_info` table
+3. Create YouTube resumable upload session
+4. Upload video in 256KB chunks (streaming from R2, no full download)
+5. **Upload thumbnail to YouTube** (thumbnail_image asset from R2)
+6. Poll for YouTube processing completion
+7. Store YouTube metadata in `youtube_info` table
+
+**Resumable Upload Protocol (IMPORTANT):**
+- Chunk size: 256KB (262,144 bytes) - MUST be multiples of 256KB except final chunk
+- Offset tracking: MUST parse `Range` header from YouTube's 308 response
+- The 308 response contains `Range: bytes=0-XXXX` indicating actual bytes received
+- **Never assume entire chunk was uploaded** - always read Range header
+- If Range header missing, fall back to assuming chunk was uploaded
+
+**Service:** `src/services/youtube-upload.ts`
+- `createUploadSession()` - Initiates resumable upload, returns upload URL
+- `uploadVideoStream()` - Streams from R2 to YouTube in 256KB-aligned chunks
+  - Parses Range header for correct offset tracking
+  - Only uploads when buffer has 256KB or when final chunk ready
+- `uploadVideoBytes()` - Alternative method for byte array upload
+- `uploadThumbnail()` - Uploads thumbnail (max 2MB PNG)
 
 **Thumbnail Upload:**
 - Service: `src/services/youtube-upload.ts` - `uploadThumbnail()` method
