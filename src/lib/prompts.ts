@@ -96,9 +96,18 @@ export function buildEnhancedSelectionPrompt(
     currentTimeJST: string;
     videosCreatedToday: number;
     totalDailyTarget: number;
+    formatsToday: {
+      single_short: number;
+      multi_short: number;
+      long: number;
+    };
+    remainingTargets: {
+      long: number;
+      single_short: number;
+    };
   }
 ): string {
-  const { currentTimeJST, videosCreatedToday, totalDailyTarget } = schedulingContext;
+  const { currentTimeJST, videosCreatedToday, totalDailyTarget, formatsToday, remainingTargets } = schedulingContext;
   const videosRemaining = totalDailyTarget - videosCreatedToday;
 
   // Format past videos section
@@ -131,6 +140,16 @@ CONTEXT:
 - Videos Remaining: ${videosRemaining}
 - NOTE: You are selecting content for IMMEDIATE upload, not future scheduling
 
+FORMAT MIX TODAY:
+- Long Videos: ${formatsToday.long}/4 created, ${remainingTargets.long} remaining
+- Single Shorts: ${formatsToday.single_short}/3 created, ${remainingTargets.single_short} remaining
+- Multi Shorts: ${formatsToday.multi_short} created
+
+PRIORITY (use this to decide video_format):
+1. If long videos < 4 and timeless/educational stories exist → prioritize "long"
+2. If single_short < 3 and good single stories exist → prioritize "single_short"
+3. Otherwise → "multi_short"
+
 PAST 24H VIDEO HISTORY:
 ${pastVideosText}
 
@@ -147,20 +166,21 @@ VIDEO FORMAT OPTIONS:
   Examples: Multiple tech updates, related policy changes, trending topic roundup
 - "long" (4-6 min, 1920x1080 horizontal): In-depth analysis, complex story, detailed explanation
   Examples: Technology breakdown, historical context, policy analysis
+  IMPORTANT: Long videos are for "timeless" stories (informative, long-term info, NOT breaking/quick news)
 
 URGENCY GUIDANCE:
 - "urgent": Breaking news requiring immediate coverage (earthquakes, major incidents, market crashes)
 - "developing": Trending topics, time-sensitive updates, evolving stories
 - "regular": Informative content, analysis, educational material
 
-TIMING CONTEXT (for content selection, NOT scheduling):
-Consider what content is appropriate for the current time slot when selecting:
-- 6-9 AM JST: Breaking overnight news, morning market updates, commuter-friendly shorts
-- 9 AM-12 PM JST: Business news, policy updates, educational content
-- 12-2 PM JST: Lunch-hour trending topics, lighter content, entertainment
-- 2-6 PM JST: Afternoon analysis, developing stories, in-depth content
-- 6-9 PM JST: Evening roundup, day's highlights, engaging stories
-- 9 PM-12 AM JST: Late news, international coverage, relaxed content
+DAILY FORMAT MIX TARGETS:
+- MUST have at least 1 long video (ideally 2-3, maximum 4 per day)
+- 2-3 single story shorts per day
+- Remaining slots: multi-story shorts
+- Long videos are for "timeless" stories (informative, long-term info, NOT breaking/quick news)
+- If no timeless stories exist today, can skip long videos for that day
+- If more than 4 timeless stories exist, do not exceed 4
+- Can reduce long video count to 2-3 if breaking news is important
 
 CONTENT QUALITY NOTES:
 - [V1] articles: Basic scraping, may have incomplete content
@@ -199,10 +219,12 @@ RULES:
 - Provide 2-5 clear, concise reasons in the "notes" array
 - short_title must be in English and under 50 characters
 - For single_short: select 1 article only
-- For multi_short: select 2-3 related articles
-- For long: select 1-2 articles with substantial content
+- For multi_short: select 2-3 related articles (can be same story or related topics)
+- For long: select 2-8 different stories with multiple articles each (each slide covers 1 story, intelligently distribute content)
+  - Can select multiple articles of the same story for comprehensive coverage
+  - Focus on informative, long-term content (not quick breaking news)
 - Set urgency based on story nature and timing needs
-- Select content appropriate for the current time slot (video will be uploaded immediately)
+- Follow PRIORITY guidance above when choosing video_format
 - Check past 24h history to avoid repetition
 - You MUST select at least one article from the list
 

@@ -116,7 +116,7 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
       });
       log.videoSelectionWorkflow.info(reqId, 'Step completed', { step: 'fetch-past-videos', durationMs: Date.now() - fetchPastStart, pastVideoCount: pastVideos.length });
 
-      // Step 3: Calculate scheduling context
+      // Step 3: Calculate scheduling context and check quota
       const schedulingStart = Date.now();
       const schedulingContext = await step.do('calculate-scheduling-context', {
         retries: {
@@ -146,18 +146,71 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
         const videosCreatedToday = countResult?.count || 0;
         const totalDailyTarget = 11;
 
+        // Early exit if daily quota met
+        if (videosCreatedToday >= totalDailyTarget) {
+          log.videoSelectionWorkflow.info(reqId, 'Daily quota met, skipping selection', { videosCreatedToday, totalDailyTarget });
+          return {
+            currentTimeJST,
+            videosCreatedToday,
+            totalDailyTarget,
+            formatsToday: { single_short: 0, multi_short: 0, long: 0 },
+            remainingTargets: { long: 0, single_short: 0 },
+            skipQuotaMet: true
+          };
+        }
+
+        // Query videos by format created today
+        const formatCountResult = await this.env.DB.prepare(`
+          SELECT
+            video_format,
+            COUNT(*) as count
+          FROM videos
+          WHERE datetime(created_at, '+9 hours') >= datetime(?)
+            AND datetime(created_at, '+9 hours') <= datetime(?)
+            AND video_format IS NOT NULL
+          GROUP BY video_format
+        `).bind(todayStart, todayEnd).all();
+
+        const formatsToday = { single_short: 0, multi_short: 0, long: 0 };
+        for (const row of formatCountResult.results as any[]) {
+          if (row.video_format in formatsToday) {
+            formatsToday[row.video_format as keyof typeof formatsToday] = row.count;
+          }
+        }
+
+        // Calculate remaining targets
+        const longRemaining = Math.max(0, 4 - formatsToday.long);
+        const singleShortRemaining = Math.max(0, 3 - formatsToday.single_short);
+
         return {
           currentTimeJST,
           videosCreatedToday,
-          totalDailyTarget
+          totalDailyTarget,
+          formatsToday,
+          remainingTargets: {
+            long: longRemaining,
+            single_short: singleShortRemaining
+          },
+          skipQuotaMet: false
         };
       });
       log.videoSelectionWorkflow.info(reqId, 'Step completed', {
         step: 'calculate-scheduling-context',
         durationMs: Date.now() - schedulingStart,
         videosCreatedToday: schedulingContext.videosCreatedToday,
-        remainingQuota: schedulingContext.totalDailyTarget - schedulingContext.videosCreatedToday
+        remainingQuota: schedulingContext.totalDailyTarget - schedulingContext.videosCreatedToday,
+        formatsToday: JSON.stringify(schedulingContext.formatsToday),
+        remainingTargets: JSON.stringify(schedulingContext.remainingTargets)
       });
+
+      // Early exit if daily quota met
+      if (schedulingContext.skipQuotaMet) {
+        log.videoSelectionWorkflow.info(reqId, 'Workflow completed (daily quota met)', { durationMs: Date.now() - startTime });
+        return {
+          success: true,
+          articlesProcessed: 0
+        };
+      }
 
       // Step 4: Create video entry with status 'doing'
       const createStart = Date.now();
