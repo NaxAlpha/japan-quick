@@ -284,11 +284,18 @@ All `/api/*` routes require JWT authentication:
 - AI must select at least one article
 
 **Script Generation:**
-- **Enhanced**: buildScriptPromptEnhanced() - Single prompt with context provided
+- **Enhanced**: buildScriptPromptEnhanced() - Single unified prompt with ALL context
   - Uses gemini-3-pro-preview model for better quality
   - Input: videoFormat, urgency, timeContext, articles with content/comments/images
-  - Context provided to AI: format specs, urgency tone, time framing, hook/CTA templates
-  - AI follows structure based on context provided
+  - **Single unified prompt approach**: All context provided to AI, AI decides style/examples based on video format, urgency, and content (no code-selected fragments)
+  - **Title examples in Japanese**: Format-specific guidelines with Japanese examples
+    - single_short: "東京で震度5強の地震、緊急地震速報発表"
+    - multi_short: "今日の日本テック業界3つの重大ニュース"
+    - long: "【徹底解説】日本の新経済政策があなたに与える影響"
+  - **Extremely detailed image descriptions**: Composition, lighting, background, subject details, visual consistency, exact Japanese text on images, cultural accuracy
+  - **Enhanced thumbnail design**: Neon/borders, arrows, lens flares, high contrast
+  - **TTS director's notes**: Each slide includes audioProfile (urgent/calm/excited/serious/casual/dramatic) and directorNotes for smooth audio flow across slides
+  - **Language rules**: ALL text fields in Japanese (title, description, headline, audioNarration), image descriptions in English
   - Channel name: "J-Quick"
   - Fact integrity rule: ONLY use facts from source articles
   - **Prompt Storage**: Script prompt saved to R2 as script_prompt asset (viewable in UI via "View Script Prompt" button)
@@ -296,7 +303,13 @@ All `/api/*` routes require JWT authentication:
   - Uses gemini-3-flash-preview model
   - Input: videoType (short/long), articles
   - Slide counts: 6-8 (short), 15-17 (long)
-- Language rules: Article text in article language, image descriptions in English
+
+**TTS Audio Generation:**
+- **Enhanced**: generateSlideAudio() with director's notes
+  - Accepts optional `directorNotes` and `audioProfile` parameters from script slides
+  - Builds enhanced prompt with AUDIO PROFILE and DIRECTOR'S NOTES sections
+  - Profile guidance: urgent (fast-paced), calm (measured), excited (energetic), serious (grave), casual (relaxed), dramatic (heightened emotion)
+  - Ensures smooth audio flow across slides by providing style context to TTS model
 
 **Cost Tracking:** All operations logged to `cost_logs` table
 
@@ -534,7 +547,9 @@ Remotion components require React performance patterns to avoid memory leaks dur
 
 **Video Types:**
 - VideoScript: title, description, thumbnailDescription, slides[]
-- Slide: headline, imageDescription, audioNarration, estimatedDuration
+- Slide: headline, imageDescription, audioNarration, estimatedDuration, directorNotes?, audioProfile?
+  - audioProfile: 'urgent' | 'calm' | 'excited' | 'serious' | 'casual' | 'dramatic'
+  - directorNotes: TTS style/emotion/tone instructions (English)
 - VideoType: 'short' | 'long'
 - ImageSize: '1K' | '2K'
 

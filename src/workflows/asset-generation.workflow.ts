@@ -335,7 +335,12 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
 
         for (let i = 0; i < script.slides.length; i++) {
           const audio = await assetGen.generateSlideAudio(
-            reqId, script.slides[i].audioNarration, ttsVoice, video.tts_model
+            reqId,
+            script.slides[i].audioNarration,
+            ttsVoice,
+            video.tts_model,
+            script.slides[i].directorNotes,  // NEW: pass director notes from script
+            script.slides[i].audioProfile    // NEW: pass audio profile from script
           );
 
           // Set the correct slideIndex in metadata
