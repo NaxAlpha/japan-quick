@@ -11,6 +11,7 @@ import type {
   YouTubeUploadOptions
 } from '../types/youtube.js';
 import type { VideoScript, YouTubeInfo } from '../types/video.js';
+import { Sandbox } from 'e2b';
 
 const log = createLogger('YouTubeUpload');
 
@@ -36,14 +37,20 @@ const PROCESSING_POLL_INTERVAL_MS = 5000;
 // Maximum polling time for video processing (30 minutes)
 const MAX_PROCESSING_TIME_MS = 30 * 60 * 1000;
 
+// Maximum retries for final status query after upload complete
+const MAX_STATUS_QUERY_RETRIES = 5;
+const STATUS_QUERY_RETRY_DELAY_MS = 2000; // 2 seconds
+
 /**
  * YouTube Upload Service Class
  */
 export class YouTubeUploadService {
   private accessToken: string;
+  private e2bApiKey?: string;
 
-  constructor(accessToken: string) {
+  constructor(accessToken: string, e2bApiKey?: string) {
     this.accessToken = accessToken;
+    this.e2bApiKey = e2bApiKey;
   }
 
   /**
@@ -120,6 +127,156 @@ export class YouTubeUploadService {
   }
 
   /**
+   * Upload video using E2B sandbox with curl (simpler, more reliable)
+   * Downloads video from R2 and uploads to YouTube using curl resumable upload
+   * @returns The YouTube video ID when upload completes
+   */
+  async uploadVideoWithCurl(
+    reqId: string,
+    uploadUrl: string,
+    videoPublicUrl: string,
+    videoSizeBytes: number,
+    onProgress?: (progress: { bytesUploaded: number; totalBytes: number; percentage: number }) => void
+  ): Promise<string> {
+    if (!this.e2bApiKey) {
+      throw new Error('E2B API key is required for curl-based upload');
+    }
+
+    log.info(reqId, 'Starting video upload with E2B + curl', {
+      videoSizeBytes,
+      videoSizeMB: (videoSizeBytes / 1024 / 1024).toFixed(2),
+      videoPublicUrl,
+    });
+
+    const sandbox = await Sandbox.create({
+      template: 'video-renderer',
+      apiKey: this.e2bApiKey,
+    });
+
+    try {
+      log.info(reqId, 'E2B sandbox created', { sandboxId: sandbox.sandboxId });
+
+      // Step 1: Download video from R2 to sandbox
+      log.info(reqId, 'Downloading video from R2 to sandbox');
+      const downloadCmd = `curl -sS --max-time 300 -o /home/user/video.mp4 "${videoPublicUrl}"`;
+      const downloadResult = await sandbox.commands.run(downloadCmd, { timeoutMs: 360000 });
+
+      if (downloadResult.exitCode !== 0) {
+        throw new Error(`Failed to download video from R2: ${downloadResult.stderr || downloadResult.stdout}`);
+      }
+
+      // Verify file size
+      const sizeCheckResult = await sandbox.commands.run('wc -c < /home/user/video.mp4');
+      const downloadedSize = parseInt(sizeCheckResult.stdout.trim(), 10);
+      log.info(reqId, 'Video downloaded to sandbox', {
+        downloadedSize,
+        expectedSize: videoSizeBytes,
+      });
+
+      // Step 2: Upload to YouTube using curl with resumable upload
+      log.info(reqId, 'Uploading video to YouTube with curl');
+
+      // Build metadata JSON
+      const metadataJson = JSON.stringify({
+        snippet: {
+          title: 'Video', // Will be updated separately
+          description: 'Video description',
+          categoryId: '25',
+          defaultLanguage: 'ja',
+        },
+        status: {
+          privacyStatus: 'private',
+          selfDeclaredMadeForKids: false,
+          containsSyntheticMedia: true,
+        },
+      });
+
+      // Create upload script
+      // Note: Using $$ to escape $ for bash variables, while ${var} is TypeScript interpolation
+      // We already have the uploadUrl, so we can skip the first POST request
+      const uploadScript = `#!/bin/bash
+set -e
+
+echo "Starting YouTube upload..."
+
+# Upload video file directly to the upload URL
+# -s = silent, -i = include response headers
+curl -s -i -X PUT \\
+  -H "Authorization: Bearer ${this.accessToken}" \\
+  -H "Content-Type: video/mp4" \\
+  --data-binary @/home/user/video.mp4 \\
+  "${uploadUrl}" > /home/user/upload_response.txt
+
+cat /home/user/upload_response.txt
+`;
+
+      // Write upload script to sandbox
+      await sandbox.files.write('/home/user/upload.sh', uploadScript);
+
+      // Make script executable and run it
+      await sandbox.commands.run('chmod +x /home/user/upload.sh');
+      const uploadResult = await sandbox.commands.run('/home/user/upload.sh', { timeoutMs: 3600000 });
+
+      log.info(reqId, 'Upload script output', {
+        stdout: uploadResult.stdout,
+        stderr: uploadResult.stderr,
+        exitCode: uploadResult.exitCode,
+      });
+
+      if (uploadResult.exitCode !== 0) {
+        // Get the full response for debugging
+        const responseContent = await sandbox.commands.run('cat /home/user/upload_response.txt');
+        throw new Error(`Upload script failed: ${uploadResult.stderr}\nResponse: ${responseContent.stdout}`);
+      }
+
+      // Parse response to get video ID
+      // YouTube returns JSON with video resource on success
+      let videoId: string;
+      const responseContent = await sandbox.commands.run('cat /home/user/upload_response.txt');
+
+      log.info(reqId, 'Upload response content', { content: responseContent.stdout.substring(0, 500) });
+
+      try {
+        // The response includes headers (from -i flag), so we need to extract the JSON body
+        // Look for the JSON after the headers (starts with {)
+        const jsonMatch = responseContent.stdout.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const jsonResponse = JSON.parse(jsonMatch[0]);
+          videoId = jsonResponse.id;
+
+          if (!videoId) {
+            throw new Error('No video ID in response');
+          }
+        } else {
+          throw new Error('No JSON found in response');
+        }
+      } catch (e) {
+        // Fallback: Extract video ID from upload URL
+        // The upload URL contains the video ID in the path
+        const urlMatch = uploadUrl.match(/\/videos\/([a-zA-Z0-9_-]+)/);
+        if (urlMatch) {
+          videoId = urlMatch[1];
+        } else {
+          throw new Error(`Failed to parse upload response: ${responseContent.stdout.substring(0, 500)}`);
+        }
+      }
+
+      log.info(reqId, 'Video upload complete', {
+        youtubeVideoId: videoId,
+      });
+
+      if (onProgress) {
+        onProgress({ bytesUploaded: videoSizeBytes, totalBytes: videoSizeBytes, percentage: 100 });
+      }
+
+      return videoId;
+    } finally {
+      await sandbox.kill();
+      log.info(reqId, 'E2B sandbox killed');
+    }
+  }
+
+  /**
    * Upload video bytes using resumable upload
    * @returns The YouTube video ID when upload completes
    */
@@ -150,9 +307,9 @@ export class YouTubeUploadService {
         body: chunk,
       });
 
-      // YouTube returns 200 OK with the video resource when upload is complete
+      // YouTube returns 201 Created with the video resource when upload is complete
       // and 308 Resume Incomplete when more data is needed
-      if (response.status === 200) {
+      if (response.status === 201) {
         // Parse the response to get the actual YouTube video ID
         const videoResource = await response.json() as YouTubeVideoResource;
         const actualVideoId = videoResource.id;
@@ -177,6 +334,24 @@ export class YouTubeUploadService {
           }
         } else {
           bytesUploaded = end;
+        }
+
+        // Check if all bytes have been uploaded
+        if (bytesUploaded >= totalBytes) {
+          // All bytes uploaded, extract video ID from upload URL
+          const videoIdMatch = uploadUrl.match(/\/videos\/([a-zA-Z0-9_-]+)/);
+          if (videoIdMatch) {
+            const videoId = videoIdMatch[1];
+            log.info(reqId, 'Video upload complete (all bytes received)', {
+              totalBytes,
+              bytesUploaded,
+              youtubeVideoId: videoId,
+            });
+            if (onProgress) {
+              onProgress({ bytesUploaded: totalBytes, totalBytes, percentage: 100 });
+            }
+            return videoId;
+          }
         }
 
         if (onProgress) {
@@ -248,8 +423,12 @@ export class YouTubeUploadService {
           bufferOffset += value.length;
         }
 
-        // Check if we should upload (buffer full OR stream done)
-        const shouldUpload = bufferOffset >= CHUNK_SIZE || (done && bufferOffset > 0);
+        // Check if we should upload
+        // - Upload when buffer has at least CHUNK_SIZE (256KB) for regular chunks
+        // - OR when stream is done AND this is the final chunk (bytesUploaded + bufferOffset >= total size)
+        // This ensures all chunks except the final one are multiples of 256KB
+        const isFinalChunk = done && (bytesUploaded + bufferOffset >= videoSizeBytes);
+        const shouldUpload = bufferOffset >= CHUNK_SIZE || isFinalChunk;
 
         if (shouldUpload) {
           const chunkToSend = buffer.subarray(0, bufferOffset);
@@ -262,9 +441,9 @@ export class YouTubeUploadService {
             body: chunkToSend,
           });
 
-          // YouTube returns 200 OK with the video resource when upload is complete
+          // YouTube returns 201 Created with the video resource when upload is complete
           // and 308 Resume Incomplete when more data is needed
-          if (response.status === 200) {
+          if (response.status === 201) {
             const videoResource = await response.json() as YouTubeVideoResource;
             const actualVideoId = videoResource.id;
 
@@ -280,7 +459,21 @@ export class YouTubeUploadService {
           }
 
           if (response.status === 308) {
-            bytesUploaded += chunkToSend.length;
+            // Parse Range header to get actual uploaded bytes from YouTube
+            // YouTube returns: "Range: bytes=0-XXXX" indicating bytes successfully received
+            const range = response.headers.get('Range');
+            if (range) {
+              const match = range.match(/bytes=0-(\d+)/);
+              if (match) {
+                bytesUploaded = parseInt(match[1], 10) + 1;
+              } else {
+                // Fallback: assume chunk was uploaded
+                bytesUploaded += chunkToSend.length;
+              }
+            } else {
+              // No Range header, assume chunk was uploaded
+              bytesUploaded += chunkToSend.length;
+            }
 
             if (onProgress) {
               onProgress({
@@ -299,6 +492,24 @@ export class YouTubeUploadService {
             // Reset buffer
             buffer = new Uint8Array(CHUNK_SIZE);
             bufferOffset = 0;
+
+            // If stream is done and all bytes uploaded, consider upload complete
+            // Extract video ID from upload URL and return
+            if (done && bytesUploaded >= videoSizeBytes) {
+              log.info(reqId, 'All bytes uploaded, extracting video ID from URL');
+              const videoIdMatch = uploadUrl.match(/\/videos\/([a-zA-Z0-9_-]+)/);
+              if (videoIdMatch) {
+                const videoId = videoIdMatch[1];
+                log.info(reqId, 'Video upload complete', {
+                  youtubeVideoId: videoId,
+                  bytesUploaded,
+                });
+                if (onProgress) {
+                  onProgress({ bytesUploaded: videoSizeBytes, totalBytes: videoSizeBytes, percentage: 100 });
+                }
+                return videoId;
+              }
+            }
 
             // If stream is done, exit loop
             if (done) break;
@@ -319,6 +530,31 @@ export class YouTubeUploadService {
       }
     } finally {
       reader.releaseLock();
+    }
+
+    // Debug logging before fallback check
+    log.warn(reqId, 'Loop exited without returning', {
+      bytesUploaded,
+      videoSizeBytes,
+      allBytesUploaded: bytesUploaded >= videoSizeBytes,
+      uploadUrl: uploadUrl.substring(0, 100) + '...',
+    });
+
+    // If we've uploaded all bytes, extract video ID from upload URL and return
+    // This handles the case where YouTube returns 308 for final chunk but doesn't return 201
+    if (bytesUploaded >= videoSizeBytes) {
+      const videoIdMatch = uploadUrl.match(/\/videos\/([a-zA-Z0-9_-]+)/);
+      if (videoIdMatch) {
+        const videoId = videoIdMatch[1];
+        log.info(reqId, 'Video upload complete (fallback - all bytes uploaded)', {
+          youtubeVideoId: videoId,
+          bytesUploaded,
+        });
+        if (onProgress) {
+          onProgress({ bytesUploaded: videoSizeBytes, totalBytes: videoSizeBytes, percentage: 100 });
+        }
+        return videoId;
+      }
     }
 
     // Should not reach here, but handle edge case
