@@ -417,19 +417,48 @@ export class AssetGeneratorService {
     reqId: string,
     narrationText: string,
     voiceName: TTSVoice,
-    model: TTSModelId
+    model: TTSModelId,
+    directorNotes?: string,  // NEW parameter
+    audioProfile?: string    // NEW parameter
   ): Promise<SlideAudioResult> {
     log.assetGen.info(reqId, 'Generating slide audio', {
       voiceName,
       model,
-      textLength: narrationText.length
+      textLength: narrationText.length,
+      hasDirectorNotes: !!directorNotes,
+      audioProfile
     });
 
     const startTime = Date.now();
 
+    // Build enhanced prompt with director's notes if provided
+    let enhancedPrompt = narrationText;
+
+    if (directorNotes || audioProfile) {
+      const styleInstructions = [];
+
+      if (audioProfile) {
+        const profileGuidance: Record<string, string> = {
+          urgent: 'Fast-paced, urgent, breaking news delivery',
+          calm: 'Measured, reassuring, explanatory delivery',
+          excited: 'Energetic, enthusiastic, positive delivery',
+          serious: 'Grave, important, weighty delivery',
+          casual: 'Relaxed, friendly, conversational delivery',
+          dramatic: 'Heightened emotion, impactful delivery'
+        };
+        styleInstructions.push(`AUDIO PROFILE: ${profileGuidance[audioProfile] || audioProfile}`);
+      }
+
+      if (directorNotes) {
+        styleInstructions.push(`DIRECTOR'S NOTES: ${directorNotes}`);
+      }
+
+      enhancedPrompt = `${styleInstructions.join('\n\n')}\n\nNARRATION:\n${narrationText}`;
+    }
+
     const response = await this.genai.models.generateContent({
       model,
-      contents: narrationText,
+      contents: enhancedPrompt,
       config: {
         responseModalities: ['AUDIO'],
         speechConfig: {

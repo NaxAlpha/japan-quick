@@ -350,57 +350,10 @@ export interface ScriptGenerationInputEnhanced {
 
 /**
  * Build enhanced script generation prompt with full context awareness
- * Single consistent prompt structure with context provided for AI to follow
+ * Single unified prompt - AI decides style/examples based on video format, urgency, and content
  */
 export function buildScriptPromptEnhanced(input: ScriptGenerationInputEnhanced): string {
   const { videoFormat, urgency, timeContext, articles } = input;
-
-  // Format-specific context (provided to AI, not changing prompt structure)
-  const formatContext = {
-    single_short: {
-      duration: '60-90 seconds',
-      aspectRatio: '1080x1920 (vertical)',
-      slideCount: '6-8 slides',
-      structure: 'Hook/intro → Core facts → Context/impact → Optional: Public reaction → Conclusion/CTA'
-    },
-    multi_short: {
-      duration: '90-120 seconds',
-      aspectRatio: '1080x1920 (vertical)',
-      slideCount: '6-8 slides',
-      structure: 'Combined hook → Story 1 (2-3 slides) → Story 2 (2-3 slides) → [Optional: Story 3] → Combined conclusion'
-    },
-    long: {
-      duration: '4-6 minutes',
-      aspectRatio: '1920x1080 (horizontal)',
-      slideCount: '15-17 slides',
-      structure: 'Intro/Context → Background → Main story details → Public reaction → Analysis → Conclusion/Takeaways'
-    }
-  };
-
-  // Urgency context (provided to AI)
-  const urgencyContext = {
-    urgent: {
-      tone: 'Breaking, immediate, urgent',
-      hooks: ['"Breaking right now:"', '"Just in:"', '"Alert:"'],
-      cta: '"Follow for breaking updates - subscribe to J-Quick"'
-    },
-    developing: {
-      tone: 'Trending, evolving, updates-focused',
-      hooks: ['"Trending now in Japan:"', '"Here\'s what everyone\'s talking about:"', '"The story developing:"'],
-      cta: '"Follow this developing story - see updates on J-Quick"'
-    },
-    regular: {
-      tone: 'Informative, calm, educational',
-      hooks: ['"Here\'s what you need to know:"', '"Understanding [topic]:"', '"The story behind:"'],
-      cta: '"Subscribe for more Japanese news on J-Quick"'
-    }
-  };
-
-  // Time context (provided to AI)
-  const timeContextInfo = timeContext === 'morning' ? 'Morning update: overnight news, quick updates'
-    : timeContext === 'lunch' ? 'Lunchtime: trending topics, lighter content'
-    : timeContext === 'evening' ? 'Evening: day\'s highlights, recap'
-    : 'General: no specific time context';
 
   // Format articles for the prompt
   const articlesText = articles.map((article, idx) => {
@@ -434,58 +387,179 @@ export function buildScriptPromptEnhanced(input: ScriptGenerationInputEnhanced):
 
   const hasHighEngagementComments = articles.some(a => a.comments.some(c => c.likes >= 10));
 
-  const format = formatContext[videoFormat];
-  const urg = urgencyContext[urgency];
-
   return `You are an AI video script writer for "J-Quick", creating structured video scripts for Japanese news content.
 
-CONTEXT FOR THIS VIDEO:
-- Video Format: ${videoFormat} (${format.duration}, ${format.aspectRatio})
-- Target Slides: ${format.slideCount}
-- Narrative Structure: ${format.structure}
-- Urgency: ${urgency} (${urg.tone})
-- Time Context: ${timeContextInfo}
-- Suggested Hooks: ${urg.hooks.join(', ')}
-- Suggested CTA: ${urg.cta}
-- Channel Name: "J-Quick" (not "Japan Quick")
+=== VIDEO CONTEXT ===
+Video Format: ${videoFormat}
+- single_short: 60-90s, 1080x1920 vertical, single breaking news story
+- multi_short: 90-120s, 1080x1920 vertical, 2-3 related short stories
+- long: 4-6 min, 1920x1080 horizontal, in-depth analysis (15-17 slides)
 
-ARTICLES:
+Urgency: ${urgency}
+- urgent: Breaking, immediate, urgent tone (e.g., "Breaking right now", "Just in", "Alert")
+- developing: Trending, evolving, updates-focused (e.g., "Trending now", "Everyone's talking about")
+- regular: Informative, calm, educational (e.g., "Here's what you need to know", "Understanding")
+
+Time Context: ${timeContext || 'General'}
+- morning: Overnight news, quick updates
+- lunch: Trending topics, lighter content
+- evening: Day's highlights, recap
+
+Channel Name: "J-Quick"
+
+=== TITLE GUIDELINES (Choose appropriate style for this video format) ===
+
+For single_short (short, punchy, urgent):
+- "東京で震度5強の地震、緊急地震速報発表" (Earthquake with intensity 5-upper in Tokyo, emergency warning issued)
+- "大手IT企業、従業員の30%を削減へ衝撃発表" (Major IT company announces shock 30% workforce reduction)
+- "政府、新経済政策を承認 円相場に影響か" (Government approves new economic policy, may affect yen)
+
+For multi_short (comprehensive, roundup, numbers):
+- "今日の日本テック業界3つの重大ニュース" (3 major news stories in Japan's tech industry today)
+- "【速報】複数の政策変更が発表されます" (Breaking: Multiple policy changes announced)
+- "気になるニュースを3つ紹介！" (Introducing 3 news stories you care about!)
+
+For long (descriptive, in-depth, value-focused):
+- "【徹底解説】日本の新経済政策があなたに与える影響" (In-depth: How Japan's new economic policy affects you)
+- "最新テック規制の完全ガイド 変更点をわかりやすく" (Complete guide to latest tech regulations, changes explained simply)
+- "この法律が日本のデジタル景観をどう変えるのか" (How this law will change Japan's digital landscape)
+
+=== ARTICLES ===
 ${articlesText}
 
-TASK:
-Create a compelling video script following the format structure above.
+=== REQUIREMENTS ===
 
-REQUIREMENTS:
-1. Slide Count: Create ${format.slideCount}, each 10-20 seconds
-2. Opening: Use urgency-appropriate hook, make it attention-grabbing
-3. Language: Use article language for all text (title, description, narration), English for image descriptions
-4. Images: Precise and detailed, reference provided images, prefer male unless story requires female, avoid showing faces when possible, match story location
-5. Comments${hasHighEngagementComments ? ': Include 1-2 slides on public reaction (attribute generally, don\'t quote verbatim)' : ': Focus on story facts (no high-engagement comments)'}
-6. Thumbnail: Compelling, matches story, includes bold text overlay that compliments the video title to maximize click-through rate
-   - Describe BOTH: (1) catchy background image AND (2) specific text overlay to place on thumbnail
-   - Thumbnail text should work WITH video title to make viewers want to click
-   - Especially critical for long videos (4-6 min) - must be attention-grabbing
-   - Use high contrast, bold, readable text style
-7. CTA: Mention "${urg.cta}" at the END of the LAST slide's narration (do NOT create a separate CTA slide, just mention it at the end)
-8. FACT INTEGRITY: ONLY use information from provided articles - never add facts not in source
-9. NO BRANDING IN IMAGES: Image descriptions must NOT include:
-   - Channel logos or watermarks (including "J-Quick" or any channel name text)
-   - Branding elements or visual CTAs
-   - Subscribe buttons or social media icons
-   - Any text overlays except the title on the thumbnail
-   This applies to ALL slides including the thumbnail and last slide.
+1. LANGUAGE:
+   - ALL text fields (title, description, headline, audioNarration) MUST be in Japanese
+   - Use natural, conversational Japanese appropriate for news narration
+   - Image descriptions MUST be in English (for image generation AI)
 
-RESPONSE FORMAT (JSON only):
+2. TITLE:
+   - Choose style appropriate for video format (see guidelines above)
+   - Make it compelling, SEO-friendly for YouTube
+   - Consider urgency level (urgent = more urgent language, regular = more descriptive)
+
+3. SLIDE COUNT:
+   - single_short/multi_short: 6-8 slides, each 10-20 seconds
+   - long: 15-17 slides, each 10-20 seconds
+   - Distribute information smoothly across slides
+
+4. IMAGE DESCRIPTIONS (EXTREME DETAIL REQUIRED - English):
+
+   EVERY image description must include ALL of these elements:
+
+   a) COMPOSITION & LAYOUT:
+      - Exact position (left/center/right, foreground/background)
+      - Camera angle (close-up, medium, wide, bird's eye, Dutch angle)
+      - Framing (what's included/excluded)
+
+   b) LIGHTING & ATMOSPHERE:
+      - Type (sunlight, fluorescent, neon, spotlight)
+      - Direction (front, side, back, overhead)
+      - Time of day (golden hour, noon, twilight)
+      - Mood (optimistic, tense, mysterious, professional)
+
+   c) BACKGROUND & CONTEXT:
+      - Complete environment (office, street, lab, etc.)
+      - Background elements (skyscrapers, screens, equipment)
+      - Color palette
+      - Cultural markers (Japanese architecture, convenience stores, train stations)
+
+   d) SUBJECT DETAILS:
+      - People: age, gender, clothing (specific items, colors), pose, expression
+      - Objects: material, texture, size, condition
+      - Scenes: activity, spatial relationships
+
+   e) VISUAL CONSISTENCY:
+      - Name recurring characters: "Ken Tanaka, middle-aged Japanese businessman in navy blue suit"
+      - Maintain consistent appearance across slides
+
+   f) TEXT ON IMAGES (CRITICAL - EXACT JAPANESE TEXT):
+      - Add text when it enhances storytelling (signs, headlines, screens, documents)
+      - Use EXACT Japanese text matching the story context
+      - NO generic text like "重要なニュース" or "速報"
+      - Use realistic text: company names, policy titles, location names
+      - Examples: "渋谷駅 Shibuya Station", "経済政策変更について", "日本銀行"
+
+   g) CULTURAL ACCURACY:
+      - Japanese stories = Japanese settings, people, architecture
+      - Use realistic Japanese signage and text
+
+   h) DEFAULTS:
+      - Default to male figures unless story requires female
+      - For women: full modest attire, no skin showing, prefer masks/loose clothing
+      - Prefer angles not showing faces (behind, far, blurred, silhouette)
+
+5. THUMBNAIL DESIGN (English description):
+
+   Must include ALL of these elements:
+   - EXACT Japanese text overlay (complements video title, not repeating it)
+   - Neon glow/border (2-3px, bright colors: red, cyan, yellow)
+   - Arrows pointing to main subject/focus
+   - Lens flares or light rays behind text
+   - Slight vignette
+   - Centered main subject with dynamic angle
+   - High contrast, saturated colors
+
+   Example: "Background: Low-angle shot of Japanese government building entrance with storm clouds, warm interior light spilling onto steps. Text overlay: '緊急発表 重要' in bold white with thick red neon border (3px) and dramatic drop shadow. Design: Red downward arrow pointing to text, cyan lens flare behind, subtle vignette."
+
+6. AUDIO NARRATION (Japanese):
+
+   a) WRITING STYLE:
+      - Conversational, natural Japanese for speech (not writing style)
+      - Short sentences for better TTS rendering
+      - Include natural pauses
+
+   b) AUDIO PROFILE (choose per slide):
+      - urgent: Fast-paced, breaking news tone
+      - calm: Measured, reassuring, explanatory
+      - excited: Energetic, enthusiastic, positive
+      - serious: Grave, important, weighty
+      - casual: Relaxed, friendly, conversational
+      - dramatic: Heightened emotion, building tension
+
+   c) DIRECTOR'S NOTES (English - for TTS):
+      Provide specific guidance:
+      - Overall emotion: "concerned but professional", "optimistic forward-looking"
+      - Pacing: "slower for emphasis", "quick and urgent"
+      - Tone shifts: "start serious, become hopeful at end"
+      - Emphasis: "emphasize 'shocking'", "soften tone for statistics"
+      - Pauses: "pause before final statement", "brief pause after question"
+
+   d) SMOOTH FLOW ACROSS SLIDES:
+      - Maintain emotional consistency across related slides
+      - Gradually build/release tension across narrative arc
+      - Avoid jarring transitions (e.g., excited → serious → excited)
+      - Consider progression: hook (urgent) → facts (calm/serious) → context (casual) → CTA (excited)
+
+7. PUBLIC REACTION${hasHighEngagementComments ? ': Include 1-2 slides on public reaction (attribute generally, don\'t quote verbatim)' : ': Focus on story facts (no high-engagement comments available)'}
+
+8. CTA:
+   - Mention appropriate call-to-action at END of last slide narration:
+     - urgent: "緊急情報はJ-Quickでチェックしてね" (Check J-Quick for breaking updates)
+     - developing: "続報はJ-Quickで" (See updates on J-Quick)
+     - regular: "J-Quickをチャンネル登録してね" (Subscribe to J-Quick for more Japanese news)
+
+9. FACT INTEGRITY:
+   - ONLY use information from provided articles
+   - Never add facts not in source
+
+10. NO BRANDING:
+    - Image descriptions must NOT include: logos, watermarks, branding, subscribe buttons, social icons
+
+=== RESPONSE FORMAT (JSON only) ===
 {
-  "title": "SEO-optimized YouTube title in article language",
-  "description": "SEO-optimized description in article language",
-  "thumbnailDescription": "Detailed thumbnail image prompt in English",
+  "title": "SEO-optimized YouTube title in Japanese",
+  "description": "SEO-optimized description in Japanese",
+  "thumbnailDescription": "Detailed thumbnail image prompt in English with neon/borders/arrows",
   "slides": [
     {
-      "headline": "Short slide title",
-      "imageDescription": "Detailed image prompt in English",
-      "audioNarration": "Narration text in article language",
-      "estimatedDuration": 15
+      "headline": "Short slide title in Japanese",
+      "imageDescription": "Detailed image prompt in English with all required elements",
+      "audioNarration": "Narration text in conversational Japanese",
+      "estimatedDuration": 15,
+      "audioProfile": "urgent" | "calm" | "excited" | "serious" | "casual" | "dramatic",
+      "directorNotes": "TTS style/emotion/tone instructions in English"
     }
   ]
 }

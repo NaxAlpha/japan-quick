@@ -48,6 +48,9 @@ export interface Slide {
   imageDescription: string;   // Image prompt (always English)
   audioNarration: string;     // Narration (article language)
   estimatedDuration: number;  // 10-20 seconds
+  // NEW FIELDS for smooth audio flow
+  directorNotes?: string;     // TTS style/emotion/tone instructions
+  audioProfile?: 'urgent' | 'calm' | 'excited' | 'serious' | 'casual' | 'dramatic';
 }
 
 export interface VideoScript {
