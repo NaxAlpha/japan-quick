@@ -117,7 +117,8 @@ videoRoutes.get('/:id', async (c) => {
       mimeType: asset.mime_type,
       fileSize: asset.file_size,
       metadata: asset.metadata ? JSON.parse(asset.metadata) : null,
-      publicUrl: asset.public_url
+      publicUrl: asset.public_url,
+      generationType: asset.generation_type || 'unknown'
     }));
 
     const parsedVideo = parseVideo(video);

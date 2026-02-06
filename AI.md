@@ -241,7 +241,8 @@ All `/api/*` routes require JWT authentication:
   - youtube_upload_status: pending | uploading | processing | uploaded | error
 - **cost_logs** - AI operation cost tracking
 - **video_assets** - R2 asset storage records (ULID-based)
-  - asset_type: grid_image | slide_image | slide_audio | rendered_video | selection_prompt | script_prompt
+  - asset_type: grid_image | slide_image | slide_audio | rendered_video | selection_prompt | script_prompt | image_generation_prompt | thumbnail_image
+  - thumbnail_image: YouTube thumbnail extracted from grid (pro model) or generated separately (non-pro model)
 - **models** - AI model pricing configuration
 - **youtube_auth** - YouTube OAuth tokens
 - **youtube_info** - YouTube video metadata (video_id, youtube_video_id, url, title, description, tags, privacy, etc.)
@@ -327,11 +328,13 @@ All `/api/*` routes require JWT authentication:
 - Reference images included for AI context
 - Prompts stored as `image_generation_prompt` assets for viewing
 - **Grid padding:** When slide count < 8 (short) or < 16 (long), empty positions between last slide and thumbnail are explicitly filled with "plain solid black" descriptions to ensure complete 3×3 grid generation for proper cropping
+- **Thumbnail extraction:** After grid splitting, thumbnail extracted from position 8 of appropriate grid (grid 0 for short, grid 1 for long)
 
 **Individual Slides (Non-Pro Model):**
 - Each slide generated separately
 - 1K resolution: 768×1344 (9:16) or 1344×768 (16:9)
 - No grid generation, no prompt storage
+- **Separate thumbnail generation:** Custom thumbnail generated using `generateThumbnailImage()` method with 16:9 aspect ratio
 
 **Grid Splitting:**
 - Individual slides extracted using `cross-image` library (pure JavaScript, zero dependencies)
@@ -455,8 +458,16 @@ Remotion components require React performance patterns to avoid memory leaks dur
 3. Download video bytes from R2
 4. Create YouTube resumable upload session
 5. Upload video in 256KB chunks
-6. Poll for YouTube processing completion
-7. Store YouTube metadata in `youtube_info` table
+6. **Upload thumbnail to YouTube** (thumbnail_image asset from R2)
+7. Poll for YouTube processing completion
+8. Store YouTube metadata in `youtube_info` table
+
+**Thumbnail Upload:**
+- Service: `src/services/youtube-upload.ts` - `uploadThumbnail()` method
+- POST to `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId={id}`
+- Max file size: 2MB
+- Format: PNG
+- Triggered automatically after successful video upload
 
 **Upload Settings (Japanese Content):**
 - Privacy: `private` (configurable, currently private for testing)

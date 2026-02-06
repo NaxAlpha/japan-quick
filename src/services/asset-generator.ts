@@ -29,6 +29,11 @@ interface SlideImageResult {
   ulid: string;
 }
 
+interface ThumbnailResult {
+  base64: string;
+  mimeType: string;
+}
+
 interface SlideAudioResult {
   base64: string;
   mimeType: string;
@@ -66,7 +71,7 @@ export class AssetGeneratorService {
     videoType: 'short' | 'long',
     model: ImageModelId,
     referenceImages: string[] = []
-  ): Promise<{ grids: GridImageResult[]; slides: SlideImageResult[]; prompts: PromptResult[]; tokenUsage: TokenUsageInfo[] }> {
+  ): Promise<{ grids: GridImageResult[]; slides: SlideImageResult[]; prompts: PromptResult[]; tokenUsage: TokenUsageInfo[]; thumbnail?: ThumbnailResult }> {
     const isProModel = model === 'gemini-3-pro-image-preview';
 
     log.assetGen.info(reqId, 'Starting image generation', {
@@ -96,7 +101,7 @@ export class AssetGeneratorService {
     videoType: 'short' | 'long',
     model: ImageModelId,
     referenceImages: string[] = []
-  ): Promise<{ grids: GridImageResult[]; slides: SlideImageResult[]; prompts: PromptResult[]; tokenUsage: TokenUsageInfo[] }> {
+  ): Promise<{ grids: GridImageResult[]; slides: SlideImageResult[]; prompts: PromptResult[]; tokenUsage: TokenUsageInfo[]; thumbnail?: ThumbnailResult }> {
     const isShort = videoType === 'short';
     const aspectRatio = isShort ? '9:16' : '16:9';
     const gridCount = isShort ? 1 : 2;
@@ -174,9 +179,9 @@ export class AssetGeneratorService {
     }
 
     // Split grids into individual slide images using ImageScript
-    const allSlides: SlideImageResult[] = await this.splitGridsIntoSlides(reqId, grids);
+    const { slides, thumbnail } = await this.splitGridsIntoSlides(reqId, grids, videoType);
 
-    return { grids, slides: allSlides, prompts, tokenUsage };
+    return { grids, slides, prompts, tokenUsage, thumbnail };
   }
 
   /**
@@ -189,7 +194,7 @@ export class AssetGeneratorService {
     videoType: 'short' | 'long',
     model: ImageModelId,
     referenceImages: string[] = []
-  ): Promise<{ grids: GridImageResult[]; slides: SlideImageResult[]; prompts: PromptResult[]; tokenUsage: TokenUsageInfo[] }> {
+  ): Promise<{ grids: GridImageResult[]; slides: SlideImageResult[]; prompts: PromptResult[]; tokenUsage: TokenUsageInfo[]; thumbnail?: ThumbnailResult }> {
     const isShort = videoType === 'short';
     const aspectRatio = isShort ? '9:16' : '16:9';
     const dimensions = getIndividualSlideDimensions(videoType);
@@ -246,22 +251,38 @@ export class AssetGeneratorService {
     }
 
     // No grids for individual slide generation
-    return { grids: [], slides, prompts: [], tokenUsage };
+    // Use the last slide as thumbnail for non-pro model
+    const lastSlide = slides[slides.length - 1];
+    const thumbnail = lastSlide ? {
+      base64: lastSlide.base64,
+      mimeType: lastSlide.mimeType
+    } : undefined;
+
+    return { grids: [], slides, prompts: [], tokenUsage, thumbnail };
   }
 
   /**
    * Split grid images into individual slide images using cross-image
+   * Also extracts thumbnail from position 8 of the appropriate grid
    * Pure JavaScript implementation - no native dependencies
    */
   private async splitGridsIntoSlides(
     reqId: string,
-    grids: GridImageResult[]
-  ): Promise<SlideImageResult[]> {
+    grids: GridImageResult[],
+    videoType: 'short' | 'long'
+  ): Promise<{ slides: SlideImageResult[]; thumbnail?: ThumbnailResult }> {
     const allSlides: SlideImageResult[] = [];
 
-    log.assetGen.info(reqId, 'Starting grid splitting with cross-image', { gridCount: grids.length });
+    log.assetGen.info(reqId, 'Starting grid splitting with cross-image', { gridCount: grids.length, videoType });
+
+    // Determine which grid contains the thumbnail (position 8)
+    // Short: grid 0, Long: grid 1
+    const thumbnailGridIndex = videoType === 'short' ? 0 : 1;
+    let extractedThumbnail: ThumbnailResult | undefined;
 
     for (const grid of grids) {
+      const isThumbnailGrid = grid.metadata.gridIndex === thumbnailGridIndex;
+
       // Use cross-image's decodeBase64 to convert base64 to Uint8Array
       // This ensures the data is in the format cross-image expects
       let gridImage;
@@ -323,6 +344,47 @@ export class AssetGeneratorService {
 
       // Extract each slide from the grid using crop()
       for (const pos of positions) {
+        // Extract thumbnail from position 8 of the thumbnail grid
+        if (isThumbnailGrid && pos.cell === 8 && pos.isThumbnail) {
+          const startTime = Date.now();
+
+          const cropWidth = pos.cropRect.w;
+          const cropHeight = pos.cropRect.h;
+          const sourceX = pos.cropRect.x;
+          const sourceY = pos.cropRect.y;
+
+          log.assetGen.info(reqId, 'Extracting thumbnail from position 8', {
+            cropWidth,
+            cropHeight,
+            sourceX,
+            sourceY,
+            gridWidth: gridImage.width,
+            gridHeight: gridImage.height
+          });
+
+          // Clone and crop
+          const gridClone = gridImage.clone();
+          const cropped = gridClone.crop(sourceX, sourceY, cropWidth, cropHeight);
+
+          // Encode to PNG
+          const thumbnailBuffer = await cropped.encode('png');
+          const thumbnailBase64 = encodeBase64(new Uint8Array(thumbnailBuffer));
+
+          extractedThumbnail = {
+            base64: thumbnailBase64,
+            mimeType: 'image/png'
+          };
+
+          const durationMs = Date.now() - startTime;
+          log.assetGen.info(reqId, 'Thumbnail extracted from grid', {
+            gridIndex: grid.metadata.gridIndex,
+            durationMs,
+            bufferByteLength: thumbnailBuffer.byteLength
+          });
+
+          continue; // Skip the rest since this is the thumbnail
+        }
+
         // Skip empty cells and thumbnail cells
         if (pos.isEmpty || pos.isThumbnail) continue;
         if (pos.slideIndex === null) continue;
@@ -402,12 +464,15 @@ export class AssetGeneratorService {
       }
     }
 
-    log.assetGen.info(reqId, 'Grid splitting complete', { totalSlides: allSlides.length });
+    log.assetGen.info(reqId, 'Grid splitting complete', {
+      totalSlides: allSlides.length,
+      thumbnailExtracted: !!extractedThumbnail
+    });
 
     // Sort slides by slideIndex to ensure correct order
     allSlides.sort((a, b) => a.metadata.slideIndex - b.metadata.slideIndex);
 
-    return allSlides;
+    return { slides: allSlides, thumbnail: extractedThumbnail };
   }
 
   /**
@@ -482,8 +547,8 @@ export class AssetGeneratorService {
       throw new Error('No candidates in TTS response');
     }
 
-    const audioPart = response.candidates[0].content.parts[0];
-    if (!audioPart || !audioPart.inlineData) {
+    const audioPart = response.candidates?.[0]?.content?.parts?.[0];
+    if (!audioPart?.inlineData?.data) {
       log.assetGen.error(reqId, 'No inline data in audio part', new Error('No inline data'), {
         audioPart: JSON.stringify(audioPart)
       });
@@ -586,9 +651,9 @@ export class AssetGeneratorService {
     }
 
     // Iterate through parts to find the image data
-    const parts = response.candidates[0].content.parts;
+    const parts = response.candidates?.[0]?.content?.parts ?? [];
     for (const part of parts) {
-      if (part.inlineData && part.inlineData.data) {
+      if (part?.inlineData?.data) {
         return {
           image: {
             base64: part.inlineData.data,
@@ -695,9 +760,9 @@ export class AssetGeneratorService {
     }
 
     // Iterate through parts to find the image data
-    const parts = response.candidates[0].content.parts;
+    const parts = response.candidates?.[0]?.content?.parts ?? [];
     for (const part of parts) {
-      if (part.inlineData && part.inlineData.data) {
+      if (part?.inlineData?.data) {
         return {
           image: {
             base64: part.inlineData.data,

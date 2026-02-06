@@ -8,10 +8,9 @@ import type {
   YouTubeUploadSession,
   YouTubeVideoStatus,
   YouTubeVideoResource,
-  YouTubeUploadOptions,
-  YouTubeInfo
+  YouTubeUploadOptions
 } from '../types/youtube.js';
-import type { VideoScript } from '../types/video.js';
+import type { VideoScript, YouTubeInfo } from '../types/video.js';
 
 const log = createLogger('YouTubeUpload');
 
@@ -210,6 +209,123 @@ export class YouTubeUploadService {
   }
 
   /**
+   * Upload video stream directly to YouTube (memory-efficient for large videos)
+   * Streams from R2 to YouTube without loading entire video into memory
+   * @returns The YouTube video ID when upload completes
+   */
+  async uploadVideoStream(
+    reqId: string,
+    uploadUrl: string,
+    videoStream: ReadableStream<Uint8Array>,
+    videoSizeBytes: number,
+    onProgress?: (progress: { bytesUploaded: number; totalBytes: number; percentage: number }) => void
+  ): Promise<string> {
+    log.info(reqId, 'Starting video stream upload', {
+      totalBytes: videoSizeBytes,
+      totalBytesMB: (videoSizeBytes / 1024 / 1024).toFixed(2),
+    });
+
+    // YouTube requires chunks >= 256KB (except final chunk)
+    const CHUNK_SIZE = 256 * 1024; // 256KB
+    const reader = videoStream.getReader();
+    let bytesUploaded = 0;
+    let buffer = new Uint8Array(CHUNK_SIZE);
+    let bufferOffset = 0;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+
+        // If we have data, add to buffer
+        if (value && value.length > 0) {
+          // Ensure buffer is large enough
+          if (bufferOffset + value.length > buffer.length) {
+            const newBuffer = new Uint8Array(bufferOffset + value.length);
+            newBuffer.set(buffer.subarray(0, bufferOffset));
+            buffer = newBuffer;
+          }
+          buffer.set(value, bufferOffset);
+          bufferOffset += value.length;
+        }
+
+        // Check if we should upload (buffer full OR stream done)
+        const shouldUpload = bufferOffset >= CHUNK_SIZE || (done && bufferOffset > 0);
+
+        if (shouldUpload) {
+          const chunkToSend = buffer.subarray(0, bufferOffset);
+          const response = await fetch(uploadUrl, {
+            method: 'PUT',
+            headers: {
+              'Content-Length': String(chunkToSend.length),
+              'Content-Range': `bytes ${bytesUploaded}-${bytesUploaded + chunkToSend.length - 1}/${videoSizeBytes}`,
+            },
+            body: chunkToSend,
+          });
+
+          // YouTube returns 200 OK with the video resource when upload is complete
+          // and 308 Resume Incomplete when more data is needed
+          if (response.status === 200) {
+            const videoResource = await response.json() as YouTubeVideoResource;
+            const actualVideoId = videoResource.id;
+
+            log.info(reqId, 'Video stream upload complete', {
+              totalBytes: videoSizeBytes,
+              bytesUploaded: bytesUploaded + chunkToSend.length,
+              youtubeVideoId: actualVideoId,
+            });
+            if (onProgress) {
+              onProgress({ bytesUploaded: videoSizeBytes, totalBytes: videoSizeBytes, percentage: 100 });
+            }
+            return actualVideoId;
+          }
+
+          if (response.status === 308) {
+            bytesUploaded += chunkToSend.length;
+
+            if (onProgress) {
+              onProgress({
+                bytesUploaded,
+                totalBytes: videoSizeBytes,
+                percentage: Math.floor((bytesUploaded / videoSizeBytes) * 100),
+              });
+            }
+
+            log.debug(reqId, 'Stream upload progress', {
+              bytesUploaded,
+              totalBytes: videoSizeBytes,
+              percentage: Math.floor((bytesUploaded / videoSizeBytes) * 100),
+            });
+
+            // Reset buffer
+            buffer = new Uint8Array(CHUNK_SIZE);
+            bufferOffset = 0;
+
+            // If stream is done, exit loop
+            if (done) break;
+            continue;
+          }
+
+          // Error response
+          const errorText = await response.text();
+          const error = new Error(errorText) as Error & { status?: number; bytesUploaded?: number };
+          error.status = response.status;
+          error.bytesUploaded = bytesUploaded;
+          log.error(reqId, 'Stream upload failed', error);
+          throw new Error(`Stream upload failed: ${response.status} ${errorText}`);
+        }
+
+        // If stream is done and no more data to upload, exit
+        if (done) break;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    // Should not reach here, but handle edge case
+    throw new Error('Stream upload completed without final response');
+  }
+
+  /**
    * Get video processing status from YouTube
    */
   async getVideoStatus(reqId: string, videoId: string): Promise<YouTubeVideoStatus> {
@@ -351,8 +467,8 @@ export class YouTubeUploadService {
       video_id: localVideoId,
       youtube_video_id: youtubeVideoId,
       youtube_video_url: `https://www.youtube.com/watch?v=${youtubeVideoId}`,
-      title: script.title,
-      description: script.description,
+      title: script.title || '',
+      description: script.description || '',
       privacy_status: opts.privacy,
       tags: JSON.stringify(opts.tags),
       category_id: opts.categoryId,
@@ -377,5 +493,59 @@ export class YouTubeUploadService {
       ...youtubeInfo,
       upload_completed_at: new Date().toISOString(),
     };
+  }
+
+  /**
+   * Upload thumbnail to YouTube
+   * @param reqId Request ID for logging
+   * @param accessToken YouTube access token
+   * @param youtubeVideoId YouTube video ID
+   * @param thumbnailImageBytes Thumbnail image bytes (Uint8Array, max 2MB)
+   */
+  async uploadThumbnail(
+    reqId: string,
+    accessToken: string,
+    youtubeVideoId: string,
+    thumbnailImageBytes: Uint8Array
+  ): Promise<void> {
+    const sizeMB = (thumbnailImageBytes.length / 1024 / 1024).toFixed(2);
+
+    log.info(reqId, 'Uploading thumbnail to YouTube', {
+      youtubeVideoId,
+      sizeBytes: thumbnailImageBytes.length,
+      sizeMB
+    });
+
+    // Validate file size (YouTube limit: 2MB)
+    const MAX_THUMBNAIL_SIZE = 2 * 1024 * 1024; // 2MB
+    if (thumbnailImageBytes.length > MAX_THUMBNAIL_SIZE) {
+      throw new Error(`Thumbnail image size (${sizeMB}MB) exceeds YouTube limit of 2MB`);
+    }
+
+    const url = `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${youtubeVideoId}`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'image/png'
+      },
+      body: thumbnailImageBytes
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      const error = new Error(errorText) as Error & { status?: number };
+      error.status = response.status;
+      log.error(reqId, 'Failed to upload thumbnail', error);
+      throw new Error(`Failed to upload thumbnail: ${response.status} ${errorText}`);
+    }
+
+    const result = await response.json();
+
+    log.info(reqId, 'Thumbnail uploaded successfully', {
+      youtubeVideoId,
+      result
+    });
   }
 }
