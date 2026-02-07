@@ -285,7 +285,7 @@ export class AssetGeneratorService {
 
       // Use cross-image's decodeBase64 to convert base64 to Uint8Array
       // This ensures the data is in the format cross-image expects
-      let gridImage;
+      let gridImage: Image | null;
       try {
         const gridBytes = decodeBase64(grid.base64);
         log.assetGen.debug(reqId, 'Decoding grid image', {
@@ -362,9 +362,8 @@ export class AssetGeneratorService {
             gridHeight: gridImage.height
           });
 
-          // Clone and crop
-          const gridClone = gridImage.clone();
-          const cropped = gridClone.crop(sourceX, sourceY, cropWidth, cropHeight);
+          // Crop directly - thumbnail is last operation on this grid, no need to clone
+          let cropped = gridImage.crop(sourceX, sourceY, cropWidth, cropHeight);
 
           // Encode to PNG
           const thumbnailBuffer = await cropped.encode('png');
@@ -374,6 +373,9 @@ export class AssetGeneratorService {
             base64: thumbnailBase64,
             mimeType: 'image/png'
           };
+
+          // Explicit cleanup to free memory
+          cropped = null as any;
 
           const durationMs = Date.now() - startTime;
           log.assetGen.info(reqId, 'Thumbnail extracted from grid', {
@@ -407,10 +409,10 @@ export class AssetGeneratorService {
 
         // CRITICAL: Clone the grid image before cropping because crop() mutates in place!
         // Each crop needs to start from the original grid, not a previously cropped version
-        const gridClone = gridImage.clone();
+        let gridClone: Image | null = gridImage.clone();
 
         // Crop the cloned image
-        const cropped = gridClone.crop(sourceX, sourceY, cropWidth, cropHeight);
+        let cropped: Image | null = gridClone.crop(sourceX, sourceY, cropWidth, cropHeight);
 
         log.assetGen.debug(reqId, `Cropped slide ${pos.slideIndex}`, {
           cropWidth,
@@ -422,7 +424,7 @@ export class AssetGeneratorService {
         });
 
         // Encode back to PNG
-        let slideBuffer;
+        let slideBuffer: ArrayBuffer | null;
         try {
           slideBuffer = await cropped.encode('png');
           log.assetGen.debug(reqId, `Encoded slide ${pos.slideIndex}`, {
@@ -434,7 +436,7 @@ export class AssetGeneratorService {
         }
 
         // Convert to base64 using cross-image's encodeBase64
-        let slideBase64;
+        let slideBase64: string;
         try {
           slideBase64 = encodeBase64(new Uint8Array(slideBuffer));
         } catch (base64Error) {
@@ -461,7 +463,15 @@ export class AssetGeneratorService {
           height: cropHeight,
           durationMs
         });
+
+        // Explicit cleanup to free memory after each slide
+        gridClone = null;
+        cropped = null;
+        slideBuffer = null;
       }
+
+      // Explicit cleanup after processing entire grid to free memory
+      gridImage = null;
     }
 
     log.assetGen.info(reqId, 'Grid splitting complete', {
