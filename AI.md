@@ -340,6 +340,7 @@ All `/api/*` routes require JWT authentication:
 - Individual slides extracted using `cross-image` library (pure JavaScript, zero dependencies)
 - Uploaded to R2 with ULID-based keys
 - Stored as `slide_image` asset type
+- **Memory optimization:** Explicit nullification of large objects after use to prevent memory overflow during 4K grid processing (gridImage, gridClone, cropped, slideBuffer set to null after each slide)
 
 **TTS Audio:**
 - 30 available voices (randomly selected, stored in `videos.tts_voice`)
