@@ -365,13 +365,13 @@ export class AssetGeneratorService {
           // Crop directly - thumbnail is last operation on this grid, no need to clone
           let cropped = gridImage.crop(sourceX, sourceY, cropWidth, cropHeight);
 
-          // Encode to PNG
-          const thumbnailBuffer = await cropped.encode('png');
+          // Encode to JPEG with quality 0.85 (good balance of size/quality)
+          const thumbnailBuffer = await cropped.encode('jpeg', { quality: 0.85 });
           const thumbnailBase64 = encodeBase64(new Uint8Array(thumbnailBuffer));
 
           extractedThumbnail = {
             base64: thumbnailBase64,
-            mimeType: 'image/png'
+            mimeType: 'image/jpeg'
           };
 
           // Explicit cleanup to free memory
