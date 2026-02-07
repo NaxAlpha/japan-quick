@@ -337,10 +337,13 @@ All `/api/*` routes require JWT authentication:
 - **Separate thumbnail generation:** Custom thumbnail generated using `generateThumbnailImage()` method with 16:9 aspect ratio
 
 **Grid Splitting:**
-- Individual slides extracted using `cross-image` library (pure JavaScript, zero dependencies)
+- **Uses E2B sandbox with ImageMagick** for 4K grid splitting (avoids Workers 128MB memory limit)
+- Service: `src/services/asset-generator.ts` - `splitGridsIntoSlides()` method
+- Template: `video-renderer` (includes ImageMagick via apt-install)
+- Process: Write grid base64 to sandbox → `convert -crop 3x3` → Read split files → Upload to R2 (streaming pattern)
 - Uploaded to R2 with ULID-based keys
 - Stored as `slide_image` asset type
-- **Memory optimization:** Explicit nullification of large objects after use to prevent memory overflow during 4K grid processing (gridImage, gridClone, cropped, slideBuffer set to null after each slide)
+- **Streaming pattern:** Read one slide file at a time, upload immediately, discard buffer to minimize memory usage
 
 **TTS Audio:**
 - 30 available voices (randomly selected, stored in `videos.tts_voice`)
@@ -364,7 +367,7 @@ All `/api/*` routes require JWT authentication:
 **E2B Configuration:**
 - Template: `video-renderer` (8 CPU, 8GB RAM, 16GB disk)
 - Base: Bun 1.3 image via `.fromBunImage('1.3')`
-- Pre-installed: Remotion 4.0.414, FFmpeg, Chromium, fonts-noto-cjk-extra
+- Pre-installed: Remotion 4.0.414, FFmpeg, ImageMagick, Chromium, fonts-noto-cjk-extra, curl
 - Remotion project: `/home/user/remotion` with all dependencies
 - Build script: `.e2b/build.ts`
 - Timeout: 40 minutes (2400000ms for sandbox, 20 minutes for workflow step)

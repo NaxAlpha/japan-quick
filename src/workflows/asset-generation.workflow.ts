@@ -162,7 +162,7 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
           backoff: 'exponential'
         }
       }, async () => {
-        const assetGen = new AssetGeneratorService(this.env.GOOGLE_API_KEY);
+        const assetGen = new AssetGeneratorService(this.env.GOOGLE_API_KEY, this.env.E2B_API_KEY);
         const result = await assetGen.generateImages(
           reqId, script, video.video_type, video.image_model, referenceImages
         );
@@ -347,7 +347,7 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
           backoff: 'exponential'
         }
       }, async () => {
-        const assetGen = new AssetGeneratorService(this.env.GOOGLE_API_KEY);
+        const assetGen = new AssetGeneratorService(this.env.GOOGLE_API_KEY, this.env.E2B_API_KEY);
         const r2 = new R2StorageService(this.env.ASSETS_BUCKET);
 
         // DELETE existing slide_audio assets for this video to prevent duplicates

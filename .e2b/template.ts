@@ -10,6 +10,7 @@ export const template = Template()
   // Install system packages for Remotion/Chromium
   .aptInstall([
     'ffmpeg',      // Still needed for Remotion encoding
+    'imagemagick', // Required for grid splitting with convert command
     'fonts-noto-cjk-extra',
     'chromium',    // Required by Remotion for rendering
     'libnss3',
