@@ -7,8 +7,8 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
-import { Image, decodeBase64, encodeBase64 } from 'cross-image';
 import { ulid } from 'ulid';
+import { Sandbox } from 'e2b';
 import type { VideoScript, ImageModelId, TTSModelId, TTSVoice, GridImageMetadata, SlideAudioMetadata, ImageSize } from '../types/video.js';
 import { log } from '../lib/logger.js';
 import { buildGridImagePrompt, buildIndividualSlidePrompt } from '../lib/prompts.js';
@@ -55,9 +55,11 @@ interface TokenUsageInfo {
 
 export class AssetGeneratorService {
   private genai: GoogleGenAI;
+  private e2bApiKey: string;
 
-  constructor(apiKey: string) {
+  constructor(apiKey: string, e2bApiKey: string) {
     this.genai = new GoogleGenAI({ apiKey });
+    this.e2bApiKey = e2bApiKey;
   }
 
   /**
@@ -262,9 +264,9 @@ export class AssetGeneratorService {
   }
 
   /**
-   * Split grid images into individual slide images using cross-image
+   * Split grid images into individual slide images using E2B sandbox with ImageMagick
    * Also extracts thumbnail from position 8 of the appropriate grid
-   * Pure JavaScript implementation - no native dependencies
+   * This avoids Cloudflare Workers 128MB memory limit for 4K grids
    */
   private async splitGridsIntoSlides(
     reqId: string,
@@ -273,216 +275,149 @@ export class AssetGeneratorService {
   ): Promise<{ slides: SlideImageResult[]; thumbnail?: ThumbnailResult }> {
     const allSlides: SlideImageResult[] = [];
 
-    log.assetGen.info(reqId, 'Starting grid splitting with cross-image', { gridCount: grids.length, videoType });
+    log.assetGen.info(reqId, 'Starting grid splitting with E2B sandbox', {
+      gridCount: grids.length,
+      videoType,
+      apiKeyPrefix: this.e2bApiKey?.substring(0, 10) || 'none'
+    });
 
     // Determine which grid contains the thumbnail (position 8)
     // Short: grid 0, Long: grid 1
     const thumbnailGridIndex = videoType === 'short' ? 0 : 1;
     let extractedThumbnail: ThumbnailResult | undefined;
 
-    for (const grid of grids) {
-      const isThumbnailGrid = grid.metadata.gridIndex === thumbnailGridIndex;
+    let sandbox: Sandbox | null = null;
 
-      // Use cross-image's decodeBase64 to convert base64 to Uint8Array
-      // This ensures the data is in the format cross-image expects
-      let gridImage: Image | null;
-      try {
-        const gridBytes = decodeBase64(grid.base64);
-        log.assetGen.debug(reqId, 'Decoding grid image', {
-          byteLength: gridBytes.length,
-          base64Length: grid.base64.length,
-          mimeType: grid.mimeType,
-          firstBytes: Array.from(gridBytes.slice(0, 8)) // First 8 bytes for format detection
-        });
-
-        // Decode PNG using cross-image
-        gridImage = await Image.decode(gridBytes);
-      } catch (decodeError) {
-        log.assetGen.error(reqId, 'Failed to decode image with cross-image', decodeError as Error, {
-          base64Length: grid.base64.length,
-          mimeType: grid.mimeType,
-          error: (decodeError as Error).message
-        });
-        throw new Error(`Failed to decode grid image: ${decodeError}`);
-      }
-
-      // Calculate cell sizes from ACTUAL image dimensions
-      // Gemini may return different dimensions than expected, so we compute dynamically
-      const cellWidth = Math.floor(gridImage.width / 3);
-      const cellHeight = Math.floor(gridImage.height / 3);
-
-      log.assetGen.info(reqId, 'Calculated cell dimensions from actual image', {
-        gridWidth: gridImage.width,
-        gridHeight: gridImage.height,
-        cellWidth,
-        cellHeight
+    try {
+      // Create E2B sandbox
+      log.assetGen.info(reqId, 'Creating E2B sandbox for grid splitting');
+      sandbox = await Sandbox.create('video-renderer', {
+        apiKey: this.e2bApiKey,
+        timeoutMs: 300000 // 5 minutes timeout
       });
+      log.assetGen.info(reqId, 'E2B sandbox created', { sandboxId: sandbox.sandboxId });
 
-      // Use positions from grid.metadata (which has correct slide indices)
-      // But update cropRect based on actual image dimensions
-      const positions = grid.metadata.positions.map(pos => {
-        const row = Math.floor(pos.cell / 3);
-        const col = pos.cell % 3;
+      // Process each grid
+      for (const grid of grids) {
+        const isThumbnailGrid = grid.metadata.gridIndex === thumbnailGridIndex;
+        const gridFileName = `/home/user/grid_${grid.metadata.gridIndex}.png`;
 
-        return {
-          ...pos,
-          cropRect: {
-            x: col * cellWidth,
-            y: row * cellHeight,
-            w: cellWidth,
-            h: cellHeight
+        // Write grid base64 to file in sandbox
+        log.assetGen.info(reqId, `Writing grid ${grid.metadata.gridIndex} to sandbox`, {
+          base64Length: grid.base64.length
+        });
+
+        // Convert base64 to buffer and write to sandbox
+        const gridBuffer = Buffer.from(grid.base64, 'base64');
+        await sandbox.files.write(gridFileName, gridBuffer);
+
+        log.assetGen.info(reqId, `Grid ${grid.metadata.gridIndex} written to sandbox`, {
+          byteLength: gridBuffer.byteLength
+        });
+
+        // Use ImageMagick to split the grid into 9 slides
+        // Output format: slide_<gridIndex>_<cellIndex>.png (0-indexed)
+        const outputPattern = `/home/user/slide_${grid.metadata.gridIndex}_%d.png`;
+        const convertCmd = `convert ${gridFileName} -crop 3x3 +repage -quality 90 ${outputPattern}`;
+
+        log.assetGen.info(reqId, `Splitting grid ${grid.metadata.gridIndex} with ImageMagick`, {
+          command: convertCmd
+        });
+
+        const convertResult = await sandbox.commands.run(convertCmd, { timeoutMs: 60000 });
+
+        if (convertResult.exitCode !== 0) {
+          log.assetGen.error(reqId, `ImageMagick convert failed for grid ${grid.metadata.gridIndex}`, new Error('convert failed'), {
+            stderr: convertResult.stderr,
+            stdout: convertResult.stdout
+          });
+          throw new Error(`Failed to split grid ${grid.metadata.gridIndex}: ${convertResult.stderr}`);
+        }
+
+        log.assetGen.info(reqId, `Grid ${grid.metadata.gridIndex} split successfully`, {
+          stdout: convertResult.stdout
+        });
+
+        // List the generated slide files to verify
+        const listResult = await sandbox.commands.run(`ls -la /home/user/slide_${grid.metadata.gridIndex}_*.png 2>&1`);
+        log.assetGen.info(reqId, `Generated slide files for grid ${grid.metadata.gridIndex}`, {
+          output: listResult.stdout || listResult.stderr
+        });
+
+        // Process each position from the grid metadata
+        for (const pos of grid.metadata.positions) {
+          const slideFileName = `/home/user/slide_${grid.metadata.gridIndex}_${pos.cell}.png`;
+
+          // Handle thumbnail extraction (position 8 of thumbnail grid)
+          if (isThumbnailGrid && pos.cell === 8 && pos.isThumbnail) {
+            log.assetGen.info(reqId, 'Extracting thumbnail from position 8', {
+              gridIndex: grid.metadata.gridIndex,
+              fileName: slideFileName
+            });
+
+            const thumbnailBuffer = await sandbox.files.read(slideFileName);
+            const thumbnailBase64 = Buffer.from(thumbnailBuffer).toString('base64');
+
+            extractedThumbnail = {
+              base64: thumbnailBase64,
+              mimeType: 'image/jpeg'
+            };
+
+            log.assetGen.info(reqId, 'Thumbnail extracted', {
+              bufferByteLength: thumbnailBuffer.byteLength,
+              base64Length: thumbnailBase64.length
+            });
+
+            continue; // Skip adding thumbnail as a slide
           }
-        };
-      });
 
-      log.assetGen.info(reqId, `Splitting grid ${grid.metadata.gridIndex}`, {
-        ulid: grid.ulid,
-        positionCount: positions.length,
-        gridWidth: gridImage.width,
-        gridHeight: gridImage.height
-      });
+          // Skip empty cells and thumbnail cells
+          if (pos.isEmpty || pos.isThumbnail) continue;
+          if (pos.slideIndex === null) continue;
 
-      // Extract each slide from the grid using crop()
-      for (const pos of positions) {
-        // Extract thumbnail from position 8 of the thumbnail grid
-        if (isThumbnailGrid && pos.cell === 8 && pos.isThumbnail) {
-          const startTime = Date.now();
-
-          const cropWidth = pos.cropRect.w;
-          const cropHeight = pos.cropRect.h;
-          const sourceX = pos.cropRect.x;
-          const sourceY = pos.cropRect.y;
-
-          log.assetGen.info(reqId, 'Extracting thumbnail from position 8', {
-            cropWidth,
-            cropHeight,
-            sourceX,
-            sourceY,
-            gridWidth: gridImage.width,
-            gridHeight: gridImage.height
+          // Read the slide file (STREAMING: one at a time)
+          log.assetGen.debug(reqId, `Reading slide ${pos.slideIndex}`, {
+            fileName: slideFileName
           });
 
-          // Crop directly - thumbnail is last operation on this grid, no need to clone
-          let cropped = gridImage.crop(sourceX, sourceY, cropWidth, cropHeight);
+          const slideBuffer = await sandbox.files.read(slideFileName);
+          const slideBase64 = Buffer.from(slideBuffer).toString('base64');
+          const slideUlid = ulid();
 
-          // Encode to JPEG with quality 0.85 (good balance of size/quality)
-          const thumbnailBuffer = await cropped.encode('jpeg', { quality: 0.85 });
-          const thumbnailBase64 = encodeBase64(new Uint8Array(thumbnailBuffer));
-
-          extractedThumbnail = {
-            base64: thumbnailBase64,
-            mimeType: 'image/jpeg'
-          };
-
-          // Explicit cleanup to free memory
-          cropped = null as any;
-
-          const durationMs = Date.now() - startTime;
-          log.assetGen.info(reqId, 'Thumbnail extracted from grid', {
-            gridIndex: grid.metadata.gridIndex,
-            durationMs,
-            bufferByteLength: thumbnailBuffer.byteLength
+          allSlides.push({
+            base64: slideBase64,
+            mimeType: 'image/png',
+            metadata: { slideIndex: pos.slideIndex },
+            ulid: slideUlid
           });
 
-          continue; // Skip the rest since this is the thumbnail
-        }
-
-        // Skip empty cells and thumbnail cells
-        if (pos.isEmpty || pos.isThumbnail) continue;
-        if (pos.slideIndex === null) continue;
-
-        const startTime = Date.now();
-
-        const cropWidth = pos.cropRect.w;
-        const cropHeight = pos.cropRect.h;
-        const sourceX = pos.cropRect.x;
-        const sourceY = pos.cropRect.y;
-
-        log.assetGen.debug(reqId, `Cropping slide ${pos.slideIndex}`, {
-          cropWidth,
-          cropHeight,
-          sourceX,
-          sourceY,
-          gridWidth: gridImage.width,
-          gridHeight: gridImage.height
-        });
-
-        // CRITICAL: Clone the grid image before cropping because crop() mutates in place!
-        // Each crop needs to start from the original grid, not a previously cropped version
-        let gridClone: Image | null = gridImage.clone();
-
-        // Crop the cloned image
-        let cropped: Image | null = gridClone.crop(sourceX, sourceY, cropWidth, cropHeight);
-
-        log.assetGen.debug(reqId, `Cropped slide ${pos.slideIndex}`, {
-          cropWidth,
-          cropHeight,
-          sourceX,
-          sourceY,
-          croppedWidth: cropped.width,
-          croppedHeight: cropped.height
-        });
-
-        // Encode back to PNG
-        let slideBuffer: ArrayBuffer | null;
-        try {
-          slideBuffer = await cropped.encode('png');
-          log.assetGen.debug(reqId, `Encoded slide ${pos.slideIndex}`, {
+          log.assetGen.info(reqId, `Slide ${pos.slideIndex} extracted`, {
+            slideIndex: pos.slideIndex,
+            ulid: slideUlid,
             bufferByteLength: slideBuffer.byteLength
           });
-        } catch (encodeError) {
-          log.assetGen.error(reqId, `Failed to encode slide ${pos.slideIndex}`, encodeError as Error);
-          throw encodeError;
+
+          // Buffer goes out of scope here - garbage collected
         }
-
-        // Convert to base64 using cross-image's encodeBase64
-        let slideBase64: string;
-        try {
-          slideBase64 = encodeBase64(new Uint8Array(slideBuffer));
-        } catch (base64Error) {
-          log.assetGen.error(reqId, `Failed to encode base64 for slide ${pos.slideIndex}`, base64Error as Error, {
-            bufferByteLength: slideBuffer.byteLength
-          });
-          throw base64Error;
-        }
-
-        const slideUlid = ulid();
-        const durationMs = Date.now() - startTime;
-
-        allSlides.push({
-          base64: slideBase64,
-          mimeType: 'image/png',
-          metadata: { slideIndex: pos.slideIndex },
-          ulid: slideUlid
-        });
-
-        log.assetGen.info(reqId, `Slide ${pos.slideIndex} extracted`, {
-          slideIndex: pos.slideIndex,
-          ulid: slideUlid,
-          width: cropWidth,
-          height: cropHeight,
-          durationMs
-        });
-
-        // Explicit cleanup to free memory after each slide
-        gridClone = null;
-        cropped = null;
-        slideBuffer = null;
       }
 
-      // Explicit cleanup after processing entire grid to free memory
-      gridImage = null;
+      log.assetGen.info(reqId, 'Grid splitting complete', {
+        totalSlides: allSlides.length,
+        thumbnailExtracted: !!extractedThumbnail
+      });
+
+      // Sort slides by slideIndex to ensure correct order
+      allSlides.sort((a, b) => a.metadata.slideIndex - b.metadata.slideIndex);
+
+      return { slides: allSlides, thumbnail: extractedThumbnail };
+    } finally {
+      // Always kill sandbox to prevent orphans
+      if (sandbox) {
+        log.assetGen.debug(reqId, 'Killing E2B sandbox');
+        await sandbox.kill();
+        log.assetGen.debug(reqId, 'E2B sandbox killed');
+      }
     }
-
-    log.assetGen.info(reqId, 'Grid splitting complete', {
-      totalSlides: allSlides.length,
-      thumbnailExtracted: !!extractedThumbnail
-    });
-
-    // Sort slides by slideIndex to ensure correct order
-    allSlides.sort((a, b) => a.metadata.slideIndex - b.metadata.slideIndex);
-
-    return { slides: allSlides, thumbnail: extractedThumbnail };
   }
 
   /**
