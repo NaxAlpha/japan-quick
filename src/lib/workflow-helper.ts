@@ -18,6 +18,13 @@ export interface TokenUsage {
   outputTokens: number;
 }
 
+export interface TokenUsageInfo {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  slideIndex?: number;  // Optional: for audio generation cost tracking
+}
+
 export interface AIResultMapping {
   mapping: Map<string, string>;
   formatted: AIArticleInput[];

@@ -12,6 +12,7 @@ import type { Video, VideoScript, VideoAsset, TTSVoice } from '../types/video.js
 import type { Env } from '../types/env.js';
 import { log, generateRequestId } from '../lib/logger.js';
 import { RETRY_POLICIES, SCRAPING, VIDEO_RENDERING } from '../lib/constants.js';
+import type { TokenUsageInfo } from '../lib/workflow-helper.js';
 
 export interface AssetGenerationParams {
   videoId: number;
@@ -339,8 +340,8 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
       });
 
       // Step 7: Generate and upload audio for each slide
-      // CRITICAL: Generate and upload each slide individually to avoid 1MiB step output limit
-      const { audioCount, slideAudioAssetIds } = await step.do('generate-and-upload-audio', {
+      // CRITICAL: Parallel audio generation using queue pattern with concurrency limit
+      const { audioCount, slideAudioAssetIds, audioTokenUsage } = await step.do('generate-and-upload-audio', {
         retries: {
           limit: RETRY_POLICIES.DEFAULT.limit,
           delay: '5 seconds',
@@ -356,37 +357,93 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
         `).bind(videoId).run();
         log.assetGenerationWorkflow.info(reqId, 'Deleted existing audio assets', { videoId });
 
-        let uploadedCount = 0;
+        // Concurrency limit based on TTS model rate limits
+        // Flash: ~1,502 QPM, Pro: ~125 QPM
+        // Use conservative concurrency: 10 for Pro, 25 for Flash
+        const isProModel = video.tts_model === 'gemini-2.5-pro-preview-tts';
+        const CONCURRENCY = isProModel ? 10 : 25;
+
+        log.assetGenerationWorkflow.info(reqId, 'Starting parallel audio generation', {
+          slideCount: script.slides.length,
+          concurrency: CONCURRENCY,
+          model: video.tts_model
+        });
+
         const audioULIDs: string[] = [];
+        const audioTokenUsage: TokenUsageInfo[] = [];
+        const errors: Array<{ slideIndex: number; error: string }> = [];
 
-        for (let i = 0; i < script.slides.length; i++) {
-          const audio = await assetGen.generateSlideAudio(
-            reqId,
-            script.slides[i].audioNarration,
-            ttsVoice,
-            video.tts_model,
-            script.slides[i].directorNotes,  // NEW: pass director notes from script
-            script.slides[i].audioProfile    // NEW: pass audio profile from script
-          );
+        // Parallel queue: maintain CONCURRENCY number of running promises
+        let currentIndex = 0;
+        const queue: Promise<void>[] = [];
 
-          // Set the correct slideIndex in metadata
-          audio.metadata.slideIndex = i;
+        const processSlide = async (slideIndex: number): Promise<void> => {
+          try {
+            const audio = await assetGen.generateSlideAudio(
+              reqId,
+              script.slides[slideIndex].audioNarration,
+              ttsVoice,
+              video.tts_model,
+              script.slides[slideIndex].directorNotes,
+              script.slides[slideIndex].audioProfile
+            );
 
-          // Upload with ULID-based naming
-          const data = Uint8Array.from(atob(audio.base64), c => c.charCodeAt(0));
-          const { key, size, publicUrl } = await r2.uploadAsset(audio.ulid, data.buffer, audio.mimeType);
+            // Store token usage with slideIndex
+            audioTokenUsage.push({ ...audio.tokenUsage, slideIndex });
 
-          await this.env.DB.prepare(`
-            INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, public_url, mime_type, file_size, metadata)
-            VALUES (?, 'slide_audio', ?, ?, ?, ?, ?, ?)
-          `).bind(videoId, i, key, publicUrl, audio.mimeType, size, JSON.stringify(audio.metadata)).run();
+            // Set the correct slideIndex in metadata
+            audio.metadata.slideIndex = slideIndex;
 
-          audioULIDs.push(audio.ulid);
-          uploadedCount++;
-          log.assetGenerationWorkflow.info(reqId, `Slide audio ${i} generated and uploaded`, { videoId, ulid: audio.ulid, key, size });
+            // Upload with ULID-based naming
+            const data = Uint8Array.from(atob(audio.base64), c => c.charCodeAt(0));
+            const { key, size, publicUrl } = await r2.uploadAsset(audio.ulid, data.buffer, audio.mimeType);
+
+            await this.env.DB.prepare(`
+              INSERT INTO video_assets (video_id, asset_type, asset_index, r2_key, public_url, mime_type, file_size, metadata)
+              VALUES (?, 'slide_audio', ?, ?, ?, ?, ?, ?)
+            `).bind(videoId, slideIndex, key, publicUrl, audio.mimeType, size, JSON.stringify(audio.metadata)).run();
+
+            audioULIDs.push(audio.ulid);
+            log.assetGenerationWorkflow.info(reqId, `Slide audio ${slideIndex} generated and uploaded`, {
+              videoId,
+              ulid: audio.ulid,
+              key,
+              size,
+              durationMs: audio.metadata.durationMs
+            });
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+            errors.push({ slideIndex, error: errorMsg });
+            log.assetGenerationWorkflow.error(reqId, `Slide audio ${slideIndex} failed`, error as Error, { slideIndex });
+          }
+        };
+
+        // Enqueue first CONCURRENCY tasks
+        for (; currentIndex < Math.min(CONCURRENCY, script.slides.length); currentIndex++) {
+          queue.push(processSlide(currentIndex));
         }
 
-        return { audioCount: uploadedCount, slideAudioAssetIds: audioULIDs };
+        // Process remaining slides: as one finishes, start the next
+        while (currentIndex < script.slides.length) {
+          const finished = await Promise.race(queue);
+          const finishedIndex = queue.indexOf(finished);
+          if (finishedIndex !== -1) {
+            queue.splice(finishedIndex, 1);
+          }
+          queue.push(processSlide(currentIndex));
+          currentIndex++;
+        }
+
+        // Wait for all remaining tasks to complete
+        await Promise.all(queue);
+
+        // If there were any failures, throw after all successful ones are saved
+        if (errors.length > 0) {
+          const errorSummary = errors.map(e => `Slide ${e.slideIndex}: ${e.error}`).join('; ');
+          throw new Error(`Audio generation partially failed: ${errorSummary}`);
+        }
+
+        return { audioCount: audioULIDs.length, slideAudioAssetIds: audioULIDs, audioTokenUsage };
       });
       log.assetGenerationWorkflow.info(reqId, 'Step completed', { step: 'generate-and-upload-audio', audioCount });
 
@@ -438,6 +495,61 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
         log.assetGenerationWorkflow.info(reqId, 'All image generation costs logged', {
           generationCount: tokenUsage.length,
           totalImageCost
+        });
+      });
+
+      // Step 8.5: Log audio costs
+      await step.do('log-audio-costs', {
+        retries: {
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: '2 seconds',
+          backoff: 'constant'
+        }
+      }, async () => {
+        // Get pricing from database
+        const modelInfo = await this.env.DB.prepare(`
+          SELECT input_cost_per_million, output_cost_per_million FROM models WHERE id = ?
+        `).bind(video.tts_model).first<{ input_cost_per_million: number; output_cost_per_million: number }>();
+
+        if (!modelInfo) {
+          log.assetGenerationWorkflow.warn(reqId, 'TTS model not found in pricing table', { model: video.tts_model });
+          return;
+        }
+
+        const inputCostPerMillion = modelInfo.input_cost_per_million;
+        const outputCostPerMillion = modelInfo.output_cost_per_million;
+        let totalAudioCost = 0;
+
+        for (const usage of audioTokenUsage) {
+          const inputCost = (usage.inputTokens / 1_000_000) * inputCostPerMillion;
+          const outputCost = (usage.outputTokens / 1_000_000) * outputCostPerMillion;
+          const cost = inputCost + outputCost;
+          totalAudioCost += cost;
+
+          await this.env.DB.prepare(`
+            INSERT INTO cost_logs (video_id, log_type, model_id, input_tokens, output_tokens, cost)
+            VALUES (?, 'audio-generation', ?, ?, ?, ?)
+          `).bind(
+            videoId,
+            video.tts_model,
+            usage.inputTokens,
+            usage.outputTokens,
+            cost
+          ).run();
+
+          log.assetGenerationWorkflow.info(reqId, 'Audio cost logged', {
+            videoId,
+            slideIndex: usage.slideIndex,
+            model: video.tts_model,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            cost
+          });
+        }
+
+        log.assetGenerationWorkflow.info(reqId, 'All audio generation costs logged', {
+          slideCount: audioTokenUsage.length,
+          totalAudioCost
         });
       });
 

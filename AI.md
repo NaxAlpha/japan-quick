@@ -311,8 +311,18 @@ All `/api/*` routes require JWT authentication:
   - Builds enhanced prompt with AUDIO PROFILE and DIRECTOR'S NOTES sections
   - Profile guidance: urgent (fast-paced), calm (measured), excited (energetic), serious (grave), casual (relaxed), dramatic (heightened emotion)
   - Ensures smooth audio flow across slides by providing style context to TTS model
+  - **Returns token usage**: inputTokens, outputTokens, totalTokens extracted from response.usageMetadata
+
+**Parallel Audio Generation:**
+- Audio generated using parallel queue pattern with concurrency limits
+- **Pro Model** (gemini-2.5-pro-preview-tts): 10 concurrent requests (125 QPM rate limit)
+- **Flash Model** (gemini-2.5-flash-preview-tts): 25 concurrent requests (1,502 QPM rate limit)
+- Each successful audio generation is immediately saved to database
+- Failures don't rollback successful audio - partial failures reported in error summary
 
 **Cost Tracking:** All operations logged to `cost_logs` table
+- Image generation: `log_type = 'image-generation'`
+- Audio generation: `log_type = 'audio-generation'` (NEW - includes slideIndex for per-slide tracking)
 
 ## Video Asset Generation
 

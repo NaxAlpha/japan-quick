@@ -39,6 +39,7 @@ interface SlideAudioResult {
   mimeType: string;
   metadata: SlideAudioMetadata;
   ulid: string;
+  tokenUsage: TokenUsageInfo;
 }
 
 interface PromptResult {
@@ -479,6 +480,14 @@ export class AssetGeneratorService {
       }
     });
 
+    // Extract token usage from response
+    const usageMetadata = response.usageMetadata;
+    const tokenUsage: TokenUsageInfo = {
+      inputTokens: usageMetadata?.promptTokenCount || 0,
+      outputTokens: usageMetadata?.candidatesTokenCount || 0,
+      totalTokens: usageMetadata?.totalTokenCount || 0
+    };
+
     // Log response structure for debugging
     log.assetGen.info(reqId, 'TTS response received', {
       hasCandidates: !!response.candidates,
@@ -520,13 +529,14 @@ export class AssetGeneratorService {
     const elapsed = Date.now() - startTime;
     const audioUlid = ulid();
 
-    log.assetGen.info(reqId, 'Slide audio generated', { durationMs, elapsedMs: elapsed, ulid: audioUlid });
+    log.assetGen.info(reqId, 'Slide audio generated', { durationMs, elapsedMs: elapsed, ulid: audioUlid, tokenUsage });
 
     return {
       base64: wavBase64,
       mimeType: 'audio/wav',
       metadata,
-      ulid: audioUlid
+      ulid: audioUlid,
+      tokenUsage
     };
   }
 
