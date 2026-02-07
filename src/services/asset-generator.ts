@@ -357,7 +357,10 @@ export class AssetGeneratorService {
               fileName: slideFileName
             });
 
-            const thumbnailBuffer = await sandbox.files.read(slideFileName, { timeoutMs: 60000 }); // 1 minute
+            const thumbnailBuffer = await sandbox.files.read(slideFileName, {
+              format: 'bytes',
+              timeoutMs: 60000
+            }); // 1 minute
             const thumbnailBase64 = Buffer.from(thumbnailBuffer).toString('base64');
 
             extractedThumbnail = {
@@ -382,7 +385,10 @@ export class AssetGeneratorService {
             fileName: slideFileName
           });
 
-          const slideBuffer = await sandbox.files.read(slideFileName, { timeoutMs: 60000 }); // 1 minute
+          const slideBuffer = await sandbox.files.read(slideFileName, {
+            format: 'bytes',
+            timeoutMs: 60000
+          }); // 1 minute
           const slideBase64 = Buffer.from(slideBuffer).toString('base64');
           const slideUlid = ulid();
 
@@ -909,8 +915,10 @@ export class AssetGeneratorService {
     }
 
     // Fill remaining cells as empty
-    const usedCells = slideIndices.length + (includeThumbnail ? 1 : 0);
-    for (let cell = usedCells; cell < 9; cell++) {
+    const usedCells = new Set(positions.map(pos => pos.cell));
+    for (let cell = 0; cell < 9; cell++) {
+      if (usedCells.has(cell)) continue;
+
       const row = Math.floor(cell / 3);
       const col = cell % 3;
 
