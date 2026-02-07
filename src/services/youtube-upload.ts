@@ -764,7 +764,7 @@ cat /home/user/upload_response.txt
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'image/png'
+        'Content-Type': 'image/jpeg'
       },
       body: thumbnailImageBytes
     });
