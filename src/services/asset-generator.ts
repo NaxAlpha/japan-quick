@@ -294,7 +294,7 @@ export class AssetGeneratorService {
       log.assetGen.info(reqId, 'Creating E2B sandbox for grid splitting');
       sandbox = await Sandbox.create('video-renderer', {
         apiKey: this.e2bApiKey,
-        timeoutMs: 300000 // 5 minutes timeout
+        timeoutMs: 300000 // 5 minutes timeout (should be plenty with fast @ crop)
       });
       log.assetGen.info(reqId, 'E2B sandbox created', { sandboxId: sandbox.sandboxId });
 
@@ -310,22 +310,23 @@ export class AssetGeneratorService {
 
         // Convert base64 to buffer and write to sandbox
         const gridBuffer = Buffer.from(grid.base64, 'base64');
-        await sandbox.files.write(gridFileName, gridBuffer);
+        await sandbox.files.write(gridFileName, gridBuffer, { timeoutMs: 120000 }); // 2 minutes for large 4K grid files
 
         log.assetGen.info(reqId, `Grid ${grid.metadata.gridIndex} written to sandbox`, {
           byteLength: gridBuffer.byteLength
         });
 
         // Use ImageMagick to split the grid into 9 slides
+        // Using magick command (v7+) with 3x3@ for equal tiles (fast, ~0.4s)
         // Output format: slide_<gridIndex>_<cellIndex>.png (0-indexed)
         const outputPattern = `/home/user/slide_${grid.metadata.gridIndex}_%d.png`;
-        const convertCmd = `convert ${gridFileName} -crop 3x3 +repage -quality 90 ${outputPattern}`;
+        const convertCmd = `magick ${gridFileName} -crop 3x3@ +repage -quality 90 ${outputPattern}`;
 
         log.assetGen.info(reqId, `Splitting grid ${grid.metadata.gridIndex} with ImageMagick`, {
           command: convertCmd
         });
 
-        const convertResult = await sandbox.commands.run(convertCmd, { timeoutMs: 60000 });
+        const convertResult = await sandbox.commands.run(convertCmd, { timeoutMs: 60000 }); // 1 minute should be plenty with @ notation
 
         if (convertResult.exitCode !== 0) {
           log.assetGen.error(reqId, `ImageMagick convert failed for grid ${grid.metadata.gridIndex}`, new Error('convert failed'), {
@@ -356,7 +357,7 @@ export class AssetGeneratorService {
               fileName: slideFileName
             });
 
-            const thumbnailBuffer = await sandbox.files.read(slideFileName);
+            const thumbnailBuffer = await sandbox.files.read(slideFileName, { timeoutMs: 60000 }); // 1 minute
             const thumbnailBase64 = Buffer.from(thumbnailBuffer).toString('base64');
 
             extractedThumbnail = {
@@ -381,7 +382,7 @@ export class AssetGeneratorService {
             fileName: slideFileName
           });
 
-          const slideBuffer = await sandbox.files.read(slideFileName);
+          const slideBuffer = await sandbox.files.read(slideFileName, { timeoutMs: 60000 }); // 1 minute
           const slideBase64 = Buffer.from(slideBuffer).toString('base64');
           const slideUlid = ulid();
 
