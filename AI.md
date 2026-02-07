@@ -354,6 +354,9 @@ All `/api/*` routes require JWT authentication:
 - Uploaded to R2 with ULID-based keys
 - Stored as `slide_image` asset type
 - **Streaming pattern:** Read one slide file at a time, upload immediately, discard buffer to minimize memory usage
+- **Binary read requirement (CRITICAL):** Use `sandbox.files.read(path, { format: 'bytes' })` for split image files.
+  - E2B `files.read()` defaults to text mode; text mode corrupts binary headers (PNG `89504E47` becomes `EFBFBD50...`).
+  - Corrupted slide files surface later as render-stage image conversion failures (ffmpeg errors/exit codes).
 
 **TTS Audio:**
 - 30 available voices (randomly selected, stored in `videos.tts_voice`)
