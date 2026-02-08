@@ -383,7 +383,8 @@ All `/api/*` routes require JWT authentication:
 - Pre-installed: Remotion 4.0.414, FFmpeg, ImageMagick, Chromium, fonts-noto-cjk-extra, curl
 - Remotion project: `/home/user/remotion` with all dependencies
 - Build script: `.e2b/build.ts`
-- Timeout: 40 minutes (2400000ms for sandbox, 20 minutes for workflow step)
+- Timeout: 40 minutes for sandbox (`2400000ms`), 60 minutes for workflow render step (`3600000ms`)
+- Render step retry policy: no automatic retry (prevents duplicate expensive renders and preserves first failure signal)
 
 **Remotion Project:**
 - Location: `.e2b/remotion-template/`
@@ -474,9 +475,9 @@ Remotion components require React performance patterns to avoid memory leaks dur
 2. Fetch rendered video asset from R2
 3. Create YouTube resumable upload session
 4. Upload video in 256KB chunks (streaming from R2, no full download)
-5. **Upload thumbnail to YouTube** (thumbnail_image asset from R2)
+5. **Upload thumbnail to YouTube** (thumbnail_image asset from R2; failure is treated as non-fatal warning)
 6. Poll for YouTube processing completion
-7. Store YouTube metadata in `youtube_info` table
+7. Store YouTube metadata in `youtube_info` table using upsert (`ON CONFLICT(video_id)`) so re-uploads replace prior YouTube IDs instead of failing
 
 **Resumable Upload Protocol (IMPORTANT):**
 - Chunk size: 256KB (262,144 bytes) - MUST be multiples of 256KB except final chunk
@@ -491,14 +492,19 @@ Remotion components require React performance patterns to avoid memory leaks dur
   - Parses Range header for correct offset tracking
   - Only uploads when buffer has 256KB or when final chunk ready
 - `uploadVideoBytes()` - Alternative method for byte array upload
-- `uploadThumbnail()` - Uploads thumbnail (max 2MB PNG)
+- `uploadThumbnail()` - Auto-prepares thumbnail for YouTube (resize + JPEG quality steps), then uploads
 
 **Thumbnail Upload:**
 - Service: `src/services/youtube-upload.ts` - `uploadThumbnail()` method
 - POST to `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId={id}`
-- Max file size: 2MB
-- Format: PNG
+- Hard limit: 2MB
+- Upload format: JPEG
+- Auto-prep strategy before upload:
+  - Resize attempts: `1280x720` → `1152x648` → `1024x576`
+  - JPEG quality attempts: `95` → `90` → `85` → `80`
+  - First candidate under 2MB is uploaded
 - Triggered automatically after successful video upload
+- If thumbnail asset is missing or thumbnail upload fails, workflow still marks video as uploaded and stores warning text in `videos.youtube_upload_error`
 
 **Upload Settings (Japanese Content):**
 - Privacy: `private` (configurable, currently private for testing)
@@ -515,10 +521,12 @@ Remotion components require React performance patterns to avoid memory leaks dur
 - Progress display during upload
 - YouTube link and video ID when uploaded
 - Re-upload capability
+- Shows warning banner when `youtube_upload_status='uploaded'` and `youtube_upload_error` is populated
 
 **Status Transitions:**
 - `pending` → `uploading` → `processing` → `uploaded` (success)
 - `*` → `error` (failure at any stage)
+- `uploaded` may include non-fatal warning text in `youtube_upload_error` for thumbnail-specific issues
 
 **API Endpoints:**
 - `POST /api/videos/:id/youtube-upload` - Trigger upload workflow
