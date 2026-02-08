@@ -12,6 +12,7 @@ import type {
 } from '../types/youtube.js';
 import type { VideoScript, YouTubeInfo } from '../types/video.js';
 import { Sandbox } from 'e2b';
+import { Image } from 'cross-image';
 
 const log = createLogger('YouTubeUpload');
 
@@ -40,6 +41,15 @@ const MAX_PROCESSING_TIME_MS = 30 * 60 * 1000;
 // Maximum retries for final status query after upload complete
 const MAX_STATUS_QUERY_RETRIES = 5;
 const STATUS_QUERY_RETRY_DELAY_MS = 2000; // 2 seconds
+
+// YouTube thumbnail constraints
+const MAX_THUMBNAIL_SIZE_BYTES = 2 * 1024 * 1024; // 2MB hard limit
+const THUMBNAIL_TARGET_SIZES = [
+  { width: 1280, height: 720 },
+  { width: 1152, height: 648 },
+  { width: 1024, height: 576 }
+] as const;
+const THUMBNAIL_QUALITY_STEPS = [95, 90, 85, 80] as const;
 
 /**
  * YouTube Upload Service Class
@@ -731,32 +741,103 @@ cat /home/user/upload_response.txt
     };
   }
 
+  private async prepareThumbnailForUpload(
+    reqId: string,
+    thumbnailImageBytes: Uint8Array
+  ): Promise<{
+    bytes: Uint8Array;
+    quality: number;
+    width: number;
+    height: number;
+    originalSizeBytes: number;
+  }> {
+    const sourceImage = await Image.decode(thumbnailImageBytes);
+    const originalSizeBytes = thumbnailImageBytes.length;
+    let bestCandidate: { bytes: Uint8Array; quality: number; width: number; height: number } | null = null;
+
+    for (const targetSize of THUMBNAIL_TARGET_SIZES) {
+      const workingImage = sourceImage.clone();
+      const requiresResize = workingImage.width !== targetSize.width || workingImage.height !== targetSize.height;
+
+      if (requiresResize) {
+        workingImage.resize({
+          width: targetSize.width,
+          height: targetSize.height,
+          fit: 'fill',
+          method: 'bicubic'
+        });
+      }
+
+      for (const quality of THUMBNAIL_QUALITY_STEPS) {
+        const encodedBytes = await workingImage.encode('jpeg', { quality });
+        const candidate = {
+          bytes: encodedBytes,
+          quality,
+          width: workingImage.width,
+          height: workingImage.height
+        };
+
+        if (!bestCandidate || candidate.bytes.length < bestCandidate.bytes.length) {
+          bestCandidate = candidate;
+        }
+
+        if (candidate.bytes.length <= MAX_THUMBNAIL_SIZE_BYTES) {
+          log.info(reqId, 'Prepared thumbnail for YouTube upload', {
+            originalSizeBytes,
+            finalSizeBytes: candidate.bytes.length,
+            quality,
+            width: workingImage.width,
+            height: workingImage.height,
+            wasResized: requiresResize
+          });
+
+          return {
+            ...candidate,
+            originalSizeBytes
+          };
+        }
+      }
+    }
+
+    if (!bestCandidate) {
+      throw new Error('Failed to create thumbnail candidate for YouTube upload');
+    }
+
+    const finalSizeMB = (bestCandidate.bytes.length / 1024 / 1024).toFixed(2);
+    throw new Error(
+      `Unable to compress thumbnail below 2MB. Best result: ${finalSizeMB}MB at ` +
+      `${bestCandidate.width}x${bestCandidate.height}, quality=${bestCandidate.quality}`
+    );
+  }
+
   /**
    * Upload thumbnail to YouTube
    * @param reqId Request ID for logging
    * @param accessToken YouTube access token
    * @param youtubeVideoId YouTube video ID
-   * @param thumbnailImageBytes Thumbnail image bytes (Uint8Array, max 2MB)
+   * @param thumbnailImageBytes Thumbnail image bytes
    */
   async uploadThumbnail(
     reqId: string,
     accessToken: string,
     youtubeVideoId: string,
     thumbnailImageBytes: Uint8Array
-  ): Promise<void> {
-    const sizeMB = (thumbnailImageBytes.length / 1024 / 1024).toFixed(2);
+  ): Promise<{
+    originalSizeBytes: number;
+    uploadedSizeBytes: number;
+    quality: number;
+    width: number;
+    height: number;
+  }> {
+    const originalSizeMB = (thumbnailImageBytes.length / 1024 / 1024).toFixed(2);
 
     log.info(reqId, 'Uploading thumbnail to YouTube', {
       youtubeVideoId,
-      sizeBytes: thumbnailImageBytes.length,
-      sizeMB
+      originalSizeBytes: thumbnailImageBytes.length,
+      originalSizeMB
     });
 
-    // Validate file size (YouTube limit: 2MB)
-    const MAX_THUMBNAIL_SIZE = 2 * 1024 * 1024; // 2MB
-    if (thumbnailImageBytes.length > MAX_THUMBNAIL_SIZE) {
-      throw new Error(`Thumbnail image size (${sizeMB}MB) exceeds YouTube limit of 2MB`);
-    }
+    const preparedThumbnail = await this.prepareThumbnailForUpload(reqId, thumbnailImageBytes);
 
     const url = `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${youtubeVideoId}`;
 
@@ -766,7 +847,7 @@ cat /home/user/upload_response.txt
         'Authorization': `Bearer ${accessToken}`,
         'Content-Type': 'image/jpeg'
       },
-      body: thumbnailImageBytes
+      body: preparedThumbnail.bytes
     });
 
     if (!response.ok) {
@@ -781,7 +862,20 @@ cat /home/user/upload_response.txt
 
     log.info(reqId, 'Thumbnail uploaded successfully', {
       youtubeVideoId,
-      result
+      result,
+      originalSizeBytes: preparedThumbnail.originalSizeBytes,
+      uploadedSizeBytes: preparedThumbnail.bytes.length,
+      quality: preparedThumbnail.quality,
+      width: preparedThumbnail.width,
+      height: preparedThumbnail.height
     });
+
+    return {
+      originalSizeBytes: preparedThumbnail.originalSizeBytes,
+      uploadedSizeBytes: preparedThumbnail.bytes.length,
+      quality: preparedThumbnail.quality,
+      width: preparedThumbnail.width,
+      height: preparedThumbnail.height
+    };
   }
 }

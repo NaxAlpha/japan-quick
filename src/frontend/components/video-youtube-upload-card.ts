@@ -118,6 +118,25 @@ export class VideoYouTubeUploadCard extends LitElement {
       color: #58544c;
       border: 1px solid #e8e6e1;
     }
+
+    .warning-message {
+      padding: 1rem;
+      background: #0a0a0a;
+      border: 2px solid #f97316;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      color: #f97316;
+      margin-bottom: 1rem;
+      position: relative;
+      z-index: 1;
+    }
+
+    .warning-message::before {
+      content: '[ WARNING ]';
+      display: block;
+      margin-bottom: 0.5rem;
+      font-weight: 700;
+    }
   `];
 
   @property({ type: Object })
@@ -176,6 +195,10 @@ export class VideoYouTubeUploadCard extends LitElement {
         <div class="card-body">
           ${youtube_upload_error && youtube_upload_status === 'error' ? html`
             <div class="error-message">[ ERROR: ${youtube_upload_error} ]</div>
+          ` : ''}
+
+          ${youtube_upload_error && youtube_upload_status === 'uploaded' ? html`
+            <div class="warning-message">${youtube_upload_error}</div>
           ` : ''}
 
           ${youtube_upload_status === 'pending' || youtube_upload_status === 'error' ? html`

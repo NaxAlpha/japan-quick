@@ -225,6 +225,9 @@ export const VIDEO_RENDERING = {
   // FFmpeg execution timeout (also used for Remotion render command)
   FFMPEG_TIMEOUT_MS: 1800000 as number, // 30 minutes - increased for long videos with network overhead
 
+  // Workflow render step timeout (includes render + upload)
+  WORKFLOW_RENDER_STEP_TIMEOUT_MS: 3600000 as number, // 60 minutes
+
   // Asset fetching timeout
   ASSET_FETCH_TIMEOUT_MS: 60000 as number, // 1 minute
 

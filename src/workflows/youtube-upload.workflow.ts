@@ -176,6 +176,21 @@ export class YouTubeUploadWorkflow extends WorkflowEntrypoint<Env['Bindings'], Y
             contains_synthetic_media, not_paid_content, upload_started_at, upload_completed_at
           )
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(video_id) DO UPDATE SET
+            youtube_video_id = excluded.youtube_video_id,
+            youtube_video_url = excluded.youtube_video_url,
+            title = excluded.title,
+            description = excluded.description,
+            privacy_status = excluded.privacy_status,
+            tags = excluded.tags,
+            category_id = excluded.category_id,
+            made_for_kids = excluded.made_for_kids,
+            self_declared_made_for_kids = excluded.self_declared_made_for_kids,
+            contains_synthetic_media = excluded.contains_synthetic_media,
+            not_paid_content = excluded.not_paid_content,
+            upload_started_at = excluded.upload_started_at,
+            upload_completed_at = excluded.upload_completed_at,
+            updated_at = datetime('now')
           RETURNING id
         `).bind(
           completedInfo.video_id,
@@ -244,72 +259,103 @@ export class YouTubeUploadWorkflow extends WorkflowEntrypoint<Env['Bindings'], Y
       }
 
       // Step 8: Upload thumbnail
-      await step.do('upload-thumbnail', {
+      const thumbnailResult = await step.do('upload-thumbnail', {
         retries: {
-          limit: RETRY_POLICIES.DEFAULT.limit,
+          // Keep this step deterministic: handle thumbnail failures as warnings without workflow retries.
+          limit: 0,
           delay: '5 seconds',
           backoff: 'exponential'
         }
       }, async () => {
-        // Query for thumbnail_image asset
-        const thumbnailAsset = await this.env.DB.prepare(`
-          SELECT r2_key
-          FROM video_assets
-          WHERE video_id = ? AND asset_type = 'thumbnail_image'
-          ORDER BY created_at DESC
-          LIMIT 1
-        `).bind(videoId).first<{ r2_key: string }>();
-
-        if (!thumbnailAsset) {
-          log.youTubeUploadWorkflow.warn(reqId, 'No thumbnail asset found, skipping thumbnail upload', { videoId });
-          return;
-        }
-
-        // Fetch thumbnail from R2
-        const object = await this.env.ASSETS_BUCKET.get(thumbnailAsset.r2_key);
-        if (!object) {
-          throw new Error(`Thumbnail file not found in R2: ${thumbnailAsset.r2_key}`);
-        }
-
-        // Convert stream to bytes
-        const chunks: Uint8Array[] = [];
-        const reader = object.body.getReader();
-        let totalSize = 0;
-
         try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            chunks.push(value);
-            totalSize += value.length;
+          // Query for thumbnail_image asset
+          const thumbnailAsset = await this.env.DB.prepare(`
+            SELECT r2_key
+            FROM video_assets
+            WHERE video_id = ? AND asset_type = 'thumbnail_image'
+            ORDER BY created_at DESC
+            LIMIT 1
+          `).bind(videoId).first<{ r2_key: string }>();
+
+          if (!thumbnailAsset) {
+            const warning = 'Thumbnail asset missing; video uploaded without custom thumbnail';
+            log.youTubeUploadWorkflow.warn(reqId, warning, { videoId });
+            return {
+              thumbnailUploaded: false,
+              warning
+            };
           }
-        } finally {
-          reader.releaseLock();
+
+          // Fetch thumbnail from R2
+          const object = await this.env.ASSETS_BUCKET.get(thumbnailAsset.r2_key);
+          if (!object) {
+            const warning = `Thumbnail file missing in R2: ${thumbnailAsset.r2_key}`;
+            log.youTubeUploadWorkflow.warn(reqId, warning, { videoId });
+            return {
+              thumbnailUploaded: false,
+              warning
+            };
+          }
+
+          // Convert stream to bytes
+          const chunks: Uint8Array[] = [];
+          const reader = object.body.getReader();
+          let totalSize = 0;
+
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              chunks.push(value);
+              totalSize += value.length;
+            }
+          } finally {
+            reader.releaseLock();
+          }
+
+          // Combine chunks into single Uint8Array
+          const thumbnailBytes = new Uint8Array(totalSize);
+          let offset = 0;
+          for (const chunk of chunks) {
+            thumbnailBytes.set(chunk, offset);
+            offset += chunk.length;
+          }
+
+          log.youTubeUploadWorkflow.info(reqId, 'Uploading thumbnail to YouTube', {
+            videoId,
+            youtubeVideoId,
+            thumbnailSize: totalSize,
+            thumbnailSizeMB: (totalSize / 1024 / 1024).toFixed(2)
+          });
+
+          // Upload thumbnail to YouTube (auto-compression + resize handled in service)
+          const uploadService = new YouTubeUploadService(accessToken);
+          const uploadResult = await uploadService.uploadThumbnail(reqId, accessToken, youtubeVideoId, thumbnailBytes);
+
+          log.youTubeUploadWorkflow.info(reqId, 'Thumbnail uploaded successfully', {
+            videoId,
+            youtubeVideoId,
+            originalSizeBytes: uploadResult.originalSizeBytes,
+            uploadedSizeBytes: uploadResult.uploadedSizeBytes,
+            quality: uploadResult.quality,
+            width: uploadResult.width,
+            height: uploadResult.height
+          });
+
+          return {
+            thumbnailUploaded: true,
+            warning: null
+          };
+        } catch (error) {
+          const warning = `Thumbnail upload failed after compression attempts: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`;
+          log.youTubeUploadWorkflow.warn(reqId, warning, { videoId, youtubeVideoId });
+          return {
+            thumbnailUploaded: false,
+            warning
+          };
         }
-
-        // Combine chunks into single Uint8Array
-        const thumbnailBytes = new Uint8Array(totalSize);
-        let offset = 0;
-        for (const chunk of chunks) {
-          thumbnailBytes.set(chunk, offset);
-          offset += chunk.length;
-        }
-
-        log.youTubeUploadWorkflow.info(reqId, 'Uploading thumbnail to YouTube', {
-          videoId,
-          youtubeVideoId,
-          thumbnailSize: totalSize,
-          thumbnailSizeMB: (totalSize / 1024 / 1024).toFixed(2)
-        });
-
-        // Upload thumbnail to YouTube
-        const uploadService = new YouTubeUploadService(accessToken);
-        await uploadService.uploadThumbnail(reqId, accessToken, youtubeVideoId, thumbnailBytes);
-
-        log.youTubeUploadWorkflow.info(reqId, 'Thumbnail uploaded successfully', {
-          videoId,
-          youtubeVideoId
-        });
       });
 
       // Step 9: Update status to 'uploaded'
@@ -317,10 +363,19 @@ export class YouTubeUploadWorkflow extends WorkflowEntrypoint<Env['Bindings'], Y
         await this.env.DB.prepare(`
           UPDATE videos
           SET youtube_upload_status = 'uploaded',
+              youtube_upload_error = ?,
               updated_at = datetime('now')
           WHERE id = ?
-        `).bind(videoId).run();
+        `).bind(thumbnailResult.warning, videoId).run();
       });
+
+      if (thumbnailResult.warning) {
+        log.youTubeUploadWorkflow.warn(reqId, 'Video uploaded with thumbnail warning', {
+          videoId,
+          youtubeVideoId,
+          warning: thumbnailResult.warning
+        });
+      }
 
       log.youTubeUploadWorkflow.info(reqId, 'Workflow completed', {
         durationMs: Date.now() - startTime,

@@ -9,7 +9,7 @@ import { renderVideo } from '../services/video-renderer.js';
 import type { Video, VideoAsset, VideoScript } from '../types/video.js';
 import type { Env } from '../types/env.js';
 import { log, generateRequestId } from '../lib/logger.js';
-import { RETRY_POLICIES, VIDEO_RENDERING } from '../lib/constants.js';
+import { RETRY_POLICIES } from '../lib/constants.js';
 
 export interface VideoRenderParams {
   videoId: number;
@@ -209,11 +209,12 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
       // Step 6: Render video with E2B (resolution based on model - uploads directly to R2)
       const renderResult = await step.do('render-video', {
         retries: {
-          limit: 1, // Rendering is expensive, don't retry automatically
+          // Avoid duplicate expensive render attempts and preserve first failure reason.
+          limit: 0,
           delay: '30 seconds',
           backoff: 'constant'
         },
-        timeout: 1200000 // 20 minutes for renders
+        timeout: 3600000 // 60 minutes to allow long video renders + upload
       }, async () => {
         return await renderVideo(reqId, e2bKey, {
           script,

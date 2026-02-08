@@ -301,9 +301,14 @@ async function executeRemotion(
     const result = await sandbox.commands.run(remotionCommand, {
       timeoutMs: 0, // Disable timeout - let render run as long as needed
       onStdout: (data) => {
-        stdoutOutput += data + '\n';
+        const line = typeof data === 'string' ? data : String(data ?? '');
+        if (!line) {
+          return;
+        }
+
+        stdoutOutput += line + '\n';
         // Log progress updates (frame counts)
-        const frameMatch = data.trim().match(/Rendered\s+(\d+)\/(\d+)/);
+        const frameMatch = line.trim().match(/Rendered\s+(\d+)\/(\d+)/);
         if (frameMatch) {
           const current = parseInt(frameMatch[1]);
           const total = parseInt(frameMatch[2]);
@@ -312,12 +317,17 @@ async function executeRemotion(
         }
       },
       onStderr: (data) => {
-        stderrOutput += data + '\n';
+        const line = typeof data === 'string' ? data : String(data ?? '');
+        if (!line) {
+          return;
+        }
+
+        stderrOutput += line + '\n';
         // Log errors immediately
-        if (data.includes('ERROR') || data.includes('Failed') || data.includes('failed')) {
-          log.videoRenderer.error(reqId, 'Remotion stderr error: ' + data.trim());
+        if (line.includes('ERROR') || line.includes('Failed') || line.includes('failed')) {
+          log.videoRenderer.error(reqId, 'Remotion stderr error: ' + line.trim());
         } else {
-          log.videoRenderer.debug(reqId, 'remotion stderr: ' + data.trim());
+          log.videoRenderer.debug(reqId, 'remotion stderr: ' + line.trim());
         }
       }
     });
