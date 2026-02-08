@@ -3,7 +3,7 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
-import type { AISelectionOutput, VideoType, VideoScript, AIArticleInputWithContent, EnhancedAISelectionOutput, PastVideoContext, AIArticleInput, VideoFormat, UrgencyLevel, ScriptGenerationInputEnhanced, ScriptGenerationResultEnhanced } from '../types/video.js';
+import type { AISelectionOutput, VideoType, VideoScript, AIArticleInputWithContent, EnhancedAISelectionOutput, PastVideoContext, AIArticleInput, VideoFormat, UrgencyLevel, ScriptGenerationInputEnhanced, ScriptGenerationResultEnhanced, SelectionSchedulingContext } from '../types/video.js';
 import type { Article } from '../types/article.js';
 import { log } from '../lib/logger.js';
 import { buildSelectionPrompt, buildScriptPrompt, buildEnhancedSelectionPrompt, buildScriptPromptEnhanced } from '../lib/prompts.js';
@@ -225,11 +225,7 @@ export class GeminiService {
     reqId: string,
     articles: AIArticleInputWithContent[],
     pastVideos: PastVideoContext[],
-    schedulingContext: {
-      currentTimeJST: string;
-      videosCreatedToday: number;
-      totalDailyTarget: number;
-    }
+    schedulingContext: SelectionSchedulingContext
   ): Promise<{
     notes: string;
     shortTitle: string;

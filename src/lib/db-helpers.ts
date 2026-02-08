@@ -356,13 +356,13 @@ export async function getArticlesByStatus(
 
 /**
  * Get articles for video selection.
- * Filters by scraped_v2 status from last 24 hours and excludes already used articles.
+ * Filters by scraped_v2 status from last 48 hours and excludes already used articles.
  */
 export async function getEligibleArticlesForVideo(
   db: D1Database,
   options?: { hoursAgo?: number; limit?: number }
 ): Promise<Article[]> {
-  const { hoursAgo = 24, limit } = options ?? {};
+  const { hoursAgo = 48, limit } = options ?? {};
 
   let query = `
     SELECT a.* FROM articles a

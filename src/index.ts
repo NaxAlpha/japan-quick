@@ -7,6 +7,7 @@ import { videoRoutes } from './routes/videos.js';
 import youtubeRoutes from './routes/youtube.js';
 import { frontendRoutes } from './routes/frontend.js';
 import { renderPageTemplate } from './lib/html-template.js';
+import { evaluateVideoSelectionTrigger } from './lib/video-selection-policy.js';
 import type { Env } from './types/env.js';
 import { log } from './lib/logger.js';
 
@@ -81,15 +82,21 @@ app.get('/api/hello', (c) => {
 export default {
   fetch: app.fetch,
   scheduled: async (event: ScheduledEvent, env: Env['Bindings'], ctx: ExecutionContext) => {
-    const scheduledTime = new Date(event.scheduledTime).toISOString();
-    log.app.info('Scheduled handler invoked', { scheduledTime });
+    const scheduledDate = new Date(event.scheduledTime);
+    const scheduledTime = scheduledDate.toISOString();
+    const triggerDecision = evaluateVideoSelectionTrigger(scheduledDate);
+    log.app.info('Scheduled handler invoked', {
+      scheduledTime,
+      utcHour: triggerDecision.utcHour,
+      utcMinute: triggerDecision.utcMinute,
+      jstHour: triggerDecision.jstHour,
+      jstMinute: triggerDecision.jstMinute,
+      isOddJstHour: triggerDecision.isOddJstHour,
+      isHourMark: triggerDecision.isHourMark,
+      shouldTriggerVideoSelection: triggerDecision.shouldTrigger
+    });
 
     try {
-      const hour = new Date(event.scheduledTime).getUTCHours();
-      const minute = new Date(event.scheduledTime).getUTCMinutes();
-      const isJSTBusinessHours = hour === 23 || (hour >= 0 && hour <= 11);
-      const isHourMark = minute === 0;
-
       // Always run news workflows (hourly)
       const refreshInstance = await env.SCHEDULED_REFRESH_WORKFLOW.create({
         params: {}
@@ -101,17 +108,21 @@ export default {
       });
       log.app.info('Created article rescrape workflow', { workflowId: rescrapeInstance.id });
 
-      // Video selection: hourly during JST 8am-8pm only
-      if (isJSTBusinessHours && isHourMark) {
+      // Video selection: odd JST hours only (1, 3, ..., 23) on minute 00
+      if (triggerDecision.shouldTrigger) {
         const videoInstance = await env.VIDEO_SELECTION_WORKFLOW.create({
           params: {}
         });
         log.app.info('Created video selection workflow', { workflowId: videoInstance.id });
       } else {
         log.app.info('Skipped video selection workflow', {
-          reason: 'outside JST business hours or not on the hour',
-          isJSTBusinessHours,
-          isHourMark
+          reason: 'not odd JST hour at minute 00',
+          utcHour: triggerDecision.utcHour,
+          utcMinute: triggerDecision.utcMinute,
+          jstHour: triggerDecision.jstHour,
+          jstMinute: triggerDecision.jstMinute,
+          isOddJstHour: triggerDecision.isOddJstHour,
+          isHourMark: triggerDecision.isHourMark
         });
       }
     } catch (error) {

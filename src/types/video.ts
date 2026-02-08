@@ -284,6 +284,20 @@ export interface PastVideoContext {
   createdAt: string;
 }
 
+export interface SelectionFormatCounts {
+  single_short: number;
+  multi_short: number;
+  long: number;
+}
+
+export interface SelectionSchedulingContext {
+  currentTimeJST: string;
+  videosCreatedToday: number;
+  totalDailyTarget: number;
+  formatsToday: SelectionFormatCounts;
+  remainingTargets: SelectionFormatCounts;
+}
+
 // AI selection output format
 export interface AISelectionOutput {
   notes: string[];                   // Array of selection rationale
