@@ -24,20 +24,18 @@ japan-quick/
 ├── src/
 │   ├── index.ts                # Cloudflare Workers backend with Hono + workflow exports
 │   ├── middleware/
-│   │   ├── auth.ts            # Legacy Basic HTTP auth (deprecated)
-│   │   └── jwt-auth.ts        # JWT authentication middleware
+│   │   └── jwt-auth.ts         # JWT authentication middleware
 │   ├── lib/
 │   │   ├── logger.ts           # Structured logging utility with request ID tracking
 │   │   ├── html-template.ts    # HTML template utilities (with props support)
+│   │   ├── constants.ts        # Shared backend constants (retry policies, polling, status, URLs)
 │   │   ├── db-helpers.ts       # Common SQL pattern helpers (upsertArticle, upsertArticleVersion, etc.)
-│   │   ├── retry-helper.ts     # Retry logic with exponential backoff (withRetry, sleep, getRetryStatus)
-│   │   ├── comment-parser.ts   # Comment extraction utilities (JSON/HTML parsing, nested replies)
-│   │   ├── workflow-helper.ts  # AI workflow utilities (index mapping, cost calculation, prompt building)
+│   │   ├── route-helpers.ts    # Shared route lifecycle wrapper (request logging, error handling, status logging)
+│   │   ├── workflow-helper.ts  # Shared workflow types (TokenUsageInfo)
 │   │   ├── prompts.ts          # Centralized AI prompt templates (buildSelectionPrompt, buildEnhancedSelectionPrompt, buildScriptPrompt, buildScriptPromptEnhanced, buildGridImagePrompt)
 │   │   ├── dimensions.ts       # Grid dimension calculations for 1K/2K resolutions
 │   │   ├── image-fetcher.ts    # Fetch images from URLs and convert to base64
-│   │   ├── audio-helper.ts     # Audio conversion utilities (pcmToWav, calculatePcmDuration)
-│   │   └── auth.ts             # Frontend Basic Auth header generator (getAuthHeaders)
+│   │   └── audio-helper.ts     # Audio conversion utilities (pcmToWav, calculatePcmDuration)
 │   ├── frontend/
 │   │   ├── components/
 │   │   │   ├── video-youtube-upload-card.ts  # YouTube upload card component
@@ -81,7 +79,9 @@ japan-quick/
 │   │   ├── youtube-upload.ts         # YouTube upload service (resumable upload, chunked upload, processing poll)
 │   │   └── jwt-auth.ts              # JWT token generation and verification service
 │   ├── types/
-│   │   ├── news.ts             # News type definitions + Env type (single source of truth)
+│   │   ├── env.ts              # Cloudflare Workers bindings and runtime types
+│   │   ├── index.ts            # Barrel exports for all shared types
+│   │   ├── news.ts             # News type definitions
 │   │   ├── article.ts          # Article type definitions
 │   │   ├── video.ts            # Video type definitions (Video, Model, CostLog, ImageSize, ImageDimensions, YouTubeUploadStatus, YouTubeInfo)
 │   │   └── youtube.ts          # YouTube OAuth type definitions (plus upload types: YouTubeUploadSession, YouTubeUploadOptions, YouTubeInfo)
@@ -93,15 +93,24 @@ japan-quick/
 │   │   ├── youtube.ts         # API routes for YouTube OAuth (status, auth URL, callback, refresh, disconnect)
 │   │   └── frontend.ts        # Frontend route handlers (/, /login, /news, /article/:id, /videos, /video/:id, /settings)
 │   └── tests/
-│       ├── unit/               # Unit tests for services, routes, lib
-│       │   └── lib/
-│       │       └── dimensions.test.ts  # Tests for dimension utility
-│       └── integration/        # Integration tests (e.g., news-e2e.test.ts)
+│       └── unit/
+│           ├── lib/
+│           │   ├── dimensions.test.ts
+│           │   ├── html-template.test.ts
+│           │   ├── logger.test.ts
+│           │   └── route-helpers.test.ts
+│           ├── routes/
+│           │   ├── articles.test.ts
+│           │   ├── frontend.test.ts
+│           │   └── news.test.ts
+│           └── services/
+│               └── news-scraper.test.ts
 ├── scripts/
 │   └── verify-asset-generation.ts  # Verification script for asset generation improvements
 ├── tsconfig.json               # TypeScript config for backend (Cloudflare Workers)
 ├── tsconfig.frontend.json      # TypeScript config for frontend (browser)
 ├── vitest.config.ts            # Vitest config with Cloudflare Workers pool
+├── wrangler.vitest.toml        # Wrangler config dedicated to Vitest worker pool
 ├── wrangler.toml               # Cloudflare Workers configuration + auth credentials
 ├── .e2b/                       # E2B sandbox template for video rendering
 │   ├── template.ts             # E2B template definition (ffmpeg, curl, fonts)
@@ -144,7 +153,7 @@ bun install                 # Install dependencies
 bun run build:frontend      # Build frontend TypeScript
 bun run dev                 # Local dev server
 wrangler dev --remote       # Remote dev (for workflows)
-bun run test                # Run tests
+bun run test -- --run       # Run tests once (non-watch mode)
 bun run deploy              # Deploy to Cloudflare Workers
 wrangler tail --format pretty  # Tail logs
 
@@ -586,12 +595,13 @@ Remotion components require React performance patterns to avoid memory leaks dur
 - Full TypeScript with strict mode
 - ES modules throughout
 - Vitest with Cloudflare Workers pool
+- Vitest uses `wrangler.vitest.toml` (isolated test-only Wrangler config)
 - Structured logging with request ID correlation
 - Workflow status polling (2.5-3s intervals)
 
 ## Type System
 
-**Env Type:** Single source of truth in `src/types/news.ts`
+**Env Type:** Single source of truth in `src/types/env.ts`
 - Defines all Cloudflare Workers bindings
 - Used throughout backend for type safety
 

@@ -179,8 +179,7 @@ export class ScriptGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings']
           backoff: 'exponential'
         }
       }, async () => {
-        const r2Storage = new R2StorageService(this.env.ASSETS_BUCKET);
-        const geminiService = new GeminiService(this.env.GOOGLE_API_KEY, r2Storage);
+        const geminiService = new GeminiService(this.env.GOOGLE_API_KEY);
 
         // Use enhanced function if metadata is available
         if (hasEnhancedMetadata && video.video_format && video.urgency) {

@@ -24,13 +24,31 @@ export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
 /**
  * Log context interface for key-value pairs
  */
+export type LogValue = unknown;
+
 export interface LogContext {
-  [key: string]: string | number | boolean | null | undefined;
+  [key: string]: LogValue;
 }
 
 /**
  * Formats log context into "key=value" pairs
  */
+function formatValue(value: unknown): string {
+  if (value === null) {
+    return 'null';
+  }
+
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
 function formatContext(context?: LogContext): string {
   if (!context || Object.keys(context).length === 0) {
     return '';
@@ -38,7 +56,7 @@ function formatContext(context?: LogContext): string {
 
   const pairs = Object.entries(context)
     .filter(([, value]) => value !== undefined && value !== null)
-    .map(([key, value]) => `${key}=${value}`);
+    .map(([key, value]) => `${key}=${formatValue(value)}`);
 
   return pairs.length > 0 ? ` | ${pairs.join(' ')}` : '';
 }
@@ -68,8 +86,10 @@ export interface Logger {
   info(reqId: string, message: string, context?: LogContext): void;
   warn(message: string, context?: LogContext): void;
   warn(reqId: string, message: string, context?: LogContext): void;
-  error(message: string, errOrContext?: Error | LogContext): void;
-  error(reqId: string, message: string, errOrContext?: Error | LogContext): void;
+  error(message: string, context?: LogContext): void;
+  error(message: string, error: Error, context?: LogContext): void;
+  error(reqId: string, message: string, context?: LogContext): void;
+  error(reqId: string, message: string, error: Error, context?: LogContext): void;
 }
 
 export function createLogger(component: string): Logger {
@@ -109,33 +129,49 @@ export function createLogger(component: string): Logger {
       console.warn(logEntry);
     },
 
-    error(arg1: string, arg2?: string | Error | LogContext, arg3?: LogContext): void {
+    error(
+      arg1: string,
+      arg2?: string | Error | LogContext,
+      arg3?: Error | LogContext,
+      arg4?: LogContext
+    ): void {
       const timestamp = new Date().toISOString();
       let context: LogContext | undefined;
       let reqId: string;
       let message: string;
+      let error: Error | undefined;
 
       // Handle different overload signatures for error
       if (typeof arg2 === 'string') {
-        // (reqId, message, error) or (reqId, message, context)
+        // (reqId, message, error, context) or (reqId, message, context)
         reqId = arg1;
         message = arg2;
         if (arg3 instanceof Error) {
-          context = { error: arg3.message, stack: arg3.stack };
+          error = arg3;
+          context = arg4;
         } else {
-          context = arg3;
+          context = arg3 as LogContext | undefined;
         }
       } else if (arg2 instanceof Error) {
-        // (message, error) signature
+        // (message, error, context) signature
         reqId = generateRequestId();
         message = arg1;
-        context = { error: arg2.message, stack: arg2.stack };
+        error = arg2;
+        context = arg3 as LogContext | undefined;
       } else {
-        // (message, context) or (reqId, message, context)
+        // (message, context) signature
         const normalized = normalizeArgs(arg1, arg2, arg3);
         reqId = normalized.reqId;
         message = normalized.message;
         context = normalized.context;
+      }
+
+      if (error) {
+        context = {
+          ...(context || {}),
+          error: error.message,
+          stack: error.stack,
+        };
       }
 
       const logEntry = formatLogEntry(reqId, timestamp, 'ERROR', component, message, context);

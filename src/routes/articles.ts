@@ -10,7 +10,8 @@ import { Hono } from 'hono';
 import type { Env } from '../types/env.js';
 import type { Article, ArticleVersion, ArticleComment, ArticleScraperParams, ArticleScraperResult } from '../types/article.js';
 import { log, generateRequestId } from '../lib/logger.js';
-import { successResponse, notFoundResponse, serverErrorResponse } from '../lib/api-response.js';
+import { successResponse, notFoundResponse } from '../lib/api-response.js';
+import { runRoute } from '../lib/route-helpers.js';
 import {
   mapDbRowToArticle,
   mapDbRowToArticleVersion,
@@ -22,11 +23,8 @@ const articleRoutes = new Hono<{ Bindings: Env['Bindings'] }>();
 // GET /api/articles/:id - Get article by pick:xxx or article_id
 articleRoutes.get('/:id', async (c) => {
   const reqId = generateRequestId();
-  const startTime = Date.now();
   const id = c.req.param('id');
-  log.articleRoutes.info(reqId, 'Request received', { method: 'GET', path: `/:id`, id });
-
-  try {
+  return runRoute(log.articleRoutes, reqId, { method: 'GET', path: '/:id', id }, async () => {
     let article: Record<string, unknown> | null = null;
 
     // Check if id is in format "pick:xxx"
@@ -69,24 +67,20 @@ articleRoutes.get('/:id', async (c) => {
     );
 
     return successResponse({ article: articleObj, versions, comments });
-  } catch (error) {
-    log.articleRoutes.error(reqId, 'Request failed', error as Error);
-    return serverErrorResponse(error as Error);
-  } finally {
-    const durationMs = Date.now() - startTime;
-    log.articleRoutes.info(reqId, 'Request completed', { status: 200, durationMs });
-  }
+  });
 });
 
 // GET /api/articles/:id/version/:version - Get specific version
 articleRoutes.get('/:id/version/:version', async (c) => {
   const reqId = generateRequestId();
-  const startTime = Date.now();
   const id = c.req.param('id');
   const versionNum = parseInt(c.req.param('version'), 10);
-  log.articleRoutes.info(reqId, 'Request received', { method: 'GET', path: `/:id/version/:version`, id, version: versionNum });
-
-  try {
+  return runRoute(log.articleRoutes, reqId, {
+    method: 'GET',
+    path: '/:id/version/:version',
+    id,
+    version: versionNum
+  }, async () => {
     let article: Record<string, unknown> | null = null;
 
     if (id.startsWith('pick:')) {
@@ -129,23 +123,14 @@ articleRoutes.get('/:id/version/:version', async (c) => {
     );
 
     return successResponse({ article: articleObj, version: versionObj, comments });
-  } catch (error) {
-    log.articleRoutes.error(reqId, 'Request failed', error as Error);
-    return serverErrorResponse(error as Error);
-  } finally {
-    const durationMs = Date.now() - startTime;
-    log.articleRoutes.info(reqId, 'Request completed', { status: 200, durationMs });
-  }
+  });
 });
 
 // POST /api/articles/trigger/:pickId - Manual trigger
 articleRoutes.post('/trigger/:pickId', async (c) => {
   const reqId = generateRequestId();
-  const startTime = Date.now();
   const pickId = c.req.param('pickId');
-  log.articleRoutes.info(reqId, 'Request received', { method: 'POST', path: `/trigger/${pickId}` });
-
-  try {
+  return runRoute(log.articleRoutes, reqId, { method: 'POST', path: `/trigger/${pickId}` }, async () => {
     const body = await c.req.json<{ isRescrape?: boolean }>().catch(() => ({ isRescrape: false }));
 
     const params: ArticleScraperParams = {
@@ -160,23 +145,14 @@ articleRoutes.post('/trigger/:pickId', async (c) => {
 
     log.articleRoutes.info(reqId, 'Workflow created', { workflowId: instance.id, pickId });
     return successResponse({ workflowId: instance.id, pickId });
-  } catch (error) {
-    log.articleRoutes.error(reqId, 'Request failed', error as Error);
-    return serverErrorResponse(error as Error);
-  } finally {
-    const durationMs = Date.now() - startTime;
-    log.articleRoutes.info(reqId, 'Request completed', { status: 200, durationMs });
-  }
+  });
 });
 
 // GET /api/articles/status/:workflowId - Workflow status
 articleRoutes.get('/status/:workflowId', async (c) => {
   const reqId = generateRequestId();
-  const startTime = Date.now();
   const workflowId = c.req.param('workflowId');
-  log.articleRoutes.info(reqId, 'Request received', { method: 'GET', path: `/status/${workflowId}` });
-
-  try {
+  return runRoute(log.articleRoutes, reqId, { method: 'GET', path: `/status/${workflowId}` }, async () => {
     const instance = await c.env.ARTICLE_SCRAPER_WORKFLOW.get(workflowId);
 
     if (!instance) {
@@ -191,13 +167,7 @@ articleRoutes.get('/status/:workflowId', async (c) => {
       status: status.status,
       output: status.output as ArticleScraperResult | undefined
     });
-  } catch (error) {
-    log.articleRoutes.error(reqId, 'Request failed', error as Error);
-    return serverErrorResponse(error as Error);
-  } finally {
-    const durationMs = Date.now() - startTime;
-    log.articleRoutes.info(reqId, 'Request completed', { status: 200, durationMs });
-  }
+  });
 });
 
 export { articleRoutes };

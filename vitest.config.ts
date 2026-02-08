@@ -8,7 +8,7 @@ export default defineWorkersConfig({
   test: {
     poolOptions: {
       workers: {
-        wrangler: { configPath: 'wrangler.toml' },
+        wrangler: { configPath: 'wrangler.vitest.toml' },
         singleWorker: true,
         isolatedStorage: false // Required for projects with Workflows
       }
