@@ -5,7 +5,7 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { baseStyles, buttonStyles, badgeStyles, loadingStyles } from '../styles/shared-styles.js';
-import type { ParsedVideo, YouTubeUploadStatus, YouTubeInfo } from '../types/video.js';
+import type { ParsedVideo, YouTubeUploadStatus, PolicyStageStatus } from '../types/video.js';
 
 @customElement('video-youtube-upload-card')
 export class VideoYouTubeUploadCard extends LitElement {
@@ -151,9 +151,14 @@ export class VideoYouTubeUploadCard extends LitElement {
       'uploading': 'UPLOAD...',
       'processing': 'PROCESS...',
       'uploaded': 'LIVE',
+      'blocked': 'BLOCK',
       'error': 'FAIL'
     };
     return labels[status] || status;
+  }
+
+  private requiresPrivateUpload(status: PolicyStageStatus): boolean {
+    return status === 'WARN' || status === 'REVIEW' || status === 'PENDING';
   }
 
   private dispatchUpload() {
@@ -184,7 +189,17 @@ export class VideoYouTubeUploadCard extends LitElement {
   render() {
     if (!this.video) return null;
 
-    const { youtube_upload_status, youtube_upload_error, youtubeInfo } = this.video;
+    const {
+      youtube_upload_status,
+      youtube_upload_error,
+      youtubeInfo,
+      policy_overall_status,
+      policy_block_reasons
+    } = this.video;
+    const isPolicyBlocked = policy_overall_status === 'BLOCK';
+    const policyNotice = this.requiresPrivateUpload(policy_overall_status)
+      ? `Policy status ${policy_overall_status}: upload is forced to private visibility.`
+      : null;
 
     return html`
       <div class="card">
@@ -193,6 +208,18 @@ export class VideoYouTubeUploadCard extends LitElement {
           <span class="badge youtube-${youtube_upload_status}">${this.getYouTubeUploadStatusLabel(youtube_upload_status)}</span>
         </div>
         <div class="card-body">
+          ${policyNotice && !isPolicyBlocked ? html`
+            <div class="warning-message">${policyNotice}</div>
+          ` : ''}
+
+          ${isPolicyBlocked ? html`
+            <div class="error-message">
+              [ POLICY BLOCKED: ${(policy_block_reasons && policy_block_reasons.length > 0)
+                ? policy_block_reasons.join(' | ')
+                : 'Upload disabled until policy issues are resolved.'} ]
+            </div>
+          ` : ''}
+
           ${youtube_upload_error && youtube_upload_status === 'error' ? html`
             <div class="error-message">[ ERROR: ${youtube_upload_error} ]</div>
           ` : ''}
@@ -201,9 +228,9 @@ export class VideoYouTubeUploadCard extends LitElement {
             <div class="warning-message">${youtube_upload_error}</div>
           ` : ''}
 
-          ${youtube_upload_status === 'pending' || youtube_upload_status === 'error' ? html`
+          ${!isPolicyBlocked && (youtube_upload_status === 'pending' || youtube_upload_status === 'error') ? html`
             <p style="font-family: 'Inter', sans-serif; font-size: 0.875rem; color: #58544c; margin: 0 0 1rem 0;">
-              Upload the rendered video to YouTube with automatic metadata.
+              Upload the rendered video to YouTube with automatic metadata and policy-driven privacy.
             </p>
             <button
               class="btn btn-primary"
@@ -280,7 +307,7 @@ export class VideoYouTubeUploadCard extends LitElement {
               <button
                 class="btn"
                 @click=${() => this.dispatchUpload()}
-                ?disabled=${this.uploading}
+                ?disabled=${this.uploading || isPolicyBlocked}
                 style="margin-top: 1rem;"
               >
                 ${this.uploading ? html`<span class="loading-spinner"></span> Re-uploading...` : '[ Re-upload ]'}

@@ -12,7 +12,9 @@ import { customElement, state, property } from 'lit/decorators.js';
 import { getAuthHeaders } from '../lib/auth.js';
 import { baseStyles, buttonStyles, badgeStyles, loadingStyles } from '../styles/shared-styles.js';
 import { POLLING } from '../lib/constants.js';
-import type { VideoFormat, RenderStatus, YouTubeUploadStatus } from '../types/video.js';
+import type { VideoFormat, RenderStatus, YouTubeUploadStatus, PolicyStageStatus } from '../types/video.js';
+
+const POLICY_STAGE_STATUS_VALUES: readonly PolicyStageStatus[] = ['PENDING', 'CLEAN', 'WARN', 'REVIEW', 'BLOCK'];
 
 type VideoType = 'short' | 'long';
 type VideoSelectionStatus = 'todo' | 'doing' | 'done';
@@ -29,6 +31,7 @@ interface ParsedVideo {
   asset_status: 'pending' | 'generating' | 'generated' | 'error';
   render_status: RenderStatus;
   youtube_upload_status: YouTubeUploadStatus;
+  policy_overall_status?: PolicyStageStatus;
   total_cost: number;
   created_at: string;
   updated_at: string;
@@ -429,7 +432,28 @@ export class VideosPage extends LitElement {
       'uploading': 'UP...',
       'processing': 'PROC.',
       'uploaded': 'DONE',
+      'blocked': 'BLOCK',
       'error': 'FAIL'
+    };
+    return labels[status] || status;
+  }
+
+  private normalizePolicyStatus(status: unknown): PolicyStageStatus {
+    if (typeof status !== 'string') {
+      return 'PENDING';
+    }
+
+    const normalized = status.toUpperCase() as PolicyStageStatus;
+    return POLICY_STAGE_STATUS_VALUES.includes(normalized) ? normalized : 'PENDING';
+  }
+
+  private getPolicyStatusLabel(status: PolicyStageStatus): string {
+    const labels: Record<PolicyStageStatus, string> = {
+      PENDING: 'WAIT',
+      CLEAN: 'CLEAN',
+      WARN: 'WARN',
+      REVIEW: 'REVIEW',
+      BLOCK: 'BLOCK'
     };
     return labels[status] || status;
   }
@@ -520,6 +544,7 @@ export class VideosPage extends LitElement {
 
   private renderVideoCard(video: ParsedVideo) {
     const isDeleting = this.deleting.has(video.id);
+    const policyStatus = this.normalizePolicyStatus(video.policy_overall_status);
 
     return html`
       <div class="video-card" @click=${() => this.navigateToVideo(video.id)}>
@@ -530,6 +555,7 @@ export class VideosPage extends LitElement {
             <span class="badge script-${video.script_status}">SCR: ${this.getStatusLabel(video.script_status)}</span>
             <span class="badge asset-${video.asset_status}">AST: ${this.getStatusLabel(video.asset_status)}</span>
             <span class="badge render-${video.render_status}">RND: ${this.getRenderStatusLabel(video.render_status)}</span>
+            <span class="badge policy-${policyStatus.toLowerCase()}">POL: ${this.getPolicyStatusLabel(policyStatus)}</span>
             <span class="badge youtube-${video.youtube_upload_status}">YT: ${this.getYouTubeStatusLabel(video.youtube_upload_status)}</span>
           </div>
         </div>

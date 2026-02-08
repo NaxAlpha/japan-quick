@@ -5,7 +5,9 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { baseStyles, badgeStyles } from '../styles/shared-styles.js';
-import type { ParsedVideo, RenderStatus, CostLog, YouTubeUploadStatus, VideoFormat } from '../types/video.js';
+import type { ParsedVideo, RenderStatus, CostLog, YouTubeUploadStatus, PolicyStageStatus } from '../types/video.js';
+
+const POLICY_STAGE_STATUS_VALUES: readonly PolicyStageStatus[] = ['PENDING', 'CLEAN', 'WARN', 'REVIEW', 'BLOCK'];
 
 @customElement('video-metadata-card')
 export class VideoMetadataCard extends LitElement {
@@ -253,9 +255,31 @@ export class VideoMetadataCard extends LitElement {
       'uploading': 'UP...',
       'processing': 'PROC.',
       'uploaded': 'DONE',
+      'blocked': 'BLOCK',
       'error': 'FAIL'
     };
     return labels[status] || status;
+  }
+
+  private normalizePolicyStatus(status: unknown): PolicyStageStatus {
+    if (typeof status !== 'string') {
+      return 'PENDING';
+    }
+
+    const normalized = status.toUpperCase() as PolicyStageStatus;
+    return POLICY_STAGE_STATUS_VALUES.includes(normalized) ? normalized : 'PENDING';
+  }
+
+  private getPolicyStatusLabel(status: PolicyStageStatus | null | undefined): string {
+    const normalized = this.normalizePolicyStatus(status);
+    const labels: Record<PolicyStageStatus, string> = {
+      PENDING: 'WAIT',
+      CLEAN: 'CLEAN',
+      WARN: 'WARN',
+      REVIEW: 'REVIEW',
+      BLOCK: 'BLOCK'
+    };
+    return labels[normalized] || normalized;
   }
 
   private getFormatLabel(video: ParsedVideo): string {
@@ -275,7 +299,9 @@ export class VideoMetadataCard extends LitElement {
       'script-generation': 'Script',
       'asset-generation': 'Assets',
       'image-generation': 'Images',
-      'tts-generation': 'TTS',
+      'audio-generation': 'TTS',
+      'policy-script-light': 'Policy Script',
+      'policy-asset-strong': 'Policy Asset',
       'video-render': 'Render',
       'youtube-upload': 'YouTube'
     };
@@ -322,6 +348,7 @@ export class VideoMetadataCard extends LitElement {
 
   render() {
     if (!this.video) return null;
+    const policyStatus = this.normalizePolicyStatus(this.video.policy_overall_status);
 
     return html`
       <div class="card">
@@ -350,6 +377,7 @@ export class VideoMetadataCard extends LitElement {
               <span class="badge script-${this.video.script_status}">SCR: ${this.getStatusLabel(this.video.script_status)}</span>
               <span class="badge asset-${this.video.asset_status}">AST: ${this.getStatusLabel(this.video.asset_status)}</span>
               <span class="badge render-${this.video.render_status}">RND: ${this.getRenderStatusLabel(this.video.render_status)}</span>
+              <span class="badge policy-${policyStatus.toLowerCase()}">POL: ${this.getPolicyStatusLabel(policyStatus)}</span>
               <span class="badge youtube-${this.video.youtube_upload_status}">YT: ${this.getYouTubeStatusLabel(this.video.youtube_upload_status)}</span>
             </div>
           </div>

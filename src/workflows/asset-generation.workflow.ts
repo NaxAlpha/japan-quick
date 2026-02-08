@@ -5,14 +5,16 @@
 
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
 import { AssetGeneratorService } from '../services/asset-generator.js';
+import { PolicyCheckerService } from '../services/policy-checker.js';
 import { R2StorageService } from '../services/r2-storage.js';
 import { fetchImagesAsBase64 } from '../lib/image-fetcher.js';
 import { ulid } from 'ulid';
 import type { Video, VideoScript, VideoAsset, TTSVoice } from '../types/video.js';
 import type { Env } from '../types/env.js';
 import { log, generateRequestId } from '../lib/logger.js';
-import { RETRY_POLICIES, SCRAPING, VIDEO_RENDERING } from '../lib/constants.js';
+import { RETRY_POLICIES } from '../lib/constants.js';
 import type { TokenUsageInfo } from '../lib/workflow-helper.js';
+import { persistPolicyCheck } from '../lib/policy-persistence.js';
 
 export interface AssetGenerationParams {
   videoId: number;
@@ -25,6 +27,18 @@ export interface AssetGenerationResult {
   slideCount?: number;
   promptCount?: number;
   error?: string;
+}
+
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x8000;
+  let binary = '';
+
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return btoa(binary);
 }
 
 export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'], AssetGenerationParams, AssetGenerationResult> {
@@ -553,6 +567,125 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
         });
       });
 
+      // Step 8.6: Run strong asset policy check and persist result
+      const assetPolicy = await step.do('run-asset-policy-check', {
+        retries: {
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: '3 seconds',
+          backoff: 'constant'
+        }
+      }, async () => {
+        const articlePickIds = JSON.parse(video.articles || '[]') as string[];
+        const policyArticles: Array<{
+          pickId?: string;
+          title: string;
+          content: string;
+          contentText?: string;
+        }> = [];
+
+        for (const pickId of articlePickIds) {
+          const article = await this.env.DB.prepare(`
+            SELECT id, pick_id, title
+            FROM articles
+            WHERE pick_id = ?
+          `).bind(pickId).first<{ id: number; pick_id?: string; title: string | null }>();
+
+          if (!article) {
+            continue;
+          }
+
+          const version = await this.env.DB.prepare(`
+            SELECT content, content_text
+            FROM article_versions
+            WHERE article_id = ?
+            ORDER BY version DESC
+            LIMIT 1
+          `).bind(article.id).first<{ content: string; content_text: string | null }>();
+
+          if (!version) {
+            continue;
+          }
+
+          policyArticles.push({
+            pickId: article.pick_id || pickId,
+            title: article.title || 'Untitled',
+            content: version.content,
+            contentText: version.content_text || undefined
+          });
+        }
+
+        if (policyArticles.length === 0) {
+          throw new Error('No article context found for asset policy check');
+        }
+
+        const imageAssetRows = await this.env.DB.prepare(`
+          SELECT asset_type, asset_index, r2_key, mime_type
+          FROM video_assets
+          WHERE video_id = ?
+            AND asset_type IN ('thumbnail_image', 'slide_image')
+          ORDER BY CASE WHEN asset_type = 'thumbnail_image' THEN 0 ELSE 1 END, asset_index ASC
+        `).bind(videoId).all<{ asset_type: string; asset_index: number; r2_key: string; mime_type: string | null }>();
+
+        const policyImages: Array<{ label: string; mimeType: string; base64Data: string }> = [];
+        for (const asset of imageAssetRows.results) {
+          const object = await this.env.ASSETS_BUCKET.get(asset.r2_key);
+          if (!object) {
+            log.assetGenerationWorkflow.warn(reqId, 'Policy check image missing in R2', {
+              videoId,
+              r2Key: asset.r2_key,
+              assetType: asset.asset_type
+            });
+            continue;
+          }
+
+          const bytes = new Uint8Array(await object.arrayBuffer());
+          policyImages.push({
+            label: asset.asset_type === 'thumbnail_image'
+              ? 'thumbnail'
+              : `slide-${String(asset.asset_index).padStart(2, '0')}`,
+            mimeType: asset.mime_type || object.httpMetadata?.contentType || 'image/jpeg',
+            base64Data: uint8ArrayToBase64(bytes)
+          });
+        }
+
+        if (policyImages.length === 0) {
+          throw new Error('No generated images available for asset policy check');
+        }
+
+        const policyChecker = new PolicyCheckerService(
+          this.env.GOOGLE_API_KEY,
+          this.env.ASSETS_BUCKET,
+          this.env.ASSETS_PUBLIC_URL
+        );
+
+        const policyResult = await policyChecker.runAssetStrongCheck(reqId, {
+          videoId,
+          script,
+          articles: policyArticles,
+          images: policyImages
+        });
+
+        const persisted = await persistPolicyCheck(this.env.DB, {
+          videoId,
+          result: policyResult
+        });
+
+        return {
+          stageStatus: persisted.stageStatus,
+          overallStatus: persisted.overallStatus,
+          policyRunId: persisted.policyRunId,
+          cost: persisted.cost,
+          blockReasons: persisted.blockReasons
+        };
+      });
+      log.assetGenerationWorkflow.info(reqId, 'Step completed', {
+        step: 'run-asset-policy-check',
+        stageStatus: assetPolicy.stageStatus,
+        overallStatus: assetPolicy.overallStatus,
+        policyRunId: assetPolicy.policyRunId,
+        cost: assetPolicy.cost
+      });
+
       // Step 9: Update status to 'generated' with ULID asset IDs
       await step.do('complete', {
         retries: {
@@ -567,18 +700,33 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
         `).bind(videoId).first<{ total: number }>();
 
         const totalCost = totalCostResult?.total || 0;
+        const blockMessage = assetPolicy.blockReasons.length > 0
+          ? assetPolicy.blockReasons.join(' | ')
+          : 'Asset policy check returned BLOCK';
 
         await this.env.DB.prepare(`
           UPDATE videos
           SET asset_status = 'generated',
               slide_image_asset_ids = ?,
               slide_audio_asset_ids = ?,
+              render_error = CASE WHEN ? = 'BLOCK' THEN ? ELSE NULL END,
+              youtube_upload_status = CASE WHEN ? = 'BLOCK' THEN 'blocked' ELSE 'pending' END,
+              youtube_upload_error = CASE WHEN ? = 'BLOCK' THEN ? ELSE NULL END,
               total_cost = ?,
               updated_at = datetime('now')
           WHERE id = ?
         `).bind(
           JSON.stringify(slideImageAssetIds),
           JSON.stringify(slideAudioAssetIds),
+          assetPolicy.overallStatus,
+          assetPolicy.overallStatus === 'BLOCK'
+            ? `Policy blocked render/upload: ${blockMessage}`
+            : null,
+          assetPolicy.overallStatus,
+          assetPolicy.overallStatus,
+          assetPolicy.overallStatus === 'BLOCK'
+            ? `Policy BLOCK: ${blockMessage}`
+            : null,
           totalCost,
           videoId
         ).run();
@@ -587,7 +735,8 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
           videoId,
           slideImageAssetIds,
           slideAudioAssetIds,
-          totalCost
+          totalCost,
+          policyOverallStatus: assetPolicy.overallStatus
         });
       });
 
@@ -599,6 +748,14 @@ export class AssetGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings'],
           backoff: 'constant'
         }
       }, async () => {
+        if (assetPolicy.overallStatus === 'BLOCK') {
+          log.assetGenerationWorkflow.warn(reqId, 'Video render workflow skipped due to policy BLOCK', {
+            videoId,
+            blockReasons: assetPolicy.blockReasons
+          });
+          return;
+        }
+
         const params = { videoId };
         await this.env.VIDEO_RENDER_WORKFLOW.create({
           id: `render-${videoId}-${Date.now()}`,

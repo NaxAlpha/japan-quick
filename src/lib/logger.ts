@@ -188,6 +188,7 @@ export const log = {
   gemini: createLogger('GeminiService'),
   scriptGeneration: createLogger('ScriptGeneration'),
   assetGen: createLogger('AssetGenerator'),
+  policy: createLogger('PolicyChecker'),
 
   // Scrapers
   articleScraper: createLogger('ArticleScraper'),
@@ -218,6 +219,7 @@ export const log = {
   videoRenderWorkflow: createLogger('VideoRenderWorkflow'),
   scriptGenerationWorkflow: createLogger('ScriptGenerationWorkflow'),
   assetGenerationWorkflow: createLogger('AssetGenerationWorkflow'),
+  policyWorkflow: createLogger('PolicyWorkflow'),
   youTubeUploadWorkflow: createLogger('YouTubeUploadWorkflow'),
   testChunked: createLogger('TestChunked'),
 };

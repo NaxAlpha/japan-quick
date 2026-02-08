@@ -4,6 +4,7 @@
  */
 
 import type { AIArticleInputWithContent, PastVideoContext, VideoFormat, UrgencyLevel, AIArticleForScript, SelectionSchedulingContext } from '../types/video.js';
+import { formatPolicyRulesForPrompt } from '../policy/youtube-policy-rules.js';
 
 export interface AIArticleInput {
   index: string;
@@ -26,6 +27,9 @@ export interface ScriptGenerationInput {
     }>;
   }>;
 }
+
+const SCRIPT_POLICY_RULES_FOR_PROMPT = formatPolicyRulesForPrompt('script_light');
+const ASSET_POLICY_RULES_FOR_PROMPT = formatPolicyRulesForPrompt('asset_strong');
 
 /**
  * Build article selection prompt
@@ -300,6 +304,15 @@ Create a compelling video script that tells this story effectively. Follow these
    - Use high contrast, bold, readable text style
    - NO BRANDING IN IMAGES: Do NOT include channel logos, watermarks, branding elements, subscribe buttons, social media icons, or visual CTAs in any image descriptions (including thumbnail and last slide)
 
+5. YOUTUBE POLICY GUARDRAILS:
+   - Never fabricate facts not present in the provided articles.
+   - For sensitive claims (elections, medical, public safety), avoid certainty unless explicitly supported by source text.
+   - Avoid demeaning, hateful, or harassing language toward people or groups.
+   - Avoid instructions, encouragement, or glamorization of harmful/dangerous acts.
+   - Keep visuals and text free from manipulative UI-like elements and deceptive framing.
+   - Rule checks used by this pipeline:
+${SCRIPT_POLICY_RULES_FOR_PROMPT}
+
 RESPONSE FORMAT (JSON only):
 {
   "title": "SEO-optimized YouTube title in article language (REQUIRED - must always be provided)",
@@ -537,6 +550,15 @@ ${articlesText}
 10. NO BRANDING:
     - Image descriptions must NOT include: logos, watermarks, branding, subscribe buttons, social icons
 
+11. YOUTUBE POLICY GUARDRAILS:
+    - Never present unverified sensitive claims (election, medical, civic safety) as certain facts.
+    - Do not include hateful, dehumanizing, or targeted harassment language.
+    - Do not include harmful instructions or glorification of dangerous acts.
+    - Do not imply fabricated events via title, narration, or thumbnail text.
+    - Keep generated visuals free from deceptive call-to-action UI artifacts.
+    - Rule checks used by this pipeline:
+${SCRIPT_POLICY_RULES_FOR_PROMPT}
+
 === RESPONSE FORMAT (JSON only) ===
 {
   "title": "SEO-optimized YouTube title in Japanese (REQUIRED - must always be provided)",
@@ -603,6 +625,14 @@ STYLE REQUIREMENTS:
 - Clear focal points in each cell
 - Modern, polished aesthetic
 
+POLICY REQUIREMENTS (STRICT):
+- Do NOT include channel logos, watermarks, subscribe buttons, social icons, or UI-like CTA overlays.
+- Avoid graphic violence, self-harm imagery, hateful symbols, or targeted harassment depictions.
+- Do not depict fabricated events as real evidence; visuals must stay consistent with provided text descriptions.
+- Keep text overlays factual, contextual, and non-deceptive.
+- Rule checks used by this pipeline:
+${ASSET_POLICY_RULES_FOR_PROMPT}
+
 CELL CONTENTS:
 ${cellDescriptions}${thumbnailSection}${emptySection}
 
@@ -638,6 +668,14 @@ STYLE REQUIREMENTS:
 - Clear focal point
 - Modern, polished aesthetic
 - ${aspectRatio === '9:16' ? 'Vertical composition optimized for mobile viewing' : 'Horizontal composition optimized for desktop viewing'}
+
+POLICY REQUIREMENTS (STRICT):
+- No logos, channel branding, subscribe buttons, social icons, or CTA UI overlays.
+- No hateful/harassing symbolism or targeted abuse content.
+- No graphic violence or dangerous instructional depictions.
+- Keep visual claims aligned with the story context, avoid deceptive fabrication.
+- Rule checks used by this pipeline:
+${ASSET_POLICY_RULES_FOR_PROMPT}
 
 Generate exactly ONE image.
 `.trim();

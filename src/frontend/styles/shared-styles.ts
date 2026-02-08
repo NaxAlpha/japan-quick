@@ -414,7 +414,43 @@ export const badgeStyles = css`
     border-color: #ff0000;
   }
 
+  .badge.youtube-blocked {
+    background: #0a0a0a;
+    color: #f97316;
+    border-color: #f97316;
+  }
+
   .badge.youtube-error {
+    background: #0a0a0a;
+    color: #e63946;
+    border-color: #e63946;
+  }
+
+  .badge.policy-pending {
+    background: #f5f3f0;
+    color: #58544c;
+    border-color: #d0cdc7;
+  }
+
+  .badge.policy-clean {
+    background: #2d6a4f;
+    color: #ffffff;
+    border-color: #2d6a4f;
+  }
+
+  .badge.policy-warn {
+    background: #f97316;
+    color: #ffffff;
+    border-color: #f97316;
+  }
+
+  .badge.policy-review {
+    background: #e9c46a;
+    color: #78350f;
+    border-color: #e9c46a;
+  }
+
+  .badge.policy-block {
     background: #0a0a0a;
     color: #e63946;
     border-color: #e63946;
