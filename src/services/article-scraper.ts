@@ -15,13 +15,6 @@ export interface PickupScrapeResult {
   articleId?: string;
 }
 
-// Full scrape result including article and comments
-export interface FullScrapeResult {
-  isExternal: boolean;
-  article?: ScrapedArticleData;
-  comments?: ScrapedComment[];
-}
-
 export class ArticleScraper {
   /**
    * Scrape the pickup page to get the article URL
@@ -1144,64 +1137,4 @@ export class ArticleScraper {
     }
   }
 
-  /**
-   * Full scrape: pickup page -> article -> comments
-   */
-  async scrapeFullArticle(reqId: string, browser: any, pickId: string): Promise<FullScrapeResult> {
-    const startTime = Date.now();
-    log.articleScraper.info(reqId, 'Full article scraping started', { pickId });
-
-    try {
-      // Step 1: Scrape pickup page to get article URL
-      log.articleScraper.info(reqId, 'Step 1: Scraping pickup page', { pickId });
-      const pickupResult = await this.scrapePickupPage(reqId, browser, pickId);
-
-      if (pickupResult.isExternal || !pickupResult.articleUrl) {
-        log.articleScraper.info(reqId, 'Article is external, skipping further scraping', {
-          pickId,
-          isExternal: pickupResult.isExternal,
-          hasArticleUrl: !!pickupResult.articleUrl
-        });
-        return { isExternal: true };
-      }
-
-      // Step 2: Scrape article content
-      log.articleScraper.info(reqId, 'Step 2: Scraping article content', {
-        pickId,
-        articleUrl: pickupResult.articleUrl
-      });
-      const article = await this.scrapeArticlePage(reqId, browser, pickupResult.articleUrl);
-
-      // Step 3: Scrape comments
-      log.articleScraper.info(reqId, 'Step 3: Scraping comments', {
-        pickId,
-        articleUrl: pickupResult.articleUrl
-      });
-      const comments = await this.scrapeCommentsPage(reqId, browser, pickupResult.articleUrl);
-
-      const durationMs = Date.now() - startTime;
-      log.articleScraper.info(reqId, 'Full article scraping completed', {
-        pickId,
-        articleId: article.articleId || 'N/A',
-        articleTitle: article.title || 'N/A',
-        commentCount: comments.length,
-        pageCount: article.pageCount,
-        durationMs
-      });
-
-      return {
-        isExternal: false,
-        article,
-        comments
-      };
-    } catch (error) {
-      const durationMs = Date.now() - startTime;
-      log.articleScraper.error(reqId, 'Full article scraping failed', {
-        pickId,
-        error: error instanceof Error ? error.message : String(error),
-        durationMs
-      });
-      throw error;
-    }
-  }
 }

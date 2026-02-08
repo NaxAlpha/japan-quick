@@ -16,14 +16,13 @@
 
 import { Hono } from 'hono';
 import type { Env } from '../types/env.js';
-import type { Video, ParsedVideo, CostLog, VideoAsset, ParsedVideoAsset, VideoScript, TTS_VOICES, ScriptPrompt, YouTubeInfo } from '../types/video.js';
-import type { VideoSelectionParams, VideoSelectionResult } from '../workflows/video-selection.workflow.js';
-import type { VideoRenderParams, VideoRenderResult } from '../workflows/video-render.workflow.js';
-import type { ScriptGenerationParams, ScriptGenerationResult } from '../workflows/script-generation.workflow.js';
-import type { AssetGenerationParams, AssetGenerationResult } from '../workflows/asset-generation.workflow.js';
-import type { YouTubeUploadParams, YouTubeUploadResult } from '../workflows/youtube-upload.workflow.js';
-import type { Article, ArticleVersion, ArticleComment } from '../types/article.js';
-import { parseVideo, TTS_VOICES as TTSVoicesArray } from '../types/video.js';
+import type { Video, CostLog, VideoAsset, ParsedVideoAsset, ScriptPrompt, YouTubeInfo } from '../types/video.js';
+import type { VideoSelectionParams } from '../workflows/video-selection.workflow.js';
+import type { VideoRenderParams } from '../workflows/video-render.workflow.js';
+import type { ScriptGenerationParams } from '../workflows/script-generation.workflow.js';
+import type { AssetGenerationParams } from '../workflows/asset-generation.workflow.js';
+import type { YouTubeUploadParams } from '../workflows/youtube-upload.workflow.js';
+import { parseVideo } from '../types/video.js';
 import { R2StorageService } from '../services/r2-storage.js';
 import { log, generateRequestId } from '../lib/logger.js';
 import { successResponse, errorResponse, notFoundResponse, serverErrorResponse, conflictResponse } from '../lib/api-response.js';

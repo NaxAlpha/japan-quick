@@ -7,7 +7,12 @@
 const PUBLIC_DOMAIN = 'japan-quick-assets.nauman.im';
 
 export class R2StorageService {
-  constructor(private bucket: R2Bucket) {}
+  private publicBaseUrl: string;
+
+  constructor(private bucket: R2Bucket, publicBaseUrl?: string) {
+    const normalizedBase = publicBaseUrl?.replace(/\/+$/, '');
+    this.publicBaseUrl = normalizedBase || `https://${PUBLIC_DOMAIN}`;
+  }
 
   /**
    * Upload a video asset to R2 using new ULID-based flat naming
@@ -37,7 +42,7 @@ export class R2StorageService {
    */
   getPublicUrl(ulid: string, mimeType: string): string {
     const ext = this.getExtension(mimeType);
-    return `https://${PUBLIC_DOMAIN}/${ulid}.${ext}`;
+    return `${this.publicBaseUrl}/${ulid}.${ext}`;
   }
 
   /**
@@ -62,55 +67,10 @@ export class R2StorageService {
   }
 
   /**
-   * Upload a video asset to R2 using legacy hierarchical naming
-   * Kept for backward compatibility
-   */
-  async uploadAssetLegacy(
-    videoId: number,
-    type: 'grid_image' | 'slide_audio' | 'rendered_video',
-    index: number,
-    data: ArrayBuffer,
-    mimeType: string
-  ): Promise<{ key: string; size: number }> {
-    const ext = this.getExtension(mimeType);
-    let prefix: string;
-
-    switch (type) {
-      case 'grid_image':
-        prefix = 'grid';
-        break;
-      case 'slide_audio':
-        prefix = 'audio';
-        break;
-      case 'rendered_video':
-        prefix = 'video';
-        break;
-    }
-
-    const key = `videos/${videoId}/${prefix}_${String(index).padStart(2, '0')}.${ext}`;
-
-    await this.bucket.put(key, data, {
-      httpMetadata: { contentType: mimeType }
-    });
-
-    return { key, size: data.byteLength };
-  }
-
-  /**
    * Retrieve a video asset from R2
    */
   async getAsset(key: string): Promise<R2ObjectBody | null> {
     return this.bucket.get(key);
-  }
-
-  /**
-   * Delete all assets for a video (legacy format)
-   */
-  async deleteVideoAssets(videoId: number): Promise<void> {
-    const list = await this.bucket.list({ prefix: `videos/${videoId}/` });
-    for (const obj of list.objects) {
-      await this.bucket.delete(obj.key);
-    }
   }
 
   /**

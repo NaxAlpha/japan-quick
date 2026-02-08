@@ -310,6 +310,7 @@ export function parseVideo(video: Video): ParsedVideo {
     slideAudioAssetIds: video.slide_audio_asset_ids ? JSON.parse(video.slide_audio_asset_ids) : [],
     assets: [], // Assets are populated separately in the route handler
     renderedVideo: null, // Rendered video is populated separately in the route handler
+    scriptPrompt: null, // Script prompt is populated separately in the route handler
     youtubeInfo: undefined // YouTube info is populated separately in the route handler
   };
 }

@@ -7,7 +7,7 @@ import { Hono } from 'hono';
 import type { Env } from '../types/env.js';
 import { YouTubeAuthService } from '../services/youtube-auth.js';
 import { generateRequestId, createLogger } from '../lib/logger.js';
-import { successResponse, errorResponse, serverErrorResponse, unauthorizedResponse } from '../lib/api-response.js';
+import { successResponse, errorResponse, serverErrorResponse } from '../lib/api-response.js';
 
 const log = createLogger('YouTubeRoutes');
 

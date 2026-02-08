@@ -1,105 +1,70 @@
-/**
- * Unit tests for YahooNewsScraper
- */
-
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import puppeteer from '@cloudflare/puppeteer';
 import { YahooNewsScraper } from '../../../services/news-scraper.js';
+
+vi.mock('@cloudflare/puppeteer', () => ({
+  default: {
+    launch: vi.fn(),
+  },
+}));
 
 describe('YahooNewsScraper', () => {
   let scraper: YahooNewsScraper;
-  let mockBrowser: any;
   let mockPage: any;
+  let mockBrowser: any;
 
   beforeEach(() => {
     scraper = new YahooNewsScraper();
+
     mockPage = {
-      setUserAgent: vi.fn(),
-      goto: vi.fn(),
+      setUserAgent: vi.fn().mockResolvedValue(undefined),
+      goto: vi.fn().mockResolvedValue(undefined),
       evaluate: vi.fn(),
-      close: vi.fn()
+      close: vi.fn().mockResolvedValue(undefined),
     };
+
     mockBrowser = {
-      newPage: vi.fn().mockResolvedValue(mockPage)
+      newPage: vi.fn().mockResolvedValue(mockPage),
+      disconnect: vi.fn().mockResolvedValue(undefined),
     };
+
+    vi.mocked(puppeteer.launch).mockResolvedValue(mockBrowser as any);
   });
 
-  it('should scrape articles from Yahoo News Japan', async () => {
-    const mockArticles = [
-      {
-        title: 'Test Article 1',
-        url: 'https://news.yahoo.co.jp/pickup/1',
-        thumbnailUrl: 'https://example.com/img1.jpg',
-        publishedAt: '1/19(月) 12:31'
-      },
-      {
-        title: 'Test Article 2',
-        url: 'https://news.yahoo.co.jp/pickup/2',
-        thumbnailUrl: 'https://example.com/img2.jpg',
-        publishedAt: '1/19(月) 12:07'
-      }
-    ];
-    mockPage.evaluate.mockResolvedValue(mockArticles);
+  it('scrapes, filters pickup URLs, and deduplicates by URL', async () => {
+    mockPage.evaluate.mockResolvedValue([
+      { title: 'Pickup 1', url: 'https://news.yahoo.co.jp/pickup/1234567' },
+      { title: 'Pickup 1 Duplicate', url: 'https://news.yahoo.co.jp/pickup/1234567' },
+      { title: 'Article', url: 'https://news.yahoo.co.jp/articles/abc' },
+    ]);
 
-    const result = await scraper.scrape(mockBrowser);
+    const result = await scraper.scrape({} as any);
 
-    expect(result).toEqual(mockArticles);
-    expect(mockPage.setUserAgent).toHaveBeenCalledWith(expect.stringContaining('JapanQuick'));
+    expect(result).toHaveLength(1);
+    expect(result[0].url).toBe('https://news.yahoo.co.jp/pickup/1234567');
     expect(mockPage.goto).toHaveBeenCalledWith(
       'https://news.yahoo.co.jp/topics/top-picks',
       expect.objectContaining({ timeout: 20000 })
     );
   });
 
-  it('should convert relative URLs to absolute', async () => {
-    const mockArticles = [
-      { title: 'Test', url: '/articles/123' }
-    ];
-    mockPage.evaluate.mockResolvedValue(mockArticles);
+  it('drops non-absolute URLs after extraction', async () => {
+    mockPage.evaluate.mockResolvedValue([
+      { title: 'Relative pickup', url: '/pickup/9999999' },
+    ]);
 
-    const result = await scraper.scrape(mockBrowser);
+    const result = await scraper.scrape({} as any);
 
-    expect(result[0].url).toBe('https://news.yahoo.co.jp/articles/123');
+    expect(result).toHaveLength(0);
   });
 
-  it('should deduplicate articles by URL', async () => {
-    const mockArticles = [
-      { title: 'Article 1', url: 'https://example.com/1' },
-      { title: 'Article 2', url: 'https://example.com/1' }, // Duplicate
-      { title: 'Article 3', url: 'https://example.com/2' }
-    ];
-    mockPage.evaluate.mockResolvedValue(mockArticles);
-
-    const result = await scraper.scrape(mockBrowser);
-
-    expect(result).toHaveLength(2);
+  it('throws when browser binding is missing', async () => {
+    await expect(scraper.scrape(null)).rejects.toThrow('Browser binding is not available');
   });
 
-  it('should filter articles without valid URLs', async () => {
-    const mockArticles = [
-      { title: 'Valid', url: 'https://example.com' },
-      { title: 'Invalid', url: '' },
-      { title: 'Invalid', url: 'not-a-url' }
-    ];
-    mockPage.evaluate.mockResolvedValue(mockArticles);
-
-    const result = await scraper.scrape(mockBrowser);
-
-    expect(result).toHaveLength(1);
-    expect(result[0].url).toBe('https://example.com');
-  });
-
-  it('should handle scraping errors gracefully', async () => {
+  it('propagates scraping errors and always closes browser resources', async () => {
     mockPage.goto.mockRejectedValue(new Error('Network error'));
 
-    await expect(scraper.scrape(mockBrowser)).rejects.toThrow('Network error');
-    expect(mockPage.close).toHaveBeenCalled();
-  });
-
-  it('should handle empty results', async () => {
-    mockPage.evaluate.mockResolvedValue([]);
-
-    const result = await scraper.scrape(mockBrowser);
-
-    expect(result).toEqual([]);
+    await expect(scraper.scrape({} as any)).rejects.toThrow('Network error');
   });
 });

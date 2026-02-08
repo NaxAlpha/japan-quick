@@ -3,12 +3,10 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
-import { ulid } from 'ulid';
 import type { AISelectionOutput, VideoType, VideoScript, AIArticleInputWithContent, EnhancedAISelectionOutput, PastVideoContext, AIArticleInput, VideoFormat, UrgencyLevel, ScriptGenerationInputEnhanced, ScriptGenerationResultEnhanced } from '../types/video.js';
 import type { Article } from '../types/article.js';
 import { log } from '../lib/logger.js';
 import { buildSelectionPrompt, buildScriptPrompt, buildEnhancedSelectionPrompt, buildScriptPromptEnhanced } from '../lib/prompts.js';
-import { R2StorageService } from './r2-storage.js';
 
 interface TokenUsage {
   inputTokens: number;
@@ -65,13 +63,9 @@ interface EnhancedScriptGenerationResult {
 
 export class GeminiService {
   private genai: GoogleGenAI;
-  private r2Storage: R2StorageService | null = null;
 
-  constructor(apiKey: string, r2Storage?: R2StorageService) {
+  constructor(apiKey: string) {
     this.genai = new GoogleGenAI({ apiKey });
-    if (r2Storage) {
-      this.r2Storage = r2Storage;
-    }
   }
 
   /**
