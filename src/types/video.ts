@@ -7,7 +7,13 @@ export type VideoSelectionStatus = 'todo' | 'doing' | 'done' | 'error';
 export type ScriptStatus = 'pending' | 'generating' | 'generated' | 'error';
 export type AssetStatus = 'pending' | 'generating' | 'generated' | 'error';
 export type RenderStatus = 'pending' | 'rendering' | 'rendered' | 'error';
-export type YouTubeUploadStatus = 'pending' | 'uploading' | 'processing' | 'uploaded' | 'error';
+export type YouTubeUploadStatus = 'pending' | 'uploading' | 'processing' | 'uploaded' | 'blocked' | 'error';
+
+// Policy status types
+export type PolicyFindingStatus = 'PASS' | 'WARN' | 'REVIEW' | 'BLOCK';
+export type PolicyStageStatus = 'PENDING' | 'CLEAN' | 'WARN' | 'REVIEW' | 'BLOCK';
+export type PolicyOverallStatus = PolicyStageStatus;
+export type PolicyCheckStage = 'script_light' | 'asset_strong';
 
 // Model ID types
 export type ImageModelId = 'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview';
@@ -133,6 +139,40 @@ export interface RenderedVideoMetadata {
   format: string;
 }
 
+export interface PolicyRun {
+  id: number;
+  video_id: number;
+  stage: PolicyCheckStage;
+  model_id: string;
+  status: PolicyStageStatus;
+  summary: string | null;
+  prompt_r2_key: string | null;
+  response_r2_key: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cost: number;
+  created_at: string;
+}
+
+export interface PolicyFinding {
+  id: number;
+  policy_run_id: number;
+  check_code: string;
+  check_label: string;
+  status: PolicyFindingStatus;
+  reason: string;
+  evidence_json: string | null;
+  created_at: string;
+}
+
+export interface ParsedPolicyFinding extends Omit<PolicyFinding, 'evidence_json'> {
+  evidence_json: string[];
+}
+
+export interface PolicyRunWithFindings extends PolicyRun {
+  findings: ParsedPolicyFinding[];
+}
+
 // Video asset interfaces
 export interface VideoAsset {
   id: number;
@@ -186,6 +226,12 @@ export interface Video {
   render_completed_at: string | null;
   slide_image_asset_ids: string | null;   // JSON array of ULID asset IDs
   slide_audio_asset_ids: string | null;   // JSON array of ULID asset IDs
+  script_policy_status: PolicyStageStatus;
+  asset_policy_status: PolicyStageStatus;
+  policy_overall_status: PolicyOverallStatus;
+  policy_summary: string | null;
+  policy_block_reasons: string | null;    // JSON array of block reason strings
+  policy_last_checked_at: string | null;
   youtube_upload_status: YouTubeUploadStatus;
   youtube_upload_error: string | null;
   created_at: string;
@@ -193,7 +239,7 @@ export interface Video {
 }
 
 // Frontend-ready interface (notes split by newline to array, articles parsed from JSON)
-export interface ParsedVideo extends Omit<Video, 'notes' | 'articles' | 'script' | 'slide_image_asset_ids' | 'slide_audio_asset_ids'> {
+export interface ParsedVideo extends Omit<Video, 'notes' | 'articles' | 'script' | 'slide_image_asset_ids' | 'slide_audio_asset_ids' | 'policy_block_reasons'> {
   notes: string[];                   // Split by newline
   articles: string[];                // Parsed from JSON
   script: VideoScript | null;        // Parsed from JSON
@@ -201,6 +247,8 @@ export interface ParsedVideo extends Omit<Video, 'notes' | 'articles' | 'script'
   renderedVideo: ParsedVideoAsset | null;  // Rendered video asset if present
   slideImageAssetIds: string[];      // Parsed slide image asset ULIDs
   slideAudioAssetIds: string[];      // Parsed slide audio asset ULIDs
+  policy_block_reasons: string[];    // Parsed from JSON
+  policyRuns: PolicyRunWithFindings[]; // Populated separately in route handler
   scriptPrompt: ScriptPrompt | null;  // Script prompt if available
   youtubeInfo?: YouTubeInfo;         // YouTube metadata if uploaded
 }
@@ -314,16 +362,44 @@ export interface EnhancedAISelectionOutput extends AISelectionOutput {
 }
 
 // Helper function to parse video from DB to frontend format
+function parseJsonArray(rawValue: string | null): string[] {
+  if (!rawValue) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter((value): value is string => typeof value === 'string');
+  } catch {
+    return [];
+  }
+}
+
+function normalizePolicyStatus(status: unknown): PolicyStageStatus {
+  if (status === 'CLEAN' || status === 'WARN' || status === 'REVIEW' || status === 'BLOCK' || status === 'PENDING') {
+    return status;
+  }
+  return 'PENDING';
+}
+
 export function parseVideo(video: Video): ParsedVideo {
   return {
     ...video,
     notes: video.notes ? video.notes.split('\n') : [],
-    articles: video.articles ? JSON.parse(video.articles) : [],
+    articles: parseJsonArray(video.articles),
     script: video.script ? JSON.parse(video.script) : null,
-    slideImageAssetIds: video.slide_image_asset_ids ? JSON.parse(video.slide_image_asset_ids) : [],
-    slideAudioAssetIds: video.slide_audio_asset_ids ? JSON.parse(video.slide_audio_asset_ids) : [],
+    slideImageAssetIds: parseJsonArray(video.slide_image_asset_ids),
+    slideAudioAssetIds: parseJsonArray(video.slide_audio_asset_ids),
+    script_policy_status: normalizePolicyStatus(video.script_policy_status),
+    asset_policy_status: normalizePolicyStatus(video.asset_policy_status),
+    policy_overall_status: normalizePolicyStatus(video.policy_overall_status),
+    policy_block_reasons: parseJsonArray(video.policy_block_reasons),
     assets: [], // Assets are populated separately in the route handler
     renderedVideo: null, // Rendered video is populated separately in the route handler
+    policyRuns: [], // Policy runs are populated separately in the route handler
     scriptPrompt: null, // Script prompt is populated separately in the route handler
     youtubeInfo: undefined // YouTube info is populated separately in the route handler
   };

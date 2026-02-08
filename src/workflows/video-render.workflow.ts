@@ -10,6 +10,7 @@ import type { Video, VideoAsset, VideoScript } from '../types/video.js';
 import type { Env } from '../types/env.js';
 import { log, generateRequestId } from '../lib/logger.js';
 import { RETRY_POLICIES } from '../lib/constants.js';
+import { getUploadPrivacyForPolicyStatus, normalizePolicyStageStatus } from '../lib/policy.js';
 
 export interface VideoRenderParams {
   videoId: number;
@@ -20,6 +21,23 @@ export interface VideoRenderResult {
   videoId?: number;
   assetId?: number;
   error?: string;
+}
+
+function parseStringArray(rawValue: string | null): string[] {
+  if (!rawValue) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+  } catch {
+    return [];
+  }
 }
 
 export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], VideoRenderParams, VideoRenderResult> {
@@ -48,7 +66,9 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
             video_type,
             articles,
             slide_audio_asset_ids,
-            image_model
+            image_model,
+            policy_overall_status,
+            policy_block_reasons
           FROM videos
           WHERE id = ?
         `).bind(videoId).first();
@@ -285,7 +305,60 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
         `).bind(videoId).run();
       });
 
-      // Step 10: Trigger YouTube upload workflow
+      // Step 10: Resolve policy-driven upload behavior
+      const uploadPolicy = await step.do('resolve-upload-policy', async () => {
+        const policyStatus = normalizePolicyStageStatus(video.policy_overall_status);
+        const uploadPrivacy = getUploadPrivacyForPolicyStatus(policyStatus);
+        const blockReasons = parseStringArray(video.policy_block_reasons);
+
+        if (uploadPrivacy === null) {
+          const message = blockReasons.length > 0
+            ? `Policy BLOCK: ${blockReasons.join(' | ')}`
+            : `Policy status ${policyStatus} blocks upload`;
+
+          await this.env.DB.prepare(`
+            UPDATE videos
+            SET youtube_upload_status = 'blocked',
+                youtube_upload_error = ?,
+                updated_at = datetime('now')
+            WHERE id = ?
+          `).bind(message, videoId).run();
+
+          return {
+            blocked: true,
+            policyStatus,
+            privacy: null,
+            message
+          };
+        }
+
+        const message = policyStatus === 'CLEAN'
+          ? null
+          : `Policy status ${policyStatus}: upload forced to private`;
+
+        await this.env.DB.prepare(`
+          UPDATE videos
+          SET youtube_upload_status = 'pending',
+              youtube_upload_error = ?,
+              updated_at = datetime('now')
+          WHERE id = ?
+        `).bind(message, videoId).run();
+
+        return {
+          blocked: false,
+          policyStatus,
+          privacy: uploadPrivacy,
+          message
+        };
+      });
+      log.videoRenderWorkflow.info(reqId, 'Step completed', {
+        step: 'resolve-upload-policy',
+        policyStatus: uploadPolicy.policyStatus,
+        blocked: uploadPolicy.blocked,
+        privacy: uploadPolicy.privacy || 'none'
+      });
+
+      // Step 11: Trigger YouTube upload workflow (unless blocked)
       await step.do('trigger-youtube-upload', {
         retries: {
           limit: RETRY_POLICIES.DEFAULT.limit,
@@ -293,12 +366,26 @@ export class VideoRenderWorkflow extends WorkflowEntrypoint<Env['Bindings'], Vid
           backoff: 'constant'
         }
       }, async () => {
-        const params = { videoId };
+        if (uploadPolicy.blocked) {
+          log.videoRenderWorkflow.warn(reqId, 'YouTube upload skipped due to policy block', {
+            videoId,
+            message: uploadPolicy.message
+          });
+          return;
+        }
+
+        const params = {
+          videoId,
+          privacy: uploadPolicy.privacy as 'public' | 'private'
+        };
         await this.env.YOUTUBE_UPLOAD_WORKFLOW.create({
           id: `youtube-upload-${videoId}-${Date.now()}`,
           params
         });
-        log.videoRenderWorkflow.info(reqId, 'YouTube upload workflow triggered', { videoId });
+        log.videoRenderWorkflow.info(reqId, 'YouTube upload workflow triggered', {
+          videoId,
+          privacy: uploadPolicy.privacy
+        });
       });
 
       log.videoRenderWorkflow.info(reqId, 'Workflow completed', {

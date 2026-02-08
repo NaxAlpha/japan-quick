@@ -18,6 +18,7 @@ import '../components/video-script-card.js';
 import '../components/video-assets-card.js';
 import '../components/video-render-card.js';
 import '../components/video-youtube-upload-card.js';
+import '../components/video-policy-card.js';
 import type {
   ParsedVideo,
   CostLog,
@@ -55,34 +56,30 @@ export class VideoPage extends LitElement {
 
     /* Cards container */
     .cards-container {
-      display: grid;
-      grid-template-columns: repeat(12, 1fr);
+      display: flex;
+      flex-wrap: nowrap;
+      align-items: flex-start;
       gap: 1.5rem;
+      overflow-x: auto;
+      overflow-y: visible;
+      padding-bottom: 0.75rem;
+      scroll-snap-type: x proximity;
+      -webkit-overflow-scrolling: touch;
       position: relative;
       z-index: 1;
     }
 
-    .card.span-full {
-      grid-column: span 12;
+    .cards-container > * {
+      width: 300px !important;
+      min-height: auto !important;
+      flex: 0 0 300px;
+      scroll-snap-align: start;
     }
 
-    .card.span-8 {
-      grid-column: span 8;
-    }
-
-    .card.span-6 {
-      grid-column: span 6;
-    }
-
-    .card.span-4 {
-      grid-column: span 4;
-    }
-
-    @media (max-width: 1024px) {
-      .card.span-8,
-      .card.span-6,
-      .card.span-4 {
-        grid-column: span 12;
+    @media (max-width: 768px) {
+      .cards-container > * {
+        width: min(88vw, 300px) !important;
+        flex: 0 0 min(88vw, 300px);
       }
     }
   `];
@@ -351,7 +348,8 @@ export class VideoPage extends LitElement {
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to start YouTube upload: ${response.statusText}`);
+        const errorPayload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(errorPayload?.error || `Failed to start YouTube upload: ${response.statusText}`);
       }
 
       const data = await response.json();
@@ -378,10 +376,13 @@ export class VideoPage extends LitElement {
         if (status === 'error') {
           this.error = (data as { uploadError?: string }).uploadError || 'YouTube upload failed';
         }
+        if (status === 'blocked') {
+          this.error = (data as { uploadError?: string }).uploadError || 'YouTube upload blocked by policy';
+        }
       },
       onComplete: async (terminalStatus) => {
         this.uploadingToYouTube = false;
-        if (terminalStatus === 'uploaded') {
+        if (terminalStatus === 'uploaded' || terminalStatus === 'blocked') {
           await this.loadVideo();
         }
         // For error status, the error was already set in onStatus callback
@@ -436,12 +437,20 @@ export class VideoPage extends LitElement {
             .generating=${this.generatingScript}
             @generate-script=${this.generateScript}>
           </video-script-card>
+          <video-policy-card
+            .video=${this.video}
+            stage="script_light">
+          </video-policy-card>
           ${this.video && this.video.script_status === 'generated' ? html`
             <video-assets-card
               .video=${this.video}
               .generating=${this.generatingAssets}
               @generate-assets=${(e: CustomEvent) => this.generateAssets(e.detail)}>
             </video-assets-card>
+            <video-policy-card
+              .video=${this.video}
+              stage="asset_strong">
+            </video-policy-card>
           ` : ''}
           ${this.video && this.video.asset_status === 'generated' ? html`
             <video-render-card

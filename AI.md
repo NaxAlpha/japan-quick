@@ -20,7 +20,12 @@ japan-quick/
 │   ├── 008_video_render.sql    # Database migration for video render status tracking
 │   ├── 009_public_assets.sql   # Database migration for ULID-based public asset system
 │   ├── 010_video_selection_v2.sql  # Database migration for enhanced video selection
-│   └── 012_youtube_upload.sql  # Database migration for YouTube upload status and metadata
+│   ├── 011_script_prompts.sql  # Database migration for script prompt storage
+│   ├── 012_youtube_upload.sql  # Database migration for YouTube upload status and metadata
+│   ├── 013_pro_model_default.sql  # Database migration setting default image model
+│   └── 014_policy_checks.sql   # Database migration for policy status/runs/findings
+├── docs/
+│   └── youtube-policy.md       # Human-readable policy document and decision matrix
 ├── src/
 │   ├── index.ts                # Cloudflare Workers backend with Hono + workflow exports
 │   ├── middleware/
@@ -33,12 +38,17 @@ japan-quick/
 │   │   ├── route-helpers.ts    # Shared route lifecycle wrapper (request logging, error handling, status logging)
 │   │   ├── workflow-helper.ts  # Shared workflow types (TokenUsageInfo)
 │   │   ├── prompts.ts          # Centralized AI prompt templates (buildSelectionPrompt, buildEnhancedSelectionPrompt, buildScriptPrompt, buildScriptPromptEnhanced, buildGridImagePrompt)
+│   │   ├── policy.ts           # Policy status/severity helpers and upload privacy mapping
+│   │   ├── policy-persistence.ts # Policy run persistence + cost logging helpers
 │   │   ├── video-selection-policy.ts # Video selection scheduling/lookback policy constants + helpers (JST odd-hour trigger, soft mix targets)
 │   │   ├── dimensions.ts       # Grid dimension calculations for 1K/2K resolutions
 │   │   ├── image-fetcher.ts    # Fetch images from URLs and convert to base64
 │   │   └── audio-helper.ts     # Audio conversion utilities (pcmToWav, calculatePcmDuration)
+│   ├── policy/
+│   │   └── youtube-policy-rules.ts # Machine-readable policy rules used by prompts/checkers
 │   ├── frontend/
 │   │   ├── components/
+│   │   │   ├── video-policy-card.ts  # Policy summary + stage/finding status card
 │   │   │   ├── video-youtube-upload-card.ts  # YouTube upload card component
 │   │   │   └── ...             # Other video-related components
 │   │   ├── styles/
@@ -73,6 +83,7 @@ japan-quick/
 │   │   ├── article-scraper.ts        # Yahoo News article scraper (full content + comments)
 │   │   ├── article-scraper-core.ts   # Core article scraping logic (serial processing)
 │   │   ├── gemini.ts                 # Gemini AI service (uses prompts.ts for AI prompts)
+│   │   ├── policy-checker.ts         # Light/strong policy audit service with R2 prompt/response artifacts
 │   │   ├── asset-generator.ts        # Asset generation service (uses prompts.ts and audio-helper.ts)
 │   │   ├── video-renderer.ts         # FFmpeg video rendering in Cloudflare Sandbox
 │   │   ├── r2-storage.ts             # R2 storage service (upload, retrieve, delete assets)
@@ -99,15 +110,18 @@ japan-quick/
 │           │   ├── dimensions.test.ts
 │           │   ├── html-template.test.ts
 │           │   ├── logger.test.ts
+│           │   ├── policy.test.ts
 │           │   ├── prompts-selection.test.ts
 │           │   ├── route-helpers.test.ts
 │           │   └── video-selection-policy.test.ts
 │           ├── routes/
 │           │   ├── articles.test.ts
 │           │   ├── frontend.test.ts
-│           │   └── news.test.ts
+│           │   ├── news.test.ts
+│           │   └── videos.test.ts
 │           └── services/
-│               └── news-scraper.test.ts
+│               ├── news-scraper.test.ts
+│               └── policy-checker.test.ts
 ├── scripts/
 │   └── verify-asset-generation.ts  # Verification script for asset generation improvements
 ├── tsconfig.json               # TypeScript config for backend (Cloudflare Workers)
@@ -134,6 +148,24 @@ japan-quick/
 - Test with `wrangler dev --remote` or deploy to production
 - Chunked video transfer via R2 multipart upload (15MB chunks, one at a time)
 
+**Policy Pipeline**
+- Script stage: after script generation, run light policy audit (`gemini-3-flash-preview`) with selected articles + generated script.
+- Asset stage: after image/audio generation, run strong policy audit (`gemini-3-pro-preview`) with selected articles + generated script + generated images.
+- Persist policy artifacts:
+  - `videos.script_policy_status`, `videos.asset_policy_status`, `videos.policy_overall_status`
+  - `policy_runs` + `policy_findings`
+  - cost logs: `policy-script-light`, `policy-asset-strong`
+- Upload enforcement:
+  - `CLEAN` => YouTube upload privacy `public`
+  - `WARN` / `REVIEW` / `PENDING` => upload privacy `private`
+  - `BLOCK` => upload blocked (`youtube_upload_status='blocked'`)
+- Manual endpoint guardrails block bypass for `BLOCK` status on generate-assets/render/youtube-upload routes.
+- Frontend policy rendering:
+  - Video detail page renders two fixed-width stage cards: script policy (`stage="script_light"`) and asset policy (`stage="asset_strong"`).
+  - Each stage card defaults missing/invalid statuses to `PENDING` and is resilient to missing `policyRuns`/`policy_block_reasons`.
+  - `video-page` uses a single horizontal no-wrap card rail (`overflow-x:auto`) and overrides child host sizing (`width:300px`, `min-height:auto`) to neutralize global `baseStyles :host` defaults (`width:100%`, `min-height:100vh`).
+  - Video list cards include `POL` badge from `policy_overall_status`.
+
 ## Cloudflare Bindings
 
 | Binding | Type | Purpose |
@@ -159,6 +191,7 @@ wrangler dev --remote       # Remote dev (for workflows)
 bun run test -- --run       # Run tests once (non-watch mode)
 bun run deploy              # Deploy to Cloudflare Workers
 wrangler tail --format pretty  # Tail logs
+wrangler d1 execute japan-quick-db --remote --file migrations/014_policy_checks.sql  # Apply policy schema
 
 # Test chunked upload
 wrangler workflows trigger test-chunked-workflow --params '{"testSize":75}'
@@ -169,7 +202,7 @@ wrangler workflows instances describe test-chunked-workflow <instance-id>
 
 **Format:** `[reqId] [timestamp] [level] [component] message | key=value`
 
-**Components:** newsRoutes, newsWorkflow, newsScraper, articleRoutes, articleWorkflow, articleScraper, videoRoutes, videoWorkflow, gemini, scriptGeneration, assetGen, assetRoutes, youtubeRoutes, youtubeAuth, youTubeUpload, youTubeUploadWorkflow, auth
+**Components:** newsRoutes, newsWorkflow, newsScraper, articleRoutes, articleWorkflow, articleScraper, videoRoutes, videoWorkflow, gemini, scriptGeneration, assetGen, policy, policyWorkflow, assetRoutes, youtubeRoutes, youtubeAuth, youTubeUpload, youTubeUploadWorkflow, auth
 
 **Usage:**
 ```typescript

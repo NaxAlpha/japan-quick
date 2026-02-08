@@ -16,7 +16,18 @@
 
 import { Hono } from 'hono';
 import type { Env } from '../types/env.js';
-import type { Video, CostLog, VideoAsset, ParsedVideoAsset, ScriptPrompt, YouTubeInfo } from '../types/video.js';
+import type {
+  Video,
+  CostLog,
+  VideoAsset,
+  ParsedVideoAsset,
+  ScriptPrompt,
+  YouTubeInfo,
+  PolicyRun,
+  PolicyFinding,
+  ParsedPolicyFinding,
+  PolicyRunWithFindings
+} from '../types/video.js';
 import type { VideoSelectionParams } from '../workflows/video-selection.workflow.js';
 import type { VideoRenderParams } from '../workflows/video-render.workflow.js';
 import type { ScriptGenerationParams } from '../workflows/script-generation.workflow.js';
@@ -27,8 +38,26 @@ import { R2StorageService } from '../services/r2-storage.js';
 import { log, generateRequestId } from '../lib/logger.js';
 import { successResponse, errorResponse, notFoundResponse, serverErrorResponse, conflictResponse } from '../lib/api-response.js';
 import { POLLING } from '../lib/constants.js';
+import { getUploadPrivacyForPolicyStatus, normalizePolicyStageStatus } from '../lib/policy.js';
 
 const videoRoutes = new Hono<{ Bindings: Env['Bindings'] }>();
+
+function parsePolicyReasons(rawValue: string | null): string[] {
+  if (!rawValue) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+  } catch {
+    return [];
+  }
+}
 
 // GET /api/videos - List 10 most recent videos with pagination
 videoRoutes.get('/', async (c) => {
@@ -145,11 +174,42 @@ videoRoutes.get('/:id', async (c) => {
       SELECT * FROM youtube_info WHERE video_id = ?
     `).bind(id).first<YouTubeInfo>();
 
+    // Fetch policy runs and findings
+    const policyRunsResult = await c.env.DB.prepare(`
+      SELECT *
+      FROM policy_runs
+      WHERE video_id = ?
+      ORDER BY created_at DESC, id DESC
+    `).bind(id).all();
+
+    const rawPolicyRuns = policyRunsResult.results as PolicyRun[];
+    const policyRuns: PolicyRunWithFindings[] = [];
+
+    for (const run of rawPolicyRuns) {
+      const findingsResult = await c.env.DB.prepare(`
+        SELECT *
+        FROM policy_findings
+        WHERE policy_run_id = ?
+        ORDER BY id ASC
+      `).bind(run.id).all();
+
+      const findings = (findingsResult.results as PolicyFinding[]).map((finding): ParsedPolicyFinding => ({
+        ...finding,
+        evidence_json: parsePolicyReasons(finding.evidence_json)
+      }));
+
+      policyRuns.push({
+        ...run,
+        findings
+      });
+    }
+
     return successResponse({
       video: {
         ...parsedVideo,
         assets,
         renderedVideo,
+        policyRuns,
         scriptPrompt: scriptPromptResult || null,
         youtubeInfo: youtubeInfoResult || undefined
       },
@@ -322,12 +382,30 @@ videoRoutes.post('/:id/generate-assets', async (c) => {
 
     // 1. Validate video exists and can generate
     const video = await c.env.DB.prepare(`
-      SELECT script_status, asset_status, image_model, tts_model FROM videos WHERE id = ?
-    `).bind(id).first<{ script_status: string; asset_status: string; image_model: string; tts_model: string }>();
+      SELECT script_status, asset_status, image_model, tts_model, policy_overall_status, policy_block_reasons
+      FROM videos
+      WHERE id = ?
+    `).bind(id).first<{
+      script_status: string;
+      asset_status: string;
+      image_model: string;
+      tts_model: string;
+      policy_overall_status: string | null;
+      policy_block_reasons: string | null;
+    }>();
 
     if (!video) {
       log.videoRoutes.warn(reqId, 'Video not found', { id });
       return notFoundResponse('Video');
+    }
+
+    if (normalizePolicyStageStatus(video.policy_overall_status) === 'BLOCK') {
+      const blockReasons = parsePolicyReasons(video.policy_block_reasons);
+      log.videoRoutes.warn(reqId, 'Asset generation blocked by policy status', {
+        id,
+        blockReasons
+      });
+      return conflictResponse(`Policy BLOCK: ${blockReasons.join(' | ') || 'Asset generation is blocked by policy checks'}`);
     }
 
     if (video.script_status !== 'generated') {
@@ -541,6 +619,15 @@ videoRoutes.post('/:id/render', async (c) => {
       return notFoundResponse('Video');
     }
 
+    if (normalizePolicyStageStatus(video.policy_overall_status) === 'BLOCK') {
+      const blockReasons = parsePolicyReasons(video.policy_block_reasons);
+      log.videoRoutes.warn(reqId, 'Render trigger blocked by policy status', {
+        videoId: id,
+        blockReasons
+      });
+      return conflictResponse(`Policy BLOCK: ${blockReasons.join(' | ') || 'Render is blocked by policy checks'}`);
+    }
+
     if (video.asset_status !== 'generated') {
       log.videoRoutes.warn(reqId, 'Assets not generated yet', { videoId: id, assetStatus: video.asset_status });
       return errorResponse('Assets not generated yet', 400);
@@ -645,12 +732,37 @@ videoRoutes.post('/:id/youtube-upload', async (c) => {
       return errorResponse('Video not rendered yet', 400);
     }
 
+    const policyStatus = normalizePolicyStageStatus(video.policy_overall_status);
+    const policyPrivacy = getUploadPrivacyForPolicyStatus(policyStatus);
+    if (policyPrivacy === null) {
+      const blockReasons = parsePolicyReasons(video.policy_block_reasons);
+      const message = `Policy BLOCK: ${blockReasons.join(' | ') || 'Upload blocked by policy checks'}`;
+
+      await c.env.DB.prepare(`
+        UPDATE videos
+        SET youtube_upload_status = 'blocked',
+            youtube_upload_error = ?,
+            updated_at = datetime('now')
+        WHERE id = ?
+      `).bind(message, id).run();
+
+      log.videoRoutes.warn(reqId, 'YouTube upload blocked by policy status', {
+        videoId: id,
+        policyStatus,
+        blockReasons
+      });
+      return conflictResponse(message);
+    }
+
     if (video.youtube_upload_status === 'uploading' || video.youtube_upload_status === 'processing') {
       log.videoRoutes.warn(reqId, 'YouTube upload already in progress', { videoId: id });
       return conflictResponse('YouTube upload already in progress');
     }
 
-    const params: YouTubeUploadParams = { videoId: id };
+    const params: YouTubeUploadParams = {
+      videoId: id,
+      privacy: policyPrivacy
+    };
 
     // Create workflow instance
     const instance = await c.env.YOUTUBE_UPLOAD_WORKFLOW.create({
@@ -658,7 +770,12 @@ videoRoutes.post('/:id/youtube-upload', async (c) => {
       params
     });
 
-    log.videoRoutes.info(reqId, 'YouTube upload workflow created', { workflowId: instance.id, videoId: id });
+    log.videoRoutes.info(reqId, 'YouTube upload workflow created', {
+      workflowId: instance.id,
+      videoId: id,
+      privacy: policyPrivacy,
+      policyStatus
+    });
     return successResponse({ workflowId: instance.id });
   } catch (error) {
     log.videoRoutes.error(reqId, 'Request failed', error as Error);

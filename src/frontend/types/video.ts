@@ -8,7 +8,11 @@ export type VideoSelectionStatus = 'todo' | 'doing' | 'done' | 'error';
 export type ScriptStatus = 'pending' | 'generating' | 'generated' | 'error';
 export type AssetStatus = 'pending' | 'generating' | 'generated' | 'error';
 export type RenderStatus = 'pending' | 'rendering' | 'rendered' | 'error';
-export type YouTubeUploadStatus = 'pending' | 'uploading' | 'processing' | 'uploaded' | 'error';
+export type YouTubeUploadStatus = 'pending' | 'uploading' | 'processing' | 'uploaded' | 'blocked' | 'error';
+export type PolicyFindingStatus = 'PASS' | 'WARN' | 'REVIEW' | 'BLOCK';
+export type PolicyStageStatus = 'PENDING' | 'CLEAN' | 'WARN' | 'REVIEW' | 'BLOCK';
+export type PolicyOverallStatus = PolicyStageStatus;
+export type PolicyCheckStage = 'script_light' | 'asset_strong';
 
 // Model ID types
 export type ImageModelId = 'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview';
@@ -138,6 +142,33 @@ export interface CostLog {
   created_at: string;
 }
 
+export interface PolicyFinding {
+  id: number;
+  policy_run_id: number;
+  check_code: string;
+  check_label: string;
+  status: PolicyFindingStatus;
+  reason: string;
+  evidence_json: string[];
+  created_at: string;
+}
+
+export interface PolicyRun {
+  id: number;
+  video_id: number;
+  stage: PolicyCheckStage;
+  model_id: string;
+  status: PolicyStageStatus;
+  summary: string | null;
+  prompt_r2_key: string | null;
+  response_r2_key: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cost: number;
+  created_at: string;
+  findings: PolicyFinding[];
+}
+
 // Frontend-ready interface
 export interface ParsedVideo {
   id: number;
@@ -163,6 +194,13 @@ export interface ParsedVideo {
   render_completed_at: string | null;
   slideImageAssetIds: string[];
   slideAudioAssetIds: string[];
+  script_policy_status: PolicyStageStatus;
+  asset_policy_status: PolicyStageStatus;
+  policy_overall_status: PolicyOverallStatus;
+  policy_summary: string | null;
+  policy_block_reasons: string[];
+  policy_last_checked_at: string | null;
+  policyRuns: PolicyRun[];
   assets: ParsedVideoAsset[];
   renderedVideo: ParsedVideoAsset | null;
   scriptPrompt: ScriptPrompt | null;

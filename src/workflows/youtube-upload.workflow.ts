@@ -11,9 +11,11 @@ import type { Env } from '../types/env.js';
 import type { YouTubeVideoStatus } from '../types/youtube.js';
 import { log, generateRequestId } from '../lib/logger.js';
 import { RETRY_POLICIES } from '../lib/constants.js';
+import { getUploadPrivacyForPolicyStatus, normalizePolicyStageStatus } from '../lib/policy.js';
 
 export interface YouTubeUploadParams {
   videoId: number;
+  privacy?: 'public' | 'private';
 }
 
 export interface YouTubeUploadResult {
@@ -46,7 +48,9 @@ export class YouTubeUploadWorkflow extends WorkflowEntrypoint<Env['Bindings'], Y
             id,
             script,
             render_status,
-            youtube_upload_status
+            youtube_upload_status,
+            policy_overall_status,
+            policy_block_reasons
           FROM videos
           WHERE id = ?
         `).bind(videoId).first();
@@ -72,15 +76,87 @@ export class YouTubeUploadWorkflow extends WorkflowEntrypoint<Env['Bindings'], Y
       });
       log.youTubeUploadWorkflow.info(reqId, 'Step completed', { step: 'fetch-video', durationMs: Date.now() - startTime });
 
+      const uploadPolicy = await step.do('resolve-policy-upload-mode', async () => {
+        const policyStatus = normalizePolicyStageStatus(video.policy_overall_status);
+        const policyPrivacy = getUploadPrivacyForPolicyStatus(policyStatus);
+
+        if (policyPrivacy === null) {
+          const blockReasons = (() => {
+            try {
+              const parsed = JSON.parse(video.policy_block_reasons || '[]') as unknown;
+              return Array.isArray(parsed)
+                ? parsed.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+                : [];
+            } catch {
+              return [];
+            }
+          })();
+
+          const message = blockReasons.length > 0
+            ? `Policy BLOCK: ${blockReasons.join(' | ')}`
+            : `Policy status ${policyStatus} blocks upload`;
+
+          await this.env.DB.prepare(`
+            UPDATE videos
+            SET youtube_upload_status = 'blocked',
+                youtube_upload_error = ?,
+                updated_at = datetime('now')
+            WHERE id = ?
+          `).bind(message, videoId).run();
+
+          return {
+            blocked: true,
+            privacy: null,
+            policyStatus,
+            warningMessage: message
+          };
+        }
+
+        const requestedPrivacy = event.payload.privacy;
+        if (requestedPrivacy && requestedPrivacy !== policyPrivacy) {
+          log.youTubeUploadWorkflow.warn(reqId, 'Ignoring requested privacy that conflicts with policy', {
+            requestedPrivacy,
+            policyPrivacy
+          });
+        }
+
+        const privacy = policyPrivacy;
+
+        const warningMessage = policyStatus === 'CLEAN'
+          ? null
+          : `Policy status ${policyStatus}: upload enforced as private`;
+
+        return {
+          blocked: false,
+          privacy,
+          policyStatus,
+          warningMessage
+        };
+      });
+      log.youTubeUploadWorkflow.info(reqId, 'Step completed', {
+        step: 'resolve-policy-upload-mode',
+        blocked: uploadPolicy.blocked,
+        policyStatus: uploadPolicy.policyStatus,
+        privacy: uploadPolicy.privacy || 'none'
+      });
+
+      if (uploadPolicy.blocked) {
+        return {
+          success: false,
+          videoId,
+          error: uploadPolicy.warningMessage || 'Upload blocked by policy'
+        };
+      }
+
       // Step 2: Update status to 'uploading'
       await step.do('update-status-uploading', async () => {
         await this.env.DB.prepare(`
           UPDATE videos
           SET youtube_upload_status = 'uploading',
-              youtube_upload_error = NULL,
+              youtube_upload_error = ?,
               updated_at = datetime('now')
           WHERE id = ?
-        `).bind(videoId).run();
+        `).bind(uploadPolicy.warningMessage, videoId).run();
       });
 
       // Step 3: Fetch rendered video asset from R2
@@ -137,7 +213,8 @@ export class YouTubeUploadWorkflow extends WorkflowEntrypoint<Env['Bindings'], Y
       }, async () => {
         // Create upload session
         const uploadService = new YouTubeUploadService(accessToken, this.env.E2B_API_KEY);
-        const { uploadUrl } = await uploadService.createUploadSession(reqId, script);
+        const uploadOptions = { privacy: uploadPolicy.privacy as 'public' | 'private' };
+        const { uploadUrl } = await uploadService.createUploadSession(reqId, script, uploadOptions);
         log.youTubeUploadWorkflow.info(reqId, 'Upload session created');
 
         // Get video from R2 to get size and public URL
@@ -166,7 +243,13 @@ export class YouTubeUploadWorkflow extends WorkflowEntrypoint<Env['Bindings'], Y
         log.youTubeUploadWorkflow.info(reqId, 'Video uploaded to YouTube', { youtubeVideoId: actualVideoId });
 
         // Build and create YouTube info record
-        const youtubeInfo = uploadService.buildYouTubeInfo(reqId, videoId, actualVideoId, script);
+        const youtubeInfo = uploadService.buildYouTubeInfo(
+          reqId,
+          videoId,
+          actualVideoId,
+          script,
+          { privacy: uploadPolicy.privacy as 'public' | 'private' }
+        );
         const completedInfo = uploadService.updateYouTubeInfoCompletion(reqId, youtubeInfo as YouTubeInfo);
 
         const result = await this.env.DB.prepare(`
@@ -360,13 +443,15 @@ export class YouTubeUploadWorkflow extends WorkflowEntrypoint<Env['Bindings'], Y
 
       // Step 9: Update status to 'uploaded'
       await step.do('update-status-uploaded', async () => {
+        const warningParts = [uploadPolicy.warningMessage, thumbnailResult.warning].filter(Boolean);
+        const mergedWarning = warningParts.length > 0 ? warningParts.join(' | ') : null;
         await this.env.DB.prepare(`
           UPDATE videos
           SET youtube_upload_status = 'uploaded',
               youtube_upload_error = ?,
               updated_at = datetime('now')
           WHERE id = ?
-        `).bind(thumbnailResult.warning, videoId).run();
+        `).bind(mergedWarning, videoId).run();
       });
 
       if (thumbnailResult.warning) {

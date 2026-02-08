@@ -6,12 +6,14 @@
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
 import { ulid } from 'ulid';
 import { GeminiService } from '../services/gemini.js';
+import { PolicyCheckerService } from '../services/policy-checker.js';
 import { R2StorageService } from '../services/r2-storage.js';
 import type { Video, VideoScript, VideoFormat, UrgencyLevel } from '../types/video.js';
 import type { Article, ArticleVersion, ArticleComment } from '../types/article.js';
 import type { Env } from '../types/env.js';
 import { log, generateRequestId } from '../lib/logger.js';
 import { RETRY_POLICIES } from '../lib/constants.js';
+import { persistPolicyCheck } from '../lib/policy-persistence.js';
 
 /**
  * Get time context from current hour in JST
@@ -151,7 +153,7 @@ export class ScriptGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings']
           const images = version.images ? JSON.parse(version.images) : [];
 
           results.push({
-            pickId: article.pickId,
+            pickId: article.pickId || (article as unknown as { pick_id?: string }).pick_id || pickId,
             title: article.title || 'Untitled',
             content: version.content,
             contentText: version.contentText,
@@ -284,7 +286,53 @@ export class ScriptGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings']
       });
       log.scriptGenerationWorkflow.info(reqId, 'Step completed', { step: 'save-script' });
 
-      // Step 7: Update total_cost
+      // Step 7: Run light script policy check and persist result
+      const scriptPolicy = await step.do('run-script-policy-check', {
+        retries: {
+          limit: RETRY_POLICIES.DEFAULT.limit,
+          delay: '3 seconds',
+          backoff: 'constant'
+        }
+      }, async () => {
+        const policyChecker = new PolicyCheckerService(
+          this.env.GOOGLE_API_KEY,
+          this.env.ASSETS_BUCKET,
+          this.env.ASSETS_PUBLIC_URL
+        );
+
+        const policyResult = await policyChecker.runScriptLightCheck(reqId, {
+          videoId,
+          script: generationResult.script,
+          articles: articlesWithContent.map((article) => ({
+            pickId: article.pickId,
+            title: article.title,
+            content: article.content,
+            contentText: article.contentText
+          }))
+        });
+
+        const persisted = await persistPolicyCheck(this.env.DB, {
+          videoId,
+          result: policyResult
+        });
+
+        return {
+          stageStatus: persisted.stageStatus,
+          overallStatus: persisted.overallStatus,
+          policyRunId: persisted.policyRunId,
+          cost: persisted.cost,
+          blockReasons: persisted.blockReasons
+        };
+      });
+      log.scriptGenerationWorkflow.info(reqId, 'Step completed', {
+        step: 'run-script-policy-check',
+        stageStatus: scriptPolicy.stageStatus,
+        overallStatus: scriptPolicy.overallStatus,
+        policyRunId: scriptPolicy.policyRunId,
+        cost: scriptPolicy.cost
+      });
+
+      // Step 8: Update total_cost
       await step.do('update-total-cost', {
         retries: {
           limit: RETRY_POLICIES.DEFAULT.limit,
@@ -303,7 +351,7 @@ export class ScriptGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings']
         `).bind(totalCost, videoId).run();
       });
 
-      // Step 8: Trigger asset generation workflow
+      // Step 9: Trigger asset generation workflow unless policy is blocking
       await step.do('trigger-asset-generation', {
         retries: {
           limit: RETRY_POLICIES.DEFAULT.limit,
@@ -311,6 +359,33 @@ export class ScriptGenerationWorkflow extends WorkflowEntrypoint<Env['Bindings']
           backoff: 'constant'
         }
       }, async () => {
+        if (scriptPolicy.overallStatus === 'BLOCK') {
+          const blockReason = scriptPolicy.blockReasons.length > 0
+            ? scriptPolicy.blockReasons.join(' | ')
+            : 'Script policy check returned BLOCK';
+
+          await this.env.DB.prepare(`
+            UPDATE videos
+            SET asset_status = 'pending',
+                asset_error = ?,
+                updated_at = datetime('now')
+            WHERE id = ?
+          `).bind(`Policy blocked asset generation: ${blockReason}`, videoId).run();
+
+          log.scriptGenerationWorkflow.warn(reqId, 'Asset generation skipped due to policy BLOCK', {
+            videoId,
+            blockReason
+          });
+          return;
+        }
+
+        await this.env.DB.prepare(`
+          UPDATE videos
+          SET asset_error = NULL,
+              updated_at = datetime('now')
+          WHERE id = ?
+        `).bind(videoId).run();
+
         const params = { videoId };
         await this.env.ASSET_GENERATION_WORKFLOW.create({
           id: `asset-gen-${videoId}-${Date.now()}`,
