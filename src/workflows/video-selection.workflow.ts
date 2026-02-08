@@ -1,16 +1,16 @@
 /**
  * VideoSelectionWorkflow - AI-powered article selection for video generation
- * Runs every 30 min, fetches recently scraped articles, uses Gemini to select most important ones
+ * Runs on odd JST hours, fetches recently scraped articles, uses Gemini to select most important ones
  */
 
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
 import { GeminiService } from '../services/gemini.js';
 import { R2StorageService } from '../services/r2-storage.js';
-import type { Article } from '../types/article.js';
-import type { Video, AIArticleInputWithContent, PastVideoContext } from '../types/video.js';
+import type { AIArticleInputWithContent, PastVideoContext, SelectionFormatCounts, SelectionSchedulingContext } from '../types/video.js';
 import type { Env } from '../types/env.js';
 import { log, generateRequestId } from '../lib/logger.js';
-import { RETRY_POLICIES, SCRAPING, VIDEO_RENDERING } from '../lib/constants.js';
+import { RETRY_POLICIES } from '../lib/constants.js';
+import { ARTICLE_LOOKBACK_HOURS, PAST_VIDEO_LOOKBACK_HOURS, SOFT_DAILY_TOTAL, calculateRemainingTargets, getJstDayWindow } from '../lib/video-selection-policy.js';
 import { ulid } from 'ulid';
 
 export interface VideoSelectionParams {
@@ -55,9 +55,9 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
           JOIN article_versions av ON a.id = av.article_id
           WHERE (a.status = 'scraped_v1' OR a.status = 'scraped_v2')
             AND (
-              (a.status = 'scraped_v1' AND av.version = 1 AND datetime(a.first_scraped_at) >= datetime('now', '-24 hours'))
+              (a.status = 'scraped_v1' AND av.version = 1 AND datetime(a.first_scraped_at) >= datetime('now', '-${ARTICLE_LOOKBACK_HOURS} hours'))
               OR
-              (a.status = 'scraped_v2' AND av.version = 2 AND datetime(a.second_scraped_at) >= datetime('now', '-24 hours'))
+              (a.status = 'scraped_v2' AND av.version = 2 AND datetime(a.second_scraped_at) >= datetime('now', '-${ARTICLE_LOOKBACK_HOURS} hours'))
             )
             AND a.pick_id NOT IN (
               SELECT json_each.value FROM videos, json_each(videos.articles)
@@ -79,7 +79,7 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
         };
       }
 
-      // Step 2: Fetch past videos from last 24 hours
+      // Step 2: Fetch past videos from last 36 hours
       const fetchPastStart = Date.now();
       const pastVideos = await step.do('fetch-past-videos', {
         retries: {
@@ -100,7 +100,7 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
           FROM videos v
           LEFT JOIN json_each(v.articles) je
           LEFT JOIN articles a ON a.pick_id = je.value
-          WHERE datetime(v.created_at) >= datetime('now', '-24 hours')
+          WHERE datetime(v.created_at) >= datetime('now', '-${PAST_VIDEO_LOOKBACK_HOURS} hours')
           GROUP BY v.id
           ORDER BY v.created_at DESC
         `).all();
@@ -116,101 +116,66 @@ export class VideoSelectionWorkflow extends WorkflowEntrypoint<Env['Bindings'], 
       });
       log.videoSelectionWorkflow.info(reqId, 'Step completed', { step: 'fetch-past-videos', durationMs: Date.now() - fetchPastStart, pastVideoCount: pastVideos.length });
 
-      // Step 3: Calculate scheduling context and check quota
+      // Step 3: Calculate scheduling context (soft targets, no hard cap)
       const schedulingStart = Date.now();
-      const schedulingContext = await step.do('calculate-scheduling-context', {
+      const schedulingContext: SelectionSchedulingContext = await step.do('calculate-scheduling-context', {
         retries: {
           limit: RETRY_POLICIES.DEFAULT.limit,
           delay: RETRY_POLICIES.DEFAULT.delay,
           backoff: RETRY_POLICIES.DEFAULT.backoff
         }
       }, async () => {
-        // Get current time in JST
         const now = new Date();
-        const jstOffset = 9 * 60; // JST is UTC+9
-        const jstTime = new Date(now.getTime() + jstOffset * 60 * 1000);
-        const currentTimeJST = jstTime.toISOString().replace('T', ' ').substring(0, 19) + ' JST';
-
-        // Count videos created today (8am-8pm JST)
-        const jstDateString = jstTime.toISOString().split('T')[0]; // YYYY-MM-DD
-        const todayStart = `${jstDateString} 08:00:00`;
-        const todayEnd = `${jstDateString} 20:00:00`;
+        const { currentTimeJST, dayStart, dayEndExclusive } = getJstDayWindow(now);
 
         const countResult = await this.env.DB.prepare(`
           SELECT COUNT(*) as count
           FROM videos
           WHERE datetime(created_at, '+9 hours') >= datetime(?)
-            AND datetime(created_at, '+9 hours') <= datetime(?)
-        `).bind(todayStart, todayEnd).first<{ count: number }>();
+            AND datetime(created_at, '+9 hours') < datetime(?)
+        `).bind(dayStart, dayEndExclusive).first<{ count: number }>();
 
         const videosCreatedToday = countResult?.count || 0;
-        const totalDailyTarget = 11;
-
-        // Early exit if daily quota met
-        if (videosCreatedToday >= totalDailyTarget) {
-          log.videoSelectionWorkflow.info(reqId, 'Daily quota met, skipping selection', { videosCreatedToday, totalDailyTarget });
-          return {
-            currentTimeJST,
-            videosCreatedToday,
-            totalDailyTarget,
-            formatsToday: { single_short: 0, multi_short: 0, long: 0 },
-            remainingTargets: { long: 0, single_short: 0 },
-            skipQuotaMet: true
-          };
-        }
+        const totalDailyTarget = SOFT_DAILY_TOTAL;
 
         // Query videos by format created today
         const formatCountResult = await this.env.DB.prepare(`
           SELECT
-            video_format,
+            CASE
+              WHEN video_format IS NOT NULL THEN video_format
+              WHEN video_type = 'long' THEN 'long'
+              ELSE 'single_short'
+            END as effective_video_format,
             COUNT(*) as count
           FROM videos
           WHERE datetime(created_at, '+9 hours') >= datetime(?)
-            AND datetime(created_at, '+9 hours') <= datetime(?)
-            AND video_format IS NOT NULL
-          GROUP BY video_format
-        `).bind(todayStart, todayEnd).all();
+            AND datetime(created_at, '+9 hours') < datetime(?)
+          GROUP BY effective_video_format
+        `).bind(dayStart, dayEndExclusive).all();
 
-        const formatsToday = { single_short: 0, multi_short: 0, long: 0 };
+        const formatsToday: SelectionFormatCounts = { single_short: 0, multi_short: 0, long: 0 };
         for (const row of formatCountResult.results as any[]) {
-          if (row.video_format in formatsToday) {
-            formatsToday[row.video_format as keyof typeof formatsToday] = row.count;
+          if (row.effective_video_format in formatsToday) {
+            formatsToday[row.effective_video_format as keyof SelectionFormatCounts] = row.count;
           }
         }
-
-        // Calculate remaining targets
-        const longRemaining = Math.max(0, 4 - formatsToday.long);
-        const singleShortRemaining = Math.max(0, 3 - formatsToday.single_short);
 
         return {
           currentTimeJST,
           videosCreatedToday,
           totalDailyTarget,
           formatsToday,
-          remainingTargets: {
-            long: longRemaining,
-            single_short: singleShortRemaining
-          },
-          skipQuotaMet: false
+          remainingTargets: calculateRemainingTargets(formatsToday)
         };
       });
       log.videoSelectionWorkflow.info(reqId, 'Step completed', {
         step: 'calculate-scheduling-context',
         durationMs: Date.now() - schedulingStart,
         videosCreatedToday: schedulingContext.videosCreatedToday,
-        remainingQuota: schedulingContext.totalDailyTarget - schedulingContext.videosCreatedToday,
+        softTargetRemaining: schedulingContext.totalDailyTarget - schedulingContext.videosCreatedToday,
         formatsToday: JSON.stringify(schedulingContext.formatsToday),
         remainingTargets: JSON.stringify(schedulingContext.remainingTargets)
       });
-
-      // Early exit if daily quota met
-      if (schedulingContext.skipQuotaMet) {
-        log.videoSelectionWorkflow.info(reqId, 'Workflow completed (daily quota met)', { durationMs: Date.now() - startTime });
-        return {
-          success: true,
-          articlesProcessed: 0
-        };
-      }
 
       // Step 4: Create video entry with status 'doing'
       const createStart = Date.now();

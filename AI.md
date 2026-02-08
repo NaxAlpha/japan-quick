@@ -33,6 +33,7 @@ japan-quick/
 │   │   ├── route-helpers.ts    # Shared route lifecycle wrapper (request logging, error handling, status logging)
 │   │   ├── workflow-helper.ts  # Shared workflow types (TokenUsageInfo)
 │   │   ├── prompts.ts          # Centralized AI prompt templates (buildSelectionPrompt, buildEnhancedSelectionPrompt, buildScriptPrompt, buildScriptPromptEnhanced, buildGridImagePrompt)
+│   │   ├── video-selection-policy.ts # Video selection scheduling/lookback policy constants + helpers (JST odd-hour trigger, soft mix targets)
 │   │   ├── dimensions.ts       # Grid dimension calculations for 1K/2K resolutions
 │   │   ├── image-fetcher.ts    # Fetch images from URLs and convert to base64
 │   │   └── audio-helper.ts     # Audio conversion utilities (pcmToWav, calculatePcmDuration)
@@ -98,7 +99,9 @@ japan-quick/
 │           │   ├── dimensions.test.ts
 │           │   ├── html-template.test.ts
 │           │   ├── logger.test.ts
-│           │   └── route-helpers.test.ts
+│           │   ├── prompts-selection.test.ts
+│           │   ├── route-helpers.test.ts
+│           │   └── video-selection-policy.test.ts
 │           ├── routes/
 │           │   ├── articles.test.ts
 │           │   ├── frontend.test.ts
@@ -286,7 +289,10 @@ All `/api/*` routes require JWT authentication:
 
 **Article Selection:**
 - Basic: buildSelectionPrompt() - Simple article selection with basic criteria
-- Enhanced: buildEnhancedSelectionPrompt() - Advanced selection with scheduling context, past 24h history, content previews, video format options (single_short/multi_short/long), urgency levels (video uploaded immediately)
+- Enhanced: buildEnhancedSelectionPrompt() - Advanced selection with scheduling context, past 36h history, content previews, video format options (single_short/multi_short/long), urgency levels (video uploaded immediately)
+- Selection windows: articles from last 48h (`scraped_v1`/`scraped_v2`), past videos from last 36h
+- Scheduling guidance: soft daily target ~12 videos/day with soft format mix ~4 long / ~4 single_short / ~4 multi_short (no hard cap)
+- Multi-story guidance: `multi_short` can cover 2-6 stories with anti-duplication guidance for recent history
 - Criteria: Importance, Timeliness, Clarity, Visual Potential, Engagement, Novelty
 - Output: notes, short_title, articles (pick_ids), video_format, urgency
 - Token usage: ~500-1000 (basic) vs ~35k-40k (enhanced with content)
@@ -584,7 +590,7 @@ Remotion components require React performance patterns to avoid memory leaks dur
 ## Workflow Scheduling
 
 - **Hourly Cron:** ScheduledNewsRefreshWorkflow, ArticleRescrapeWorkflow
-- **Business Hours Only (JST 8am-8pm):** VideoSelectionWorkflow
+- **Video Selection Trigger:** Odd JST hours at minute 00 only (01:00, 03:00, ..., 23:00)
 - **Stale Status Handling:** Auto-reset 'generating' status older than 10 minutes
 - **Empty Snapshot Prevention:** Workflows skip saving snapshots when 0 items scraped; manual trigger returns error for empty results
 

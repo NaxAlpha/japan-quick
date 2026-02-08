@@ -3,7 +3,7 @@
  * Provides consistent, maintainable prompt strings for AI operations
  */
 
-import type { AIArticleInputWithContent, PastVideoContext, VideoFormat, UrgencyLevel, AIArticleForScript } from '../types/video.js';
+import type { AIArticleInputWithContent, PastVideoContext, VideoFormat, UrgencyLevel, AIArticleForScript, SelectionSchedulingContext } from '../types/video.js';
 
 export interface AIArticleInput {
   index: string;
@@ -85,30 +85,17 @@ Respond with ONLY the JSON object, no other text.`;
 /**
  * Build enhanced article selection prompt with scheduling context
  * @param articles Formatted articles array with content
- * @param pastVideos Past 24h video history
+ * @param pastVideos Past 36h video history
  * @param schedulingContext Scheduling information
  * @returns Complete prompt string for enhanced article selection
  */
 export function buildEnhancedSelectionPrompt(
   articles: AIArticleInputWithContent[],
   pastVideos: PastVideoContext[],
-  schedulingContext: {
-    currentTimeJST: string;
-    videosCreatedToday: number;
-    totalDailyTarget: number;
-    formatsToday: {
-      single_short: number;
-      multi_short: number;
-      long: number;
-    };
-    remainingTargets: {
-      long: number;
-      single_short: number;
-    };
-  }
+  schedulingContext: SelectionSchedulingContext
 ): string {
   const { currentTimeJST, videosCreatedToday, totalDailyTarget, formatsToday, remainingTargets } = schedulingContext;
-  const videosRemaining = totalDailyTarget - videosCreatedToday;
+  const videosRemaining = Math.max(0, totalDailyTarget - videosCreatedToday);
 
   // Format past videos section
   const pastVideosText = pastVideos.length > 0
@@ -142,15 +129,16 @@ CONTEXT:
 
 FORMAT MIX TODAY:
 - Long Videos: ${formatsToday.long}/4 created, ${remainingTargets.long} remaining
-- Single Shorts: ${formatsToday.single_short}/3 created, ${remainingTargets.single_short} remaining
-- Multi Shorts: ${formatsToday.multi_short} created
+- Single Shorts: ${formatsToday.single_short}/4 created, ${remainingTargets.single_short} remaining
+- Multi Shorts: ${formatsToday.multi_short}/4 created, ${remainingTargets.multi_short} remaining
 
 PRIORITY (use this to decide video_format):
-1. If long videos < 4 and timeless/educational stories exist → prioritize "long"
-2. If single_short < 3 and good single stories exist → prioritize "single_short"
-3. Otherwise → "multi_short"
+1. Keep a balanced soft mix around ~4 long / ~4 single_short / ~4 multi_short across 24h
+2. Avoid front-loading long videos in early-day slots unless the story is exceptionally strong
+3. If one format is under target and suitable stories exist, prioritize that format
+4. Otherwise choose the most valuable format for current news context
 
-PAST 24H VIDEO HISTORY:
+PAST 36H VIDEO HISTORY:
 ${pastVideosText}
 
 ARTICLES:
@@ -162,7 +150,7 @@ Analyze these articles and select the MOST IMPORTANT article(s) for video genera
 VIDEO FORMAT OPTIONS:
 - "single_short" (60-90s, 1080x1920 vertical): Single breaking news story, urgent update, trending topic
   Examples: Earthquake warning, market crash, policy announcement
-- "multi_short" (90-120s, 1080x1920 vertical): 2-3 related short stories combined
+- "multi_short" (90-120s, 1080x1920 vertical): 2-6 related or complementary short stories combined
   Examples: Multiple tech updates, related policy changes, trending topic roundup
 - "long" (4-6 min, 1920x1080 horizontal): In-depth analysis, complex story, detailed explanation
   Examples: Technology breakdown, historical context, policy analysis
@@ -174,13 +162,12 @@ URGENCY GUIDANCE:
 - "regular": Informative content, analysis, educational material
 
 DAILY FORMAT MIX TARGETS:
-- MUST have at least 1 long video (ideally 2-3, maximum 4 per day)
-- 2-3 single story shorts per day
-- Remaining slots: multi-story shorts
+- Soft target for full 24h cycle: ~12 total videos
+- Soft format target: ~4 long, ~4 single_short, ~4 multi_short
+- These are guidance targets, not strict caps; adapt to real news quality and urgency
 - Long videos are for "timeless" stories (informative, long-term info, NOT breaking/quick news)
-- If no timeless stories exist today, can skip long videos for that day
-- If more than 4 timeless stories exist, do not exceed 4
-- Can reduce long video count to 2-3 if breaking news is important
+- If no timeless stories exist in current cycle, long can be lower
+- If breaking news dominates, favor short formats while still trying to rebalance later slots
 
 CONTENT QUALITY NOTES:
 - [V1] articles: Basic scraping, may have incomplete content
@@ -194,14 +181,14 @@ PREFERENCES:
 
 EXCLUSIONS:
 - EXCLUDE: Celebrity gossip, death-related incidents, personal life of famous people
-- EXCLUDE: Topics covered in past 24h videos (check history above)
+- EXCLUDE: Near-duplicate angles from past 36h history unless there is meaningful development
 
 SELECTION CRITERIA:
 1. IMPORTANCE: Impact on society, public interest, significance
 2. TIMELINESS: Breaking news, trending topics, time-sensitive updates
 3. CLARITY: Story is clear and can be explained effectively
 4. ENGAGEMENT: Likely to capture viewer attention
-5. NOVELTY: Not recently covered (check past 24h history)
+5. NOVELTY: Avoid near-repeats from recent coverage unless there is a material update
 6. APPROPRIATENESS: Content suitable for current time slot (will be uploaded immediately)
 
 RESPONSE FORMAT (JSON only):
@@ -219,13 +206,14 @@ RULES:
 - Provide 2-5 clear, concise reasons in the "notes" array
 - short_title must be in English and under 50 characters
 - For single_short: select 1 article only
-- For multi_short: select 2-3 related articles (can be same story or related topics)
+- For multi_short: select 2-6 related/complementary stories (can be same story with updates or related topics)
+- For multi_short with 5-6 stories: keep each story concise and avoid shallow duplication
 - For long: select 2-8 different stories with multiple articles each (each slide covers 1 story, intelligently distribute content)
   - Can select multiple articles of the same story for comprehensive coverage
   - Focus on informative, long-term content (not quick breaking news)
 - Set urgency based on story nature and timing needs
 - Follow PRIORITY guidance above when choosing video_format
-- Check past 24h history to avoid repetition
+- Reduce repetition using past 36h history, but allow follow-ups for developing stories
 - You MUST select at least one article from the list
 
 Respond with ONLY the JSON object, no other text.`;
@@ -392,7 +380,7 @@ export function buildScriptPromptEnhanced(input: ScriptGenerationInputEnhanced):
 === VIDEO CONTEXT ===
 Video Format: ${videoFormat}
 - single_short: 60-90s, 1080x1920 vertical, single breaking news story
-- multi_short: 90-120s, 1080x1920 vertical, 2-3 related short stories
+- multi_short: 90-120s, 1080x1920 vertical, 2-6 related or complementary short stories
 - long: 4-6 min, 1920x1080 horizontal, in-depth analysis (15-17 slides)
 
 Urgency: ${urgency}
@@ -414,7 +402,7 @@ For single_short (short, punchy, urgent):
 - "大手IT企業、従業員の30%を削減へ衝撃発表" (Major IT company announces shock 30% workforce reduction)
 - "政府、新経済政策を承認 円相場に影響か" (Government approves new economic policy, may affect yen)
 
-For multi_short (comprehensive, roundup, numbers):
+For multi_short (comprehensive, roundup, numbers, can cover 2-6 stories):
 - "今日の日本テック業界3つの重大ニュース" (3 major news stories in Japan's tech industry today)
 - "【速報】複数の政策変更が発表されます" (Breaking: Multiple policy changes announced)
 - "気になるニュースを3つ紹介！" (Introducing 3 news stories you care about!)
@@ -444,6 +432,7 @@ ${articlesText}
    - single_short/multi_short: 6-8 slides, each 10-20 seconds
    - long: 15-17 slides, each 10-20 seconds
    - Distribute information smoothly across slides
+   - For multi_short with 4-6 stories: give each story a concise segment, merge closely related updates, avoid repeating the same angle
 
 4. IMAGE DESCRIPTIONS (EXTREME DETAIL REQUIRED - English):
 
